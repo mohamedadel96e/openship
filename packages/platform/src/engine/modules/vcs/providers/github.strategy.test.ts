@@ -5,9 +5,17 @@ import * as githubApplicationService from "../../github/github-application.servi
 import * as cloneAuth from "../../github/clone-auth";
 import type { ExecutionContext as RequestContext } from "../../../../context";
 
-vi.mock("../../github/github.service");
-vi.mock("../../github/github-application.service");
-vi.mock("../../github/clone-auth");
+vi.mock("../../github/github.service", () => ({
+  getRepository: vi.fn(),
+  listBranches: vi.fn(),
+  getBranch: vi.fn(),
+  getFileContent: vi.fn(),
+  listRepositoryTree: vi.fn(),
+  createCheckRun: vi.fn(),
+  updateCheckRun: vi.fn(),
+}));
+vi.mock("../../github/github-application.service", () => ({ getCloneToken: vi.fn() }));
+vi.mock("../../github/clone-auth", () => ({ resolveBuildGitToken: vi.fn() }));
 
 describe("GitHubStrategy", () => {
   let strategy: GitHubStrategy;

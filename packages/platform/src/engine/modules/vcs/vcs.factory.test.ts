@@ -1,8 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { VcsStrategyFactory } from "./vcs.factory";
 import { GitHubStrategy } from "./providers/github.strategy";
 import { GitLabStrategy } from "./providers/gitlab.strategy";
 import { SelfHostedStrategy } from "./providers/self-hosted.strategy";
+
+vi.mock("./providers/github.strategy", () => ({
+  GitHubStrategy: class GitHubStrategy {},
+}));
 
 describe("VcsStrategyFactory", () => {
   it("should return GitHubStrategy by default if no provider is specified", () => {
