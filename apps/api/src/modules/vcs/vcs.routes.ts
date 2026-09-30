@@ -5,6 +5,8 @@ import * as ctrl from "./vcs.controller";
 const r = secureRouter(new Hono(), {
   module: "vcs",
   basePath: "/api/vcs",
+  mcpExcluded:
+    "Provider-neutral repository transport used by the dashboard and deployment internals; MCP continues to use the existing permission-scoped GitHub tools until provider-aware grants are implemented.",
 });
 
 // Repository grants are still stored under the existing `github:*` permission
