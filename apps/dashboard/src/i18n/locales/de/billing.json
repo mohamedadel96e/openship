@@ -1,4 +1,21 @@
 {
+  "home": {
+    "label": "Openship Cloud",
+    "title": "Bereit zum Start?",
+    "plansAndBilling": "Tarife und Abrechnung",
+    "description": "Verwaltete Builds und Hosting, mit Platz zum Wachsen.",
+    "manageDescription": "Tarif, Nutzung und Abrechnung an einem Ort.",
+    "purchasesUnavailable": "Neue Abonnements sind derzeit nicht verfügbar.",
+    "viewPlans": "Tarife entdecken"
+  },
+  "welcome": {
+    "eyebrow": "Alles bereit",
+    "title": "Willkommen bei {name}",
+    "description": "Dein Cloud-Tarif ist aktiv. Legen wir los.",
+    "dismiss": "Willkommensmeldung schließen",
+    "openProjects": "Projekte öffnen",
+    "viewPlan": "Meinen Tarif ansehen"
+  },
   "capacity": {
     "title": "Kapazität & Nutzung",
     "subtitle": "In Ihrem Tarif enthaltene Kapazität und wie viel Sie genutzt haben. Live-Werte werden aus Openship Cloud synchronisiert.",
@@ -89,6 +106,14 @@
     "replacementNotice": "Ein Wechsel des Tarifs oder Abrechnungsintervalls startet nach der Zahlung einen neuen Zeitraum zum vollen gewählten Preis. Es gibt keine automatische anteilige Verrechnung.",
     "changeViaSupport": "Kontaktiere den Support, um dein aktuelles Abonnement zu ändern.",
     "billingUnavailable": "Käufe sind für dieses Konto noch nicht verfügbar."
+  },
+  "complimentary": {
+    "label": "Kostenlos · Keine Gebühren",
+    "untilRevoked": "Aktiv bis zum Widerruf",
+    "expiresOn": "Verfügbar bis {date}",
+    "creditsRenewOn": "Guthaben wird am {date} erneuert",
+    "changeViaSupport": "Der Support verwaltet Änderungen an deinem kostenlosen Tarif.",
+    "topupsUnavailable": "Der Support verwaltet zusätzliche Nutzung für deinen kostenlosen Tarif."
   },
   "pricing": {
     "custom": "Individuell",
@@ -306,9 +331,9 @@
     "creditsPerCycle": "{amount} Credits / Abrechnungszeitraum",
     "buildTime": "Build-Zeit",
     "buildMinutes": "{amount} Min. / Monat",
-    "buildHint": "Zeit zum Erstellen deines Codes. Ein 5-minütiger Build verbraucht 5 Minuten deines monatlichen Kontingents.",
-    "apps": "Laufende Dienste",
-    "appsHint": "Gleichzeitig laufende Apps, Datenbanken und Worker. Jeder laufende Compose-Dienst zählt zu diesem Limit.",
+    "buildHint": "Builds verbrauchen das gemeinsame Nutzungsguthaben entsprechend ihrem Ressourcenverbrauch. Ein separates Zeitlimit gilt nur, wenn es in deinem gespeicherten Tarif enthalten ist.",
+    "apps": "Dienstplätze",
+    "appsHint": "Bereitgestellte Projekte und eingereihte Deployments reservieren Plätze. Noch nicht bereitgestellte Entwürfe belegen keine Plätze.",
     "machine": "CPU und Arbeitsspeicher pro Dienst",
     "machineHint": "Die maximale CPU- und Speichergröße für einen Dienst. Dies ist eine Obergrenze und kein gemeinsames Guthaben.",
     "projects": "Projekte",
@@ -320,7 +345,7 @@
     "setupOnly": "Abonnement erforderlich",
     "setupHint": "Wähle einen Cloud-Tarif, um Projekte anzulegen, Code zu bauen und Apps auszuführen.",
     "includedTitle": "Deine Ressourcen",
-    "limitsHint": "Projekte, laufende Dienste und monatliche Build-Zeit in deinem Tarif.",
+    "limitsHint": "Projekte, laufende Dienste und ein gegebenenfalls in deinem Tarif enthaltenes Build-Zeitlimit.",
     "balanceRule": "Apps pausieren, wenn das Nutzungskontingent aufgebraucht ist. Buche weitere Nutzung oder wähle einen höheren Tarif für größere Ressourcenlimits.",
     "reset": "Build-Kontingent wird am {date} erneuert",
     "cpuHint": "Rechenleistung über die Zeit. 1 vCPU für 1 Stunde entspricht 1 vCPU-Stunde.",
@@ -340,7 +365,12 @@
     "usageIncluded": "Gemeinsames Nutzungskontingent enthalten",
     "usageSummary": "Builds und laufende Apps teilen sich ein Nutzungskontingent. Größere Maschinen und längere Laufzeiten verbrauchen mehr.",
     "usageDetails": "Nutzungsdetails",
-    "usagePercent": "{percent} % genutzt"
+    "usagePercent": "{percent} % genutzt",
+    "poolHint": "Gemeinsam für alle Workspaces, auch gestoppte und ausstehende Änderungen.",
+    "creditUnitsHint": "Credits messen Ressourcenverbrauch, keine Minuten. CPU, RAM, Festplattenaktivität und Transfer haben eigene Raten.",
+    "topupCapacityHint": "Aufladungen ergänzen Nutzungsguthaben. Mehr CPU, RAM oder Speicher erfordert ein Tarifupgrade.",
+    "poolTitle": "Gemeinsame Kapazität",
+    "poolCapacity": "{cpu} vCPU · {ram} GB RAM · {disk} GB Speicher"
   },
   "onboarding": {
     "workspaceDescription": "Wähle einen Cloud-Tarif, um Projekte anzulegen, Code zu bauen und Apps auszuführen. Ohne Abonnement sind keine Projekte oder Rechenressourcen enthalten.",
@@ -404,5 +434,18 @@
     "currentPeriod": "Aktueller Abrechnungszeitraum",
     "viewUsage": "Verbrauchsdetails ansehen",
     "bandwidthPerMonth": "{amount} GB / Monat"
+  },
+  "creditAlert": {
+    "lowTitle": "Cloud-Guthaben wird knapp",
+    "lowDescription": "Du hast {percent}% deines Kontingents einschließlich gekaufter Credits verbraucht. Es bleiben {credits} Credits.",
+    "graceTitle": "Du nutzt den Kulanzrahmen",
+    "graceDescription": "Deine bezahlten Credits sind aufgebraucht. Es bleiben {credits} Kulanz-Credits, bevor neue Workloads gesperrt werden.",
+    "exhaustedTitle": "Cloud-Guthaben aufgebraucht",
+    "exhaustedDescription": "Neue Workloads sind gesperrt, bis Credits hinzugefügt werden oder dein bezahltes Kontingent erneuert wird. Öffne die Abrechnung, um deine Optionen zu sehen.",
+    "buyCredits": "Weitere Credits kaufen",
+    "openBilling": "Abrechnung öffnen",
+    "close": "Verstanden",
+    "opening": "Die Abrechnung für die Organisation dieser Meldung wird geöffnet…",
+    "wrongOrganization": "Dieser Abrechnungslink ist für dein Konto nicht verfügbar. Melde dich mit einem Konto an, das zur Organisation dieser Meldung gehört."
   }
 }

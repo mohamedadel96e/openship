@@ -74,6 +74,7 @@ export function Modal({
   return createPortal(
     <div
       className="fixed inset-0 flex items-center justify-center p-4"
+      data-modal-layer={zIndex}
       style={{ zIndex }}
       onClick={handleBackdropClick}
     >
@@ -128,4 +129,3 @@ export function Modal({
     document.body,
   );
 }
-

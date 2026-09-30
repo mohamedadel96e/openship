@@ -36,6 +36,7 @@ vi.mock("@repo/db", () => ({
     },
     service: {
       listByProject: listServicesMock,
+      seedDraftAppResourceDefaults: async () => [],
     },
     customAppTemplate: {
       findByAppId: async () => undefined,
@@ -110,6 +111,13 @@ beforeEach(() => {
 });
 
 describe("app install — routing comes from the operator's choice", () => {
+  it("keeps catalog resource recommendations advisory on self-hosted installs", async () => {
+    await installApp(ctx, { templateId: "supabase" });
+    expect(createServiceMock.mock.calls).toHaveLength(9);
+    expect(
+      createServiceMock.mock.calls.every((call) => call[2].advanced?.resources === undefined),
+    ).toBe(true);
+  });
   it("persists a custom domain and NO free route for the chosen endpoint", async () => {
     await install([
       { service: "backend", port: 3210, mode: "custom", customDomain: "API.Example.com" },

@@ -12,9 +12,9 @@ export interface IconProps extends Omit<IconArtworkProps, "src" | "mode" | "fall
 
 /** A stable icon ID, independent of the active artwork theme or asset host. */
 export const Icon = forwardRef<SVGSVGElement, IconProps>(function Icon({ name, ...props }, ref) {
-  const { baseUrl, theme } = useIconConfiguration();
+  const { baseUrl, fallbackBaseUrl, theme } = useIconConfiguration();
   const resolved = resolveIcon(name, theme);
-  const local = resolveIcon(name).asset;
+  const defaultAsset = resolveIcon(name).asset;
 
   return (
     <IconArtwork
@@ -25,7 +25,12 @@ export const Icon = forwardRef<SVGSVGElement, IconProps>(function Icon({ name, .
       mode={resolved.asset.mode}
       bounds={resolved.asset.bounds}
       inset={resolved.asset.inset}
-      fallback={{ src: iconAssetUrl(local), mode: local.mode, bounds: local.bounds, inset: local.inset }}
+      fallback={{
+        src: iconAssetUrl(defaultAsset, fallbackBaseUrl),
+        mode: defaultAsset.mode,
+        bounds: defaultAsset.bounds,
+        inset: defaultAsset.inset,
+      }}
     />
   );
 });

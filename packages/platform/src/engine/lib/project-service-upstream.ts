@@ -54,6 +54,24 @@ export interface UpstreamCandidateRow {
   hostPortByContainerPort?: Record<number, number>;
 }
 
+/** A started replacement that routing must observe before its DB commit. */
+export interface ServiceRuntimeOverride {
+  serviceId: string;
+  containerId: string;
+  ip?: string;
+}
+
+export function withServiceRuntimeOverride<T extends UpstreamCandidateRow>(
+  rows: T[],
+  replacement?: ServiceRuntimeOverride,
+): T[] {
+  return replacement
+    ? rows.map((row) =>
+        row.serviceId === replacement.serviceId ? { ...row, ...replacement } : row,
+      )
+    : rows;
+}
+
 /** Concrete per-port bindings, preferring the just-observed deploy result over its
  * persisted cache. Legacy migration markers are intentionally ignored. */
 function rowHostPortEntries(

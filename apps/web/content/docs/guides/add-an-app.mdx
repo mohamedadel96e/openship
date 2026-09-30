@@ -383,14 +383,21 @@ fields, valid `category`, and every [referential rule](/docs/reference/app-catal
 Order in `catalog.json` is preserved from the existing file (curated, featured-first); a **new** app
 is appended alphabetically, so reorder it by hand if you want it featured earlier.
 
+### Preview your local changes
+
+Run the API with `NODE_ENV=development` and open the app's install page. Development uses the
+regenerated catalog from your checkout for both the form and installation. GitHub's published
+catalog does not replace local changes, so you can preview an unpublished layout or template.
+Regenerate `catalog.json` after each edit as shown above.
+
 ## Ship it
 
 Set `"available": true` once it deploys cleanly end to end. Until then it shows as *coming soon* and
 install is refused server-side, not just hidden in the UI.
 
 <Callout title="A merged app reaches existing instances without a redeploy" type="info">
-The runtime catalog is the bundled copy overlaid by a live fetch of `catalog.json` from the repo, on a
-10-minute TTL. So your app appears on instances that are already running — gated per-entry by
+In production, the runtime catalog is the bundled copy overlaid by a live fetch of `catalog.json`
+from the repo, on a 10-minute TTL. So your app appears on instances that are already running — gated per-entry by
 [`minEngine`](/docs/reference/app-catalog#stability-and-versioning). If your definition uses a
 capability that only shipped in a given release, set `minEngine` to it: older instances then show a
 guided *Requires Openship ≥ X* card instead of failing the install.

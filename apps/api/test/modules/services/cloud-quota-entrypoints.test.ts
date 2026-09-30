@@ -16,6 +16,7 @@ vi.mock("@repo/platform/engine/modules/billing/billing-oblien-quota", async (ori
   syncOblienEntitlement: async () => ({
     tier: h.tier,
     limits: h.savedLimits ?? planLimits(h.tier),
+    resourceLimits: resolvePlan(h.tier).oblienLimits,
   }),
 }));
 vi.mock("@repo/platform/engine/lib/deployment-runtime", async original => ({
@@ -29,7 +30,7 @@ vi.mock("@repo/platform/engine/lib/deployment-runtime", async original => ({
 }));
 import { db, schema, repos, seedOwner } from "../jobs/_harness";
 import { eq } from "@repo/db";
-import { planLimits } from "@repo/core";
+import { planLimits, resolvePlan } from "@repo/core";
 import { createService, updateService, startServiceContainer, restartServiceContainer } from "@repo/platform/engine/modules/services/service.service";
 import { createQueuedDeployment, type DeploymentConfigSnapshot } from "@repo/platform/engine/modules/deployments/build.service";
 import { createServicesProjectWithId } from "@repo/platform/engine/modules/projects/project-crud.service";
@@ -52,6 +53,14 @@ async function project() {
   await db.insert(schema.projectGroup).values({ id: groupId, organizationId, name: groupId, slug: groupId });
   await db.insert(schema.project).values({ id: projectId, groupId, organizationId, name: projectId, slug: projectId, resources });
   return projectId;
+}
+async function activateProject() {
+  const deploymentId = id("active");
+  await db.insert(schema.deployment).values({
+    id: deploymentId, projectId, organizationId, branch: "main", status: "ready",
+    meta: { ...snapshot(), serviceDeploymentMode: "services", cloudApplicationSlot: false },
+  });
+  await repos.project.setActiveDeployment(projectId, deploymentId);
 }
 async function definition(enabled = true, advanced: Record<string, unknown> = {}) {
   const serviceId = id("service");
@@ -95,7 +104,65 @@ beforeEach(async () => {
 });
 
 describe("Cloud quotas at real application mutation boundaries", () => {
+  it("allows draft creation and enabling at the allowance but refuses its deployment", async () => {
+    await activateProject();
+    await definition();
+    await definition();
+    await definition();
+    const draftId = await project();
+    const draft = await createService(context(), draftId, {
+      name: "draft-database",
+      image: "postgres:17",
+      environment: { POSTGRES_PASSWORD: "saved-secret" },
+    });
+    await updateService(context(), draftId, draft.id, { enabled: false });
+    await updateService(context(), draftId, draft.id, { enabled: true });
+    expect(await repos.service.countRunningForOrg(organizationId)).toBe(3);
+    await expect(
+      queue(draftId, {
+        ...snapshot(),
+        serviceDeploymentMode: "services",
+        composeServices: [
+          {
+            name: draft.name,
+            image: "postgres:17",
+            ports: [],
+            volumes: [],
+            environment: {},
+            dependsOn: [],
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ reason: "running-services" });
+    expect(
+      await db.query.deployment.findMany({ where: eq(schema.deployment.projectId, draftId) }),
+    ).toEqual([]);
+    expect(await repos.service.findById(draft.id)).toMatchObject({
+      enabled: true,
+      environment: { POSTGRES_PASSWORD: "saved-secret" },
+    });
+    expect(h.readRuntime).not.toHaveBeenCalled();
+  });
+  it("reserves first deployments atomically even when both drafts already have definitions", async () => {
+    const drafts = [projectId, await project()];
+    for (const draftId of drafts) {
+      for (const name of ["api", "database"]) {
+        await createService(context(), draftId, { name, image: "alpine:3" });
+      }
+    }
+    expect(await repos.service.countRunningForOrg(organizationId)).toBe(0);
+    const results = await Promise.allSettled(
+      drafts.map((draftId) => queue(draftId, composeSnapshot())),
+    );
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: { code: "PLAN_UPGRADE_REQUIRED", reason: "running-services" },
+    });
+    expect(await repos.service.countRunningForOrg(organizationId)).toBe(2);
+  });
+
   it("enforces the paid service-count snapshot even when the current tier permits more", async () => {
+    await activateProject();
     h.tier = "team";
     h.savedLimits = { ...planLimits("team"), runningServices: 2 };
     await definition();
@@ -114,6 +181,7 @@ describe("Cloud quotas at real application mutation boundaries", () => {
     ).toHaveLength(0);
   });
   it("serializes service creation so only one request can reserve the final slot", async () => {
+    await activateProject();
     await definition(); await definition();
     const results = await Promise.allSettled([
       createService(context(), projectId, { name: "last-a", image: "alpine:3" }),
@@ -124,6 +192,7 @@ describe("Cloud quotas at real application mutation boundaries", () => {
     expect(await repos.service.countRunningForOrg(organizationId)).toBe(3);
   });
   it("serializes re-enabling disabled definitions at the same limit", async () => {
+    await activateProject();
     await definition(); await definition();
     const a = await definition(false), b = await definition(false);
     const results = await Promise.allSettled([
@@ -134,6 +203,7 @@ describe("Cloud quotas at real application mutation boundaries", () => {
     expect(await repos.service.countRunningForOrg(organizationId)).toBe(3);
   });
   it("reserves native app slots atomically when two projects deploy together", async () => {
+    await activateProject();
     await definition(); await definition();
     const a = await project(), b = await project();
     const results = await Promise.allSettled([queue(a), queue(b)]);
@@ -144,12 +214,14 @@ describe("Cloud quotas at real application mutation boundaries", () => {
     if (winner?.status === "fulfilled") expect(winner.value.meta).toMatchObject({ cloudApplicationSlot: true });
   });
   it("includes other projects before queueing a stack whose definitions are not yet saved", async () => {
+    await activateProject();
     await definition(); await definition();
     const target = await project();
     await expect(queue(target, composeSnapshot())).rejects.toMatchObject({ reason: "running-services" });
     expect(await db.query.deployment.findMany({ where: eq(schema.deployment.projectId, target) })).toEqual([]);
   });
   it("reserves frozen stack slots before a concurrent deployment or service creation can claim them", async () => {
+    await activateProject();
     await definition();
     const a = await project(), b = await project();
     const results = await Promise.allSettled([queue(a, composeSnapshot()), queue(b, composeSnapshot())]);
@@ -160,6 +232,7 @@ describe("Cloud quotas at real application mutation boundaries", () => {
       .rejects.toMatchObject({ reason: "running-services" });
   });
   it("permits an existing native app to redeploy at the allowance without counting it twice", async () => {
+    await activateProject();
     await definition(); await definition();
     const target = await project();
     const activeId = id("deployment");
@@ -244,6 +317,7 @@ describe("Cloud quotas at real application mutation boundaries", () => {
     expect((await repos.project.findById(projectId))?.disabledAt).not.toBeNull();
   });
   it("does not enable a stopped definition when Start is over quota", async () => {
+    await activateProject();
     await definition(); await definition(); await definition();
     const target = await definition(false);
     await expect(startServiceContainer(context(), projectId, target)).rejects.toMatchObject({ reason: "running-services" });
@@ -251,6 +325,7 @@ describe("Cloud quotas at real application mutation boundaries", () => {
     expect(h.readRuntime).not.toHaveBeenCalled();
   });
   it("refuses resuming a paused native project after other services fill its slot", async () => {
+    await activateProject();
     await definition(); await definition(); await definition();
     const target = await project(), activeId = id("deployment");
     await db.insert(schema.deployment).values({ id: activeId, projectId: target, organizationId, branch: "main", status: "ready", containerId: "native-vm", meta: { ...snapshot(), cloudApplicationSlot: true } });

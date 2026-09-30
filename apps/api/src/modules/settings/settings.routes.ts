@@ -8,9 +8,6 @@
  * in Electron's ConfigStore - they never touch this API.
  */
 import { Hono } from "hono";
-import { secureRouter } from "../../lib/secure-router";
-import * as ctrl from "./settings.controller";
-import { orgDeliveries } from "../incoming-webhooks/incoming.controller";
 import {
   UserSettingsSchemas,
   UpdateBuildModeBody,
@@ -20,12 +17,14 @@ import {
   UpdateTransferPrefsBody,
   UpdateForwardGitBody,
 } from "@repo/contracts";
+import { secureRouter } from "../../lib/secure-router";
+import * as ctrl from "./settings.controller";
+import { orgDeliveries } from "../incoming-webhooks/incoming.controller";
 
 const r = secureRouter(new Hono(), {
   module: "settings",
   basePath: "/api/settings",
 });
-
 
 // `settings` is an org-singleton resource (declared in
 // ORG_SINGLETON_RESOURCES). The middleware automatically passes
@@ -36,7 +35,7 @@ const r = secureRouter(new Hono(), {
 r.get("/", { tag: "settings:read", mcp: { description: "Get the org's workspace settings (build mode, deploy defaults, preferences)." } }, ctrl.get);
 
 /** PUT  /            - create or update workspace settings */
-r.put("/", { tag: "settings:write", auditHandledByOperation: true, body: UserSettingsSchemas.update.input }, ctrl.upsert);
+r.put("/", { tag: "settings:write", auditHandledByOperation: true, body: UserSettingsSchemas.update.input, mcpExcluded: "Compatibility settings update; use the dedicated build-mode tool for this preference." }, ctrl.upsert);
 
 /** PATCH /build-mode - update only build mode preference */
 r.patch("/build-mode", { tag: "settings:write", auditHandledByOperation: true, body: UpdateBuildModeBody, mcp: { description: "Set the default build mode (server / local)." } }, ctrl.updateBuildMode);
@@ -48,7 +47,7 @@ r.patch("/route-strategy", { tag: "settings:write", auditHandledByOperation: tru
 r.patch("/deploy-defaults", { tag: "settings:write", auditHandledByOperation: true, body: UpdateDeployDefaultsBody, mcp: { description: "Set/clear the default deploy target (local/server/cloud) and server." } }, ctrl.updateDeployDefaults);
 
 /** PATCH /clone-credentials - set/clear the user-global git clone token */
-r.patch("/clone-credentials", { tag: "settings:write", auditHandledByOperation: true, body: UserSettingsSchemas.setCloneCredentials.input }, ctrl.updateCloneCredentials);
+r.patch("/clone-credentials", { tag: "settings:write", auditHandledByOperation: true, body: UserSettingsSchemas.setCloneCredentials.input, mcpExcluded: "User-global Git clone credentials are configured in the authenticated dashboard; MCP deploys using those saved credentials." }, ctrl.updateCloneCredentials);
 
 /** PATCH /clone-strategy-preference - save the first-time deploy nudge choice */
 r.patch("/clone-strategy-preference", { tag: "settings:write", auditHandledByOperation: true, body: UpdateCloneStrategyPreferenceBody, mcp: { description: "Set the default clone strategy preference (prompt / local / remote-with-token)." } }, ctrl.updateCloneStrategyPreference);

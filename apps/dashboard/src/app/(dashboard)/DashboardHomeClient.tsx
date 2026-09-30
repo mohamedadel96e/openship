@@ -2,12 +2,15 @@
 
 import { Icon as UiIcon } from "@repo/ui/icons";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { projectsApi } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import UpdatesBlock from "@/components/overview/UpdatesBlock";
+import HomeAppsCard from "@/components/overview/HomeAppsCard";
+import HomeSidebar from "@/components/overview/HomeSidebar";
+import HomeTipCard from "@/components/overview/HomeTipCard";
 import SystemStatusRow from "@/components/overview/SystemStatusRow";
 import HomeWelcome from "@/components/overview/HomeWelcome";
 import { useI18n, interpolate } from "@/components/i18n-provider";
@@ -45,9 +48,15 @@ import { useAttentionFeed } from "@/hooks/useAttentionFeed";
 
 interface DashboardHomeClientProps {
   initialData?: any;
+  hostedCloud: boolean;
+  planCard?: ReactNode;
 }
 
-export default function DashboardHomeClient({ initialData }: DashboardHomeClientProps) {
+export default function DashboardHomeClient({
+  initialData,
+  hostedCloud,
+  planCard,
+}: DashboardHomeClientProps) {
   const { user } = useAuth();
   const { t } = useI18n();
   const router = useRouter();
@@ -198,17 +207,14 @@ export default function DashboardHomeClient({ initialData }: DashboardHomeClient
           </div>
 
           {/* ── RIGHT COLUMN (Sticky) ──────────────────────────────── */}
-          <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
-            
-            {/* The column yields to attention one card at a time, least urgent first:
-                one alert panel takes the Activity overview's space, a second takes the
-                Apps card's. Nothing is lost — lifetime deploy counts live under
-                Deployments and the catalog has its own sidebar entry — and it keeps the
-                fold from becoming an alert panel chased by two pieces of furniture.
+          <HomeSidebar
+            tip={attention.cards === 0 ? <HomeTipCard projectCount={projects.length} loading={loading} /> : null}
+          >
+            {planCard}
 
-                `attention.cards` counts what will actually RENDER, hides included, so
-                dismissing a panel hands the space straight back. */}
-            {attention.cards === 0 && (
+            {/* Alerts replace the activity summary; Apps stays accessible and
+                Quick Tip uses only the space left after these cards. */}
+            {attention.cards === 0 && (!hostedCloud || projects.length > 0) && (
               <div className="bg-card rounded-2xl border border-border/50 p-5">
                 <div className="flex items-center gap-2 mb-4">
                   <UiIcon name="activity" className="size-4 text-muted-foreground" />
@@ -247,8 +253,9 @@ export default function DashboardHomeClient({ initialData }: DashboardHomeClient
               </div>
             )}
 
-            <UpdatesBlock feed={attention} projectCount={projects.length} loading={loading} />
-          </div>
+            <UpdatesBlock feed={attention} />
+            <HomeAppsCard projects={projects} loading={loading} />
+          </HomeSidebar>
         </div>
       </PageContainer>
     );

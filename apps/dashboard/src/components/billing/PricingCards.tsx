@@ -3,8 +3,9 @@
 import { Icon as UiIcon } from "@repo/ui/icons";
 
 import React from "react";
-import type { PlanLimits, PlanTierId } from "@repo/core";
+import type { OblienLimits, PlanLimits, PlanTierId } from "@repo/core";
 import { useI18n, interpolate } from "@/components/i18n-provider";
+import { Button } from "@/components/ui/button";
 import { PlanResources } from "./PlanResources";
 
 /* ------------------------------------------------------------------ */
@@ -53,6 +54,8 @@ export interface ApiPlan {
    * removed there is a compile error here rather than a silently dead field.
    */
   limits: PlanLimits;
+  /** Declared shared VM pool, supplied by the live catalog or saved paid offer. */
+  resourceLimits?: OblienLimits;
   /** Finished localized strings, numbers already interpolated by the catalog. */
   features: string[];
   /** "Everything in X, plus:" — a lead-in, NOT a bullet, so it renders above the
@@ -111,6 +114,7 @@ interface PricingCardsProps {
  *  error here rather than a card wearing another tier's icon. */
 const PLAN_ICON: Record<PlanTierId, React.ReactNode> = {
   free: <UiIcon name="bolt" className="size-5" />,
+  hobby: <UiIcon name="code" className="size-5" />,
   starter: <UiIcon name="rocket" className="size-5" />,
   pro: <UiIcon name="star" className="size-5" />,
   team: <UiIcon name="building" className="size-5" />,
@@ -160,23 +164,13 @@ function resolveCardPrice(plan: ApiPlan, interval: "monthly" | "annual"): {
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
-/**
- * Widest-breakpoint column count, keyed by how many cards there actually are.
- *
- * The count was pinned at `xl:grid-cols-5` while the catalog happened to publish
- * five cards. The moment the $0 tier stopped being rendered, the row kept five
- * tracks for four cards and left a column of empty space on the right — the grid
- * was describing the catalog as it was, not as it is.
- *
- * Written out as static class strings because Tailwind scans source text: a
- * computed `xl:grid-cols-${n}` compiles to nothing at all.
- */
-const WIDEST_COLUMNS: Record<number, string> = {
-  1: "xl:grid-cols-1",
-  2: "xl:grid-cols-2",
-  3: "xl:grid-cols-3",
-  4: "xl:grid-cols-4",
-  5: "xl:grid-cols-5",
+// Size the comparison to its container, including in the deploy modal. Four
+// plans use two balanced rows until there is room for four readable cards.
+const CARD_COLUMNS: Record<number, string> = {
+  1: "grid-cols-1",
+  2: "grid-cols-1 @min-[34rem]/pricing:grid-cols-2",
+  3: "grid-cols-1 @min-[34rem]/pricing:grid-cols-2 @min-[52rem]/pricing:grid-cols-3",
+  4: "grid-cols-1 @min-[34rem]/pricing:grid-cols-2 @min-[70rem]/pricing:grid-cols-4",
 };
 
 export const PricingCards: React.FC<PricingCardsProps> = ({
@@ -196,10 +190,14 @@ export const PricingCards: React.FC<PricingCardsProps> = ({
     () => new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric" }),
     [locale],
   );
+  // A negotiated plan has no list price. Keep it out of the resource comparison;
+  // discounted paid plans still belong there, even when the offer costs $0.
+  const pricedPlans = plans.filter((plan) => plan.price.monthly !== null);
+  const customPlans = plans.filter((plan) => plan.price.monthly === null);
 
-  return (
-    <div className={`grid gap-5 md:grid-cols-2 lg:grid-cols-3 ${WIDEST_COLUMNS[plans.length] ?? "xl:grid-cols-4"}`}>
-      {plans.map((plan) => {
+  const comparison = pricedPlans.length > 0 ? (
+    <div className={`grid gap-5 ${CARD_COLUMNS[Math.min(pricedPlans.length, 4)]}`}>
+      {pricedPlans.map((plan) => {
         const { listCents, chargedCents, discounted } = resolveCardPrice(plan, interval);
         // Headline = what the customer pays today; the list price moves beside it.
         const { label, suffix } = formatPrice(discounted ? chargedCents : listCents, ui, interval);
@@ -224,9 +222,6 @@ export const PricingCards: React.FC<PricingCardsProps> = ({
         // campaign leaves `effectivePrice.monthly === 0`, and keying off that would
         // render a paid tier with the free tier's "Free forever" plate and no
         // checkout button — the customer could never subscribe.
-        // No price + a sales address = negotiated tier. The address comes from
-        // the catalog; a null price without one is not purchasable either.
-        const salesUrl = plan.price.monthly === null ? (plan.contactSales ?? null) : null;
         const isPaid = plan.price[interval] !== null && plan.price[interval]! > 0;
         const isSubscribing = subscribingPlan === plan.id;
         const icon = PLAN_ICON[plan.id] ?? <UiIcon name="sparkles" className="size-5" />;
@@ -304,14 +299,6 @@ export const PricingCards: React.FC<PricingCardsProps> = ({
                 <div className="flex h-10 w-full items-center justify-center rounded-lg border border-border/50 bg-muted/40 text-sm font-medium text-muted-foreground">
                   {t.billing.pricing.currentPlan}
                 </div>
-              ) : salesUrl ? (
-                <a
-                  href={salesUrl}
-                  className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-border/50 bg-card text-sm font-medium text-foreground transition-colors hover:bg-muted/60"
-                >
-                  {ui.ctaContact}
-                  <UiIcon name="arrow-right" className="size-3.5 rtl:rotate-180" />
-                </a>
               ) : plan.price.monthly === 0 ? (
                 <div className="flex h-10 w-full items-center justify-center rounded-lg border border-border/50 bg-muted/40 text-sm font-medium text-muted-foreground">
                   {t.billing.pricing.freeForever}
@@ -370,6 +357,45 @@ export const PricingCards: React.FC<PricingCardsProps> = ({
           </div>
         );
       })}
+    </div>
+  ) : null;
+
+  return (
+    <div className="@container/pricing space-y-5">
+      {comparison}
+      {customPlans.map((plan) => (
+        <div
+          key={plan.id}
+          className="flex flex-col gap-4 rounded-2xl bg-card p-5 @min-[34rem]/pricing:flex-row @min-[34rem]/pricing:items-center"
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+              {PLAN_ICON[plan.id]}
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-base font-semibold text-foreground">{plan.name}</h3>
+                <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                  {ui.custom}
+                </span>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">{plan.description}</p>
+            </div>
+          </div>
+          {currentPlan === plan.id ? (
+            <span className="flex h-10 shrink-0 items-center justify-center rounded-xl bg-muted/40 px-4 text-sm font-medium text-muted-foreground">
+              {t.billing.pricing.currentPlan}
+            </span>
+          ) : plan.contactSales ? (
+            <Button asChild variant="secondary" className="shrink-0">
+              <a href={plan.contactSales}>
+                {ui.ctaContact}
+                <UiIcon name="arrow-right" className="size-4 rtl:rotate-180" aria-hidden="true" />
+              </a>
+            </Button>
+          ) : null}
+        </div>
+      ))}
     </div>
   );
 };

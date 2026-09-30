@@ -16,7 +16,7 @@ name: Docker images
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       tag:
@@ -29,6 +29,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
@@ -48,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [api, dashboard, edge, mail, webmail]
+        image: [api, dashboard, edge, mail, webmail, cluster-tasks]
         platform: [amd64, arm64]
         # Two independent axes of `include`, both merged into every matching
         # combination: platform → runner (native builds, no QEMU), and image →
@@ -70,16 +71,30 @@ jobs:
             dockerfile: apps/email/Dockerfile
           - image: webmail
             dockerfile: apps/email/Dockerfile.webmail
+          - image: cluster-tasks
+            dockerfile: packages/adapters/Dockerfile.cluster-tasks
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Reuse a verified successful job
+        id: resume
+        uses: ./.github/actions/release-resume
+        with:
+          scope: build
+          job-name: Build ${{ matrix.image }} (${{ matrix.platform }})
+          workflow: .github/workflows/docker-images.yml
+          job-id: build-images
+          artifact: digests-${{ matrix.image }}-${{ matrix.platform }}
+
       - name: Set up Docker Buildx
+        if: steps.resume.outputs.reused != 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
+        if: steps.resume.outputs.reused != 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -87,12 +102,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Image labels
+        if: steps.resume.outputs.reused != 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/openship-${{ matrix.image }}
 
       - name: Build and push by digest
+        if: steps.resume.outputs.reused != 'true'
         id: build
         uses: docker/build-push-action@v6
         with:
@@ -105,6 +122,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.platform }}
 
       - name: Export digest
+        if: steps.resume.outputs.reused != 'true'
         run: |
           set -euo pipefail
           mkdir -p /tmp/digests
@@ -112,6 +130,7 @@ jobs:
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
+        if: steps.resume.outputs.reused != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: digests-${{ matrix.image }}-${{ matrix.platform }}
@@ -272,7 +291,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [api, dashboard, edge, mail, webmail]
+        image: [api, dashboard, edge, mail, webmail, cluster-tasks]
     steps:
       - name: Download digests
         uses: actions/download-artifact@v8

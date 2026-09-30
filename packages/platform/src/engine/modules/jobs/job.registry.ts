@@ -74,8 +74,9 @@ export const SYSTEM_JOB_DEFS: SystemJobDef[] = [
     key: "ssl:renew",
     label: "SSL certificate renewal",
     defaultCron: "17 3 * * *",
-    // Cloud manages TLS at Oblien's edge; desktop has a noop SSL provider.
-    available: () => platform().target === "selfhosted",
+    // Desktop resolves each certificate's remote serving host, just like self-hosted.
+    // Both run while Openship is running; cloud owns TLS at its managed edge.
+    available: () => platform().target !== "cloud",
     run: async () => {
       const r = await renewExpiringCerts();
       return { renewed: r.renewed, failed: r.failed, total: r.total };

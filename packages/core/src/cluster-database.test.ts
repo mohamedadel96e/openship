@@ -3,6 +3,7 @@ import {
   clusterDatabasePodCount,
   validateClusterDatabase,
   validateClusterDatabaseUpdate,
+  validateClusterDatabaseImportArtifact,
   type ClusterDatabaseConfig,
 } from "./cluster-database";
 const config: ClusterDatabaseConfig = {
@@ -16,6 +17,35 @@ const config: ClusterDatabaseConfig = {
   databaseName: "app",
 };
 describe("database lifecycle capabilities", () => {
+  it("keeps existing PostgreSQL on its saved major and makes upgrades use a separate copy", () => {
+    expect(() => validateClusterDatabase({ ...config, version: "18" })).not.toThrow();
+    expect(() => validateClusterDatabaseUpdate(config, { ...config, version: "17" })).not.toThrow();
+    expect(() => validateClusterDatabaseUpdate(config, { ...config, version: "18" })).toThrow(
+      /upgraded copy/,
+    );
+    expect(() => validateClusterDatabase({ ...config, engine: "redis", version: "18" })).toThrow(
+      /PostgreSQL/,
+    );
+  });
+  it("admits only integrity-checked engine dumps and validates incremental block metadata", () => {
+    const dump = {
+      name: "database.dump",
+      key: "project/database/dump",
+      sizeBytes: 100,
+      sha256: "a".repeat(64),
+      payloadKind: "pg_dump",
+      metadata: { compression: "none" },
+    };
+    expect(() => validateClusterDatabaseImportArtifact(dump)).not.toThrow();
+    for (const patch of [
+      { sha256: null },
+      { key: "../other-project" },
+      { payloadKind: "volume" },
+      { metadata: { storage: { format: "chunks-v1" } } },
+      { metadata: { encrypted: true } },
+    ])
+      expect(() => validateClusterDatabaseImportArtifact({ ...dump, ...patch })).toThrow();
+  });
   it("distinguishes database instances from Redis shards and their replicas", () => {
     expect(clusterDatabasePodCount(config)).toBe(3);
     expect(clusterDatabasePodCount({ ...config, engine: "redis" })).toBe(6);
@@ -85,13 +115,35 @@ describe("database lifecycle capabilities", () => {
       }),
     ).toThrow("recovery history");
   });
-  it("rejects unsupported archive engines and retention periods", () => {
+  it("supports Redis archives while rejecting invalid retention periods", () => {
     const backup = { destinationId: "archives", schedule: "daily" as const, retentionDays: 30 };
-    expect(() => validateClusterDatabase({ ...config, engine: "redis", backup })).toThrow(
-      "PostgreSQL template",
-    );
+    expect(() => validateClusterDatabase({ ...config, engine: "redis", backup })).not.toThrow();
     expect(() =>
       validateClusterDatabase({ ...config, backup: { ...backup, retentionDays: 0 } }),
     ).toThrow("between 7 and 365");
+  });
+  it("requires reviewed Redis redistribution and a saved backup destination", () => {
+    const before = {
+      ...config,
+      engine: "redis" as const,
+      backup: { destinationId: "archives", schedule: "daily" as const, retentionDays: 30 },
+    };
+    expect(() => validateClusterDatabaseUpdate(before, { ...before, instances: 4 })).toThrow(
+      /Review and confirm/,
+    );
+    expect(() =>
+      validateClusterDatabaseUpdate(
+        before,
+        { ...before, instances: 4 },
+        { confirmRedisRebalance: true },
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateClusterDatabaseUpdate(
+        { ...before, backup: undefined },
+        { ...before, instances: 4 },
+        { confirmRedisRebalance: true },
+      ),
+    ).toThrow(/Save a backup destination/);
   });
 });

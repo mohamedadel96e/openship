@@ -19,6 +19,10 @@
     "enterprise": {
       "name": "Enterprise",
       "tagline": "Limites sob medida, infraestrutura dedicada e um SLA."
+    },
+    "hobby": {
+      "name": "Hobby",
+      "tagline": "Para desenvolvimento leve e aplicações ocasionais, com saldo de utilização limitado."
     }
   },
   "features": {
@@ -49,7 +53,11 @@
     "selfHostedUnlimited": "Deploys, projetos, servidores e domínios ilimitados",
     "selfHostedServices": "Todos os serviços gerenciados: Postgres, Redis, e-mail",
     "selfHostedClients": "CLI, web e desktop: um único backend",
-    "selfHostedFreeSubdomains": "{freeSubdomains} subdomínios {freeDomainSuffix} gratuitos ao conectar à Cloud"
+    "selfHostedFreeSubdomains": "{freeSubdomains} subdomínios {freeDomainSuffix} gratuitos ao conectar à Cloud",
+    "usageCredits": "{credits} créditos de uso por mês",
+    "namespaceCapacity": "Total: {namespaceCpu} vCPU, {namespaceRamGb} GB RAM, {namespaceDiskGb} GB de disco",
+    "finiteUsage": "A hospedagem contínua pode exigir recargas de créditos.",
+    "oneRunningService": "1 aplicação, banco de dados ou worker em execução"
   },
   "selfHosted": {
     "name": "Auto-hospedado",
@@ -61,7 +69,12 @@
   "creditPacks": {
     "pack_5k": "{credits} créditos",
     "pack_25k": "{credits} créditos",
-    "pack_100k": "{credits} créditos"
+    "pack_100k": "{credits} créditos",
+    "pack_500": "{credits} créditos",
+    "pack_2k": "{credits} créditos",
+    "pack_400": "{credits} créditos",
+    "pack_1700": "{credits} créditos",
+    "pack_4500": "{credits} créditos"
   },
   "ui": {
     "perMonth": "/mês",

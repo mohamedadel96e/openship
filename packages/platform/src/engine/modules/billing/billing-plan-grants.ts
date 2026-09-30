@@ -11,7 +11,7 @@ import {
   type OblienBillingApi, type OblienEntitlement, type OblienSubscription,
 } from "../../lib/oblien-billing-api";
 import { cloudNamespaceLimits, syncCloudResourceLimits } from "../../lib/cloud-resource-limits";
-import { offerReference, subscriptionPlan } from "./billing-catalog";
+import { supportedOfferReference, savedResourceLimits, subscriptionPlan } from "./billing-catalog";
 
 export const cloudBillingLockKey = (organizationId: string) => `billing:entitlement:${organizationId}`;
 
@@ -49,13 +49,13 @@ export function resolvePlanGrant(row: BillingPlanGrant, organizationId: string, 
   const limits = planLimitsSchema.strict().safeParse(row.limits);
   const tier = row.planTierId as PlanTierId;
   if (row.organizationId !== organizationId || row.namespace !== namespace || !PLAN_IDS.includes(tier) || tier === "free" ||
-      !offer.success || !limits.success || offer.data.reference !== offerReference(tier) || !offer.data.policy || !offer.data.resourceLimits ||
+      !offer.success || !limits.success || !supportedOfferReference(offer.data.reference, tier) || !offer.data.policy || !offer.data.resourceLimits ||
       row.createdAt > now) {
     throw new AppError("The complimentary plan grant could not be verified", 503, "BILLING_PLAN_GRANT_INVALID");
   }
   return {
     id: row.id, tier, offer: offer.data, limits: limits.data,
-    resourceLimits: offer.data.resourceLimits, policy: offer.data.policy,
+    resourceLimits: savedResourceLimits(tier, offer.data), policy: offer.data.policy,
     expiresAt: row.expiresAt, period: planGrantPeriod(row.createdAt, now, row.expiresAt),
   };
 }

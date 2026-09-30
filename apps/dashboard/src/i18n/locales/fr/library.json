@@ -10,16 +10,17 @@
   },
   "page": {
     "title": "Nouveau projet",
-    "subtitle": "Importez un dépôt, collez une URL ou partez d'un modèle",
+    "subtitle": "Déployez une application ou importez votre projet.",
     "tabs": {
       "folder": "Dossier",
       "github": "GitHub",
-      "url": "URL Git",
-      "template": "Modèle"
+      "templates": "Modèles",
+      "gitUrl": "URL Git"
     }
   },
   "connect": {
     "connectGithub": "Connecter GitHub",
+    "deployApp": "Déployer une application",
     "manageInSettings": "Gérer dans les paramètres",
     "terminal": {
       "title": "Connecter GitHub",
@@ -45,6 +46,20 @@
       "ghCliDesc": "Utilisez la connexion GitHub de votre machine. Aucun cloud requis.",
       "useGhCli": "Utiliser la CLI gh",
       "connecting": "Connexion…"
+    },
+    "installationPicker": {
+      "title": "Choisir un accès GitHub",
+      "description": "Sélectionnez une installation existante de l’App pour cet espace de travail.",
+      "sharedHint": "Vos autres connexions Openship restent inchangées.",
+      "connect": "Utiliser ce compte",
+      "connected": "Déjà connecté",
+      "installAnother": "Installer sur un autre compte GitHub",
+      "failed": "Impossible de connecter cette installation.",
+      "tryAgain": "Recommencer",
+      "successTitle": "GitHub connecté",
+      "successDescription": "L’accès aux dépôts est prêt. Vous pouvez revenir à Openship.",
+      "errorTitle": "La connexion GitHub nécessite votre attention",
+      "returnToApp": "Retour à la bibliothèque"
     }
   },
   "folderUpload": {
@@ -124,8 +139,6 @@
     "noMatchingDesc": "Essayez un autre terme de recherche ou ajustez vos filtres",
     "noReposDesc": "Ce compte n'a encore aucun dépôt",
     "privateBadge": "Privé",
-    "localOnly": "Local uniquement",
-    "localOnlyTooltip": "L'application Openship n'est pas installée sur {owner}. Builds locaux uniquement — installez l'application sur ce propriétaire pour activer les déploiements distants.",
     "repoCountSingular": "{count} dépôt",
     "repoCountPlural": "{count} dépôts",
     "matching": "correspondant à « {query} »",
@@ -159,7 +172,7 @@
     "checking": "Vérification…",
     "notConnectedManage": "Non connecté — gérer dans les paramètres",
     "optional": "Facultatif",
-    "footnote": "Bibliothèque locale via la CLI gh ; les déploiements distants utilisent des jetons éphémères —",
+    "footnote": "Gérez les connexions GitHub utilisées pour parcourir et déployer les dépôts.",
     "manageGithubSettings": "gérer GitHub dans les paramètres"
   },
   "urlImport": {

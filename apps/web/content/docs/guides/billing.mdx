@@ -18,8 +18,8 @@ under the Apache 2.0 license — free forever, with no seat caps and no metering
 
 Openship Cloud is the managed option: we run the servers, the edge, the backups.
 Choose a paid plan to create Cloud projects, build and run workloads. Monthly
-plans are $10 / $39 / $99, with custom Enterprise terms available through sales.
-An account without a plan has no included Cloud compute.
+plans are $5 / $20 / $40 / $99, with custom Enterprise terms available through sales.
+An account without a plan has no included Cloud compute. Hobby is a finite allowance for light use; continuous hosting can require top-ups.
 
 The plans, their prices, and each plan's limits live in one place — see the
 [pricing page](/pricing). The same catalog is served by
@@ -30,9 +30,13 @@ fixed number of runtime hours.
 
 Running-service allowances apply across your organization. A Compose project
 runs in one Cloud VM and must fit that machine's CPU, RAM and disk capacity,
-including its build. A larger plan lets you run more services across projects;
+including temporary build resources when source code must be built. Image-only templates do not reserve a source builder. A larger plan lets you run more services across projects;
 it does not combine them into an arbitrarily large VM. Split a large stack
 across projects or reduce its machine sizes if it exceeds that capacity.
+
+The current monthly plans include 400 / 1,700 / 3,500 / 9,000 metered credits. Total namespace ceilings are 1 / 2 / 4 / 8 vCPU, 4 / 6 / 8 / 16 GB RAM, and 16 / 32 / 128 / 256 GB disk for Hobby / Starter / Pro / Team. Stopped workspaces, build hosts and pending resource changes count toward allocation. Per-VM limits apply as well; service counts do not promise every service can run at its maximum size simultaneously.
+
+Credit packs add 400 credits for $5, 1,700 for $20, or 4,500 for $50. A credit is not a minute: consumption depends on CPU, memory and transfer under the active Oblien rate card. Extra credits extend usage; upgrading the plan increases capacity. Previously purchased credit grants and prices remain attached to their saved subscription.
 
 Every plan includes **unlimited team members**: the price you see covers your
 whole organisation, not a head count.
@@ -67,3 +71,20 @@ shown as a successful purchase.
 
 See the [billing API](/docs/api/billing) for the endpoints behind each of those
 actions.
+
+## Credit warnings and recovery
+
+Cloud warnings use your workspace's current credit balance, including purchased credits.
+The default warning levels are 80% and 95%. A banner stays visible while credits are low;
+a dismissible dialog appears at the final warning level, when grace credits begin, or when
+credits are exhausted.
+
+Choose **Buy more credits** to open credit packs when top-ups are available, or **Open billing**
+to review your plan and options. After a purchase, wait for checkout to confirm that credits
+were granted. The warning refreshes when you return to the dashboard and every minute while
+it is visible. Buying credits does not increase a plan's CPU, memory, or other resource limits.
+
+Billing alerts use your notification preferences. Email requires a verified address and a
+working email connection; the dashboard warning remains available independently. Links in
+alerts select the workspace the alert belongs to. If you cannot access it, sign in with an
+account that belongs to that workspace.

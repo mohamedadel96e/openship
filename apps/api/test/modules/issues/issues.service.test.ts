@@ -36,6 +36,8 @@ const { checkPermissionOnResource } = vi.hoisted(() => ({ checkPermissionOnResou
 const { loadOrgContainerIssues } = vi.hoisted(() => ({ loadOrgContainerIssues: vi.fn() }));
 const { listOrganizationUpdates } = vi.hoisted(() => ({ listOrganizationUpdates: vi.fn() }));
 const { getOrgPendingActions } = vi.hoisted(() => ({ getOrgPendingActions: vi.fn() }));
+const mailMocks = vi.hoisted(() => ({ list: vi.fn(), job: vi.fn() }));
+const disconnected = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("@repo/db", () => ({
   repos: {
@@ -43,6 +45,8 @@ vi.mock("@repo/db", () => ({
     serverContainerStatus: { listBehindByOrg: listBehindByOrg },
     project: { listByOrganization: projectListByOrganization },
     server: { listByOrganization: serverListByOrganization },
+    mailServer: { listByOrganization: mailMocks.list },
+    job: { findByKey: mailMocks.job },
   },
 }));
 vi.mock("@repo/platform/engine/config/env", () => ({ env: envMock }));
@@ -50,6 +54,7 @@ vi.mock("../../../src/lib/permission", () => ({ checkPermissionOnResource }));
 vi.mock("@repo/platform/engine/modules/system/server-containers.service", () => ({ loadOrgContainerIssues }));
 vi.mock("@repo/platform/engine/modules/updates/updates.service", () => ({ listOrganizationUpdates }));
 vi.mock("@repo/platform/engine/modules/projects/pending-actions.service", () => ({ getOrgPendingActions }));
+vi.mock("@repo/platform/engine/lib/desktop-network", () => ({ desktopNetworkDisconnected: disconnected }));
 
 import { countIssues, listOrganizationIssues } from "@repo/platform/engine/modules/issues/issues.service";
 import type { RequestContext } from "../../../src/lib/request-context";
@@ -111,7 +116,10 @@ const update = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  disconnected.mockReturnValue(false);
   envMock.CLOUD_MODE = false;
+  mailMocks.list.mockResolvedValue([]);
+  mailMocks.job.mockResolvedValue({ enabled: true, cronExpression: "17 3 * * *", scheduleType: "recurring" });
   checkPermissionOnResource.mockResolvedValue(true);
   incidentListByOrg.mockResolvedValue([]);
   listBehindByOrg.mockResolvedValue([]);
@@ -190,6 +198,23 @@ describe("severity is defined once, across all sources", () => {
 });
 
 describe("one row per cause", () => {
+  it("shows an observation gap for an offline desktop and removes it when connectivity returns", async () => {
+    disconnected.mockReturnValue(true);
+    const offline = await listOrganizationIssues(ctx);
+    expect(offline.issues).toMatchObject([{ kind: "monitoring_offline", scope: "platform", severity: "action_required" }]);
+    expect(offline.counts.outage).toBe(0);
+
+    disconnected.mockReturnValue(false);
+    expect((await listOrganizationIssues(ctx)).issues).toEqual([]);
+    expect(incidentListByOrg).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not invent a recovery in incident history when the desktop reconnects", async () => {
+    disconnected.mockReturnValue(true);
+    const history = await listOrganizationIssues(ctx, { status: "resolved" });
+    expect(history.issues).toEqual([]);
+  });
+
   it("reports an unreachable box once, not once per workload on it", async () => {
     incidentListByOrg.mockResolvedValue([
       incident({
@@ -208,7 +233,7 @@ describe("one row per cause", () => {
     expect(issues[0]).toMatchObject({
       kind: "server_unreachable",
       scope: "server",
-      severity: "outage",
+      severity: "action_required",
       target: { scope: "server", id: "srv-1", name: "web-01", href: "/servers/srv-1" },
     });
   });
@@ -560,4 +585,48 @@ describe("a broken source degrades to a missing section, never a broken page", (
 vi.mock("@repo/platform/engine/lib/authorization", async (importOriginal) => {
   const mocked = await (() => ({ checkPermissionOnResource }))(importOriginal);
   return { ...mocked, authorization: mocked.authorization ?? { authorize: async (ctx, input) => { await mocked.permission.assert(ctx, input); return ctx; } } };
+});
+
+
+describe("mail certificate monitoring", () => {
+  const mail = (over = {}) => ({
+    serverId: "srv-1", domain: "example.com", installedAt: new Date(), certificateAutoRenew: true,
+    certificateRenewalError: null,
+    certificateHealth: { hostname: "mail.example.com", checkedAt: new Date().toISOString(), status: "fail", reason: "expired", detail: "The mail certificate has expired.", certificate: null, endpoints: [] },
+    ...over,
+  });
+
+  it("reports one certificate issue with a link to the mail controls", async () => {
+    mailMocks.list.mockResolvedValue([mail()]);
+    const result = await listOrganizationIssues(ctx);
+    expect(mailMocks.list).toHaveBeenCalledWith(ORG);
+    expect(result.issues).toMatchObject([{ id: "mail:certificate:srv-1", kind: "mail_certificate", severity: "action_required", target: { href: "/emails?serverId=srv-1&tab=advanced" } }]);
+  });
+
+  it("suppresses certificate symptoms when the server is unreachable", async () => {
+    mailMocks.list.mockResolvedValue([mail()]);
+    incidentListByOrg.mockResolvedValue([incident({ projectId: null, kind: "server_unreachable" })]);
+    const result = await listOrganizationIssues(ctx);
+    expect(result.issues.map((issue) => issue.kind)).toEqual(["server_unreachable"]);
+  });
+
+  it("keeps monitoring expired certificates after automatic renewal is disabled", async () => {
+    mailMocks.list.mockResolvedValue([mail({ certificateAutoRenew: false })]);
+    expect((await listOrganizationIssues(ctx)).issues[0]?.kind).toBe("mail_certificate");
+  });
+
+  it("removes the issue after a successful certificate check and reload", async () => {
+    mailMocks.list.mockResolvedValue([mail({ certificateHealth: { hostname: "mail.example.com", status: "ok", checkedAt: new Date().toISOString(), certificate: null, endpoints: [] } })]);
+    expect((await listOrganizationIssues(ctx)).issues).toEqual([]);
+  });
+
+  it("does not read mail records in cloud mode or without mail access", async () => {
+    envMock.CLOUD_MODE = true;
+    await listOrganizationIssues(ctx);
+    expect(mailMocks.list).not.toHaveBeenCalled();
+    envMock.CLOUD_MODE = false;
+    checkPermissionOnResource.mockImplementation(async (_ctx, input) => input.resourceType !== "mail_server");
+    await listOrganizationIssues(ctx);
+    expect(mailMocks.list).not.toHaveBeenCalled();
+  });
 });

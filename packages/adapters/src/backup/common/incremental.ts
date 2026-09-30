@@ -187,7 +187,7 @@ export async function uploadIncrementalArtifact(
 }
 
 async function checkIndex(
-  destination: BackupDestination,
+  destination: Pick<BackupDestination, "get">,
   artifact: StoredBackupArtifact,
   storage: IncrementalBackupStorage,
 ) {
@@ -217,7 +217,7 @@ export async function headBackupArtifact(
 }
 
 export async function openBackupArtifact(
-  destination: BackupDestination,
+  destination: Pick<BackupDestination, "get">,
   artifact: StoredBackupArtifact,
 ): Promise<Readable> {
   const storage = incrementalBackupStorage(artifact);

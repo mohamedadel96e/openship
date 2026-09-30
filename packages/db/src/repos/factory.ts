@@ -1,5 +1,14 @@
+import { createClusterStorageRepo } from "./cluster-storage.repo";
+import { createCloudAnalyticsRepo } from "./cloud-analytics.repo";
+import { createCloudSupportRepo } from "./cloud-support.repo";
+export { createCloudSupportRepo, type CloudSupportRepo, type CloudSupportTicket, type CloudSupportMessage } from "./cloud-support.repo";
+export { createCloudAnalyticsRepo, type CloudAnalyticsRepo, type CloudAnalyticsOutboxInput, type CloudAnalyticsOutboxEvent, type CloudAnalyticsCheckout } from "./cloud-analytics.repo";
+export { createClusterStorageRepo, type ClusterStorageRecord } from "./cluster-storage.repo";
 export { createUserRepo, type User, type NewUser } from "./user.repo";
-export { createCloudDockerWorkspaceRepo, type CloudDockerWorkspace } from "./cloud-docker-workspace.repo";
+export {
+  createCloudDockerWorkspaceRepo,
+  type CloudDockerWorkspace,
+} from "./cloud-docker-workspace.repo";
 export { createSessionRepo, type Session } from "./session.repo";
 export { createAccountRepo, type Account } from "./account.repo";
 export {
@@ -42,6 +51,7 @@ export {
   type NewBuildSession,
 } from "./deployment.repo";
 export { createDomainRepo, type Domain, type NewDomain } from "./domain.repo";
+export { createDomainDnsChallengeRepo, type DomainDnsChallenge } from "./domain-dns-challenge.repo";
 export {
   createDnsCredentialRepo,
   type DnsCredential,
@@ -127,8 +137,16 @@ export {
   type NewInstanceSettings,
 } from "./instance-settings.repo";
 export { createServerRepo, type Server, type NewServer } from "./server.repo";
-export { createServerClusterRepo, type ServerClusterRecord, type ClusterVerificationRecord, type ManagedNetworkOperationRecord } from "./server-cluster.repo";
-export { createNetworkPreparationRepo, type NetworkPreparationRecord } from "./network-preparation.repo";
+export {
+  createServerClusterRepo,
+  type ServerClusterRecord,
+  type ClusterVerificationRecord,
+  type ManagedNetworkOperationRecord,
+} from "./server-cluster.repo";
+export {
+  createNetworkPreparationRepo,
+  type NetworkPreparationRecord,
+} from "./network-preparation.repo";
 export {
   createServerGithubAuthRepo,
   type ServerGithubAuth,
@@ -281,6 +299,7 @@ import { createProjectGroupRepo } from "./project-group.repo";
 import { createProjectRepo } from "./project.repo";
 import { createDeploymentRepo } from "./deployment.repo";
 import { createDomainRepo } from "./domain.repo";
+import { createDomainDnsChallengeRepo } from "./domain-dns-challenge.repo";
 import { createDnsCredentialRepo } from "./dns-credential.repo";
 import { createCredentialRepo } from "./credential.repo";
 import { createRouteRuleRepo } from "./route-rule.repo";
@@ -356,81 +375,85 @@ import { createConfigurationSecretsRepo } from "./configuration-secrets.repo";
 export function createRepositories(db: Database, encryption: ConfigurationEncryption) {
   const auditSettingsRepo = createAuditSettingsRepo(db);
   return {
-  configurationSecrets: createConfigurationSecretsRepo(db, encryption),
-  user: createUserRepo(db),
-  session: createSessionRepo(db),
-  account: createAccountRepo(db),
-  gitInstallation: createGitInstallationRepo(db),
-  githubInstallState: createGithubInstallStateRepo(db),
-  gitSource: createGitSourceRepo(db),
-  projectGroup: createProjectGroupRepo(db),
-  project: createProjectRepo(db, encryption),
-  deployment: createDeploymentRepo(db, encryption),
-  domain: createDomainRepo(db),
-  dnsCredential: createDnsCredentialRepo(db),
-  credential: createCredentialRepo(db),
-  routeRule: createRouteRuleRepo(db),
-  webhookSource: createWebhookSourceRepo(db),
-  incomingWebhook: createIncomingWebhookRepo(db),
-  notice: createSystemNoticeRepo(db),
-  updateStatus: createUpdateStatusRepo(db),
-  serverModuleStatus: createServerModuleStatusRepo(db),
-  serverContainerStatus: createServerContainerStatusRepo(db),
-  edgeTargetVerification: createEdgeTargetVerificationRepo(db),
-  serviceIncident: createServiceIncidentRepo(db),
-  cloudWebhookBinding: createCloudWebhookBindingRepo(db),
-  cloudDockerWorkspace: createCloudDockerWorkspaceRepo(db),
-  projectConnection: createProjectConnectionRepo(db),
-  customAppTemplate: createCustomAppTemplateRepo(db),
-  webhookDelivery: createWebhookDeliveryRepo(db),
-  service: createServiceRepo(db, encryption),
-  serviceDeployment: createServiceDeploymentRepo(db),
-  settings: createSettingsRepo(db),
-  instanceSettings: createInstanceSettingsRepo(db),
-  server: createServerRepo(db),
-  serverCluster: createServerClusterRepo(db),
-  computeCluster: createComputeClusterRepo(db),
-  clusterRuntime: createClusterRuntimeRepo(db),
-  clusterDatabase: createClusterDatabaseRepo(db),
-  networkPreparation: createNetworkPreparationRepo(db),
-  serverGithubAuth: createServerGithubAuthRepo(db),
-  githubDeployKey: createGithubDeployKeyRepo(db),
-  serverTunnel: createServerTunnelRepo(db),
-  mailServer: createMailServerRepo(db),
-  mailInbound: createMailInboundRepo(db),
-  analytics: createAnalyticsRepo(db),
-  resourceUsage: createResourceUsageRepo(db),
-  terminalSession: createTerminalSessionRepo(db),
-  serviceTerminalSession: createServiceTerminalSessionRepo(db),
-  cloudHandoffCode: createCloudHandoffCodeRepo(db),
-  personalAccessToken: createPersonalAccessTokenRepo(db),
-  patGrant: createPersonalAccessTokenGrantRepo(db),
-  oauth: createOAuthRepo(db),
-  backupDestination: createBackupDestinationRepo(db),
-  backupPolicy: createBackupPolicyRepo(db),
-  backupRun: createBackupRunRepo(db),
-  backupRestore: createBackupRestoreRepo(db),
-  dockerMigrationRun: createDockerMigrationRunRepo(db),
-  member: createMemberRepo(db),
-  invitation: createInvitationRepo(db),
-  auditSettings: auditSettingsRepo,
-  auditEvent: createAuditEventRepo(db, auditSettingsRepo),
-  jobRun: createJobRunRepo(db),
-  job: createJobRepo(db),
-  orphanedResource: createOrphanedResourceRepo(db),
-  hostPortClaim: createHostPortClaimRepo(db),
-  resourceGrant: createResourceGrantRepo(db),
-  invitationPendingGrant: createInvitationPendingGrantRepo(db),
-  organization: createOrganizationRepo(db),
-  notificationChannel: createNotificationChannelRepo(db),
-  notificationSubscription: createNotificationSubscriptionRepo(db),
-  notificationDefault: createNotificationDefaultRepo(db),
-  notificationDelivery: createNotificationDeliveryRepo(db),
-  stripeTopupGrant: createStripeTopupGrantRepo(db),
-  billingAnniversaryGrant: createBillingAnniversaryGrantRepo(db),
-  billingUsageSnapshot: createBillingUsageSnapshotRepo(db),
-  billingPlanGrant: createBillingPlanGrantRepo(db),
-} as const;
+    configurationSecrets: createConfigurationSecretsRepo(db, encryption),
+    user: createUserRepo(db),
+    session: createSessionRepo(db),
+    account: createAccountRepo(db),
+    gitInstallation: createGitInstallationRepo(db),
+    githubInstallState: createGithubInstallStateRepo(db),
+    gitSource: createGitSourceRepo(db),
+    projectGroup: createProjectGroupRepo(db),
+    project: createProjectRepo(db, encryption),
+    deployment: createDeploymentRepo(db, encryption),
+    domain: createDomainRepo(db),
+    domainDnsChallenge: createDomainDnsChallengeRepo(db),
+    dnsCredential: createDnsCredentialRepo(db),
+    credential: createCredentialRepo(db),
+    routeRule: createRouteRuleRepo(db),
+    webhookSource: createWebhookSourceRepo(db),
+    incomingWebhook: createIncomingWebhookRepo(db),
+    notice: createSystemNoticeRepo(db),
+    updateStatus: createUpdateStatusRepo(db),
+    serverModuleStatus: createServerModuleStatusRepo(db),
+    serverContainerStatus: createServerContainerStatusRepo(db),
+    edgeTargetVerification: createEdgeTargetVerificationRepo(db),
+    serviceIncident: createServiceIncidentRepo(db),
+    cloudWebhookBinding: createCloudWebhookBindingRepo(db),
+    cloudDockerWorkspace: createCloudDockerWorkspaceRepo(db),
+    projectConnection: createProjectConnectionRepo(db),
+    customAppTemplate: createCustomAppTemplateRepo(db),
+    webhookDelivery: createWebhookDeliveryRepo(db),
+    service: createServiceRepo(db, encryption),
+    serviceDeployment: createServiceDeploymentRepo(db),
+    settings: createSettingsRepo(db),
+    instanceSettings: createInstanceSettingsRepo(db),
+    server: createServerRepo(db),
+    serverCluster: createServerClusterRepo(db),
+    computeCluster: createComputeClusterRepo(db),
+    clusterRuntime: createClusterRuntimeRepo(db),
+    clusterStorage: createClusterStorageRepo(db),
+    clusterDatabase: createClusterDatabaseRepo(db),
+    networkPreparation: createNetworkPreparationRepo(db),
+    serverGithubAuth: createServerGithubAuthRepo(db),
+    githubDeployKey: createGithubDeployKeyRepo(db),
+    serverTunnel: createServerTunnelRepo(db),
+    mailServer: createMailServerRepo(db),
+    mailInbound: createMailInboundRepo(db),
+    analytics: createAnalyticsRepo(db),
+    resourceUsage: createResourceUsageRepo(db),
+    terminalSession: createTerminalSessionRepo(db),
+    serviceTerminalSession: createServiceTerminalSessionRepo(db),
+    cloudHandoffCode: createCloudHandoffCodeRepo(db),
+    personalAccessToken: createPersonalAccessTokenRepo(db),
+    patGrant: createPersonalAccessTokenGrantRepo(db),
+    oauth: createOAuthRepo(db),
+    backupDestination: createBackupDestinationRepo(db),
+    backupPolicy: createBackupPolicyRepo(db),
+    backupRun: createBackupRunRepo(db),
+    backupRestore: createBackupRestoreRepo(db),
+    dockerMigrationRun: createDockerMigrationRunRepo(db),
+    member: createMemberRepo(db),
+    invitation: createInvitationRepo(db),
+    auditSettings: auditSettingsRepo,
+    auditEvent: createAuditEventRepo(db, auditSettingsRepo),
+    jobRun: createJobRunRepo(db),
+    job: createJobRepo(db),
+    orphanedResource: createOrphanedResourceRepo(db),
+    hostPortClaim: createHostPortClaimRepo(db),
+    resourceGrant: createResourceGrantRepo(db),
+    invitationPendingGrant: createInvitationPendingGrantRepo(db),
+    organization: createOrganizationRepo(db),
+    notificationChannel: createNotificationChannelRepo(db),
+    notificationSubscription: createNotificationSubscriptionRepo(db),
+    notificationDefault: createNotificationDefaultRepo(db),
+    notificationDelivery: createNotificationDeliveryRepo(db),
+    stripeTopupGrant: createStripeTopupGrantRepo(db),
+    billingAnniversaryGrant: createBillingAnniversaryGrantRepo(db),
+    billingUsageSnapshot: createBillingUsageSnapshotRepo(db),
+    billingPlanGrant: createBillingPlanGrantRepo(db),
+    cloudAnalytics: createCloudAnalyticsRepo(db),
+    cloudSupport: createCloudSupportRepo(db),
+  } as const;
 }
 
 export type Repositories = ReturnType<typeof createRepositories>;

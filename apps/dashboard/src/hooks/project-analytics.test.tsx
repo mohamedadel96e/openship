@@ -9,7 +9,7 @@ import { invalidateProjectCaches, mapAnalyticsData, useAnalyticsOverview, usePro
 
 const h = vi.hoisted(() => ({ get: vi.fn(), info: vi.fn(), services: vi.fn(), router: { replace: vi.fn() } }));
 vi.mock("@/lib/api", () => ({
-  api: { get: h.get }, projectsApi: { getInfo: h.info }, servicesApi: { list: h.services },
+  api: { get: h.get }, projectsApi: { getInfo: h.info, getCommitStatus: async () => ({ data: { supported: false } }) }, servicesApi: { list: h.services },
   endpoints: { analytics: { overview: "/analytics/overview", usageHistory: "/analytics/usage/history" } },
   ApiError: class extends Error {},
 }));

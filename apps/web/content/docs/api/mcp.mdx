@@ -15,14 +15,15 @@ Available on both self-hosted and Openship Cloud (mounted in the shared route se
 ## How authentication works
 
 A missing or invalid bearer returns **`401`** with a `WWW-Authenticate` header pointing at
-`/.well-known/oauth-protected-resource`, so OAuth-2.1 MCP clients can discover the authorization server and
-start the PKCE flow. A valid credential resolves the caller's effective capability — this is used only to
+`/.well-known/oauth-protected-resource/api/mcp`, so OAuth-2.1 MCP clients can discover the authorization server and
+start the PKCE flow. Self-hosted clients using `/api/proxy/api/mcp` receive metadata for that path instead,
+with a matching resource identifier. A valid credential resolves the caller's effective capability — this is used only to
 **filter `tools/list`** so the endpoint doesn't advertise tools the token can't use.
 
 The capability is **not** the authorization gate. Every `tools/call` builds an internal HTTP request and
 dispatches it through the real Hono app, forwarding the caller's bearer, so routing, validation, auth, and
 the per-resource permission check all run exactly as they do over HTTP. A read-only token can only reach
-read tools; a scoped token stays confined to the projects, servers, and repositories it was granted.
+GET tools; a scoped token stays confined to the projects, servers, and repositories it was granted.
 
 The endpoint is rate-limited per-IP (the `mcp` policy: 300 requests/minute) because even an unauthenticated
 probe costs a credential lookup.
@@ -35,7 +36,7 @@ body returns `-32600`).
 <TypeTable
   type={{
     jsonrpc: { type: 'string', description: 'Protocol identifier. Must be "2.0".', required: true },
-    method: { type: 'string', description: 'One of: initialize, ping, tools/list, tools/call, notifications/initialized.', required: true },
+    method: { type: 'string', description: 'One of: initialize, ping, tools/list, tools/call, prompts/list, prompts/get, notifications/initialized.', required: true },
     id: { type: 'string | number', description: 'Request id, echoed back in the response. Omit entirely for a notification — the server replies 202 with no body.' },
     params: { type: 'object', description: 'Method arguments — e.g. { protocolVersion } for initialize, { name, arguments } for tools/call.' },
   }}
@@ -49,7 +50,7 @@ body returns `-32600`).
 | `ping` | Returns `{}`. |
 | `tools/list` | Returns the tools the caller's token can actually use (filtered by read-only flag, role, and grants). |
 | `tools/call` | Dispatches the named tool through the real API and returns its response as JSON text content. |
-| `prompts/list` | Returns the guided-flow catalog — one entry per multi-step workflow (`openship-overview`, `deploy-from-git`, `deploy-a-folder`, `install-catalog-app`). |
+| `prompts/list` | Returns the guided-flow catalog — one entry per multi-step workflow including deployment, clustering/scaling, backups and migration. |
 | `prompts/get` | Returns a named prompt's guidance as a user message, with tool references resolved to their live tool names and any `arguments` interpolated. |
 | `notifications/initialized` | Acknowledged only (notification, no reply → `202`). |
 
@@ -123,8 +124,8 @@ is not currently exposed. `get_cloud_workspaces` lists runtime infrastructure, a
 
 ## Call a tool
 
-`params.name` is the tool name from `tools/list`; `params.arguments` carries any path parameters, an optional
-`query` object, an optional `body` object (for `POST`/`PUT`/`PATCH` tools), and an optional
+`params.name` is the tool name from `tools/list`; `params.arguments` carries any path parameters, a
+`query` object and/or JSON `body` when declared by the tool’s schema (including guarded `DELETE` operations), and an optional
 `organizationId` (sent as `X-Organization-Id` together with `X-Openship-Scope: fixed`).
 
 ```bash
@@ -159,9 +160,35 @@ curl -s "$OPENSHIP_URL/api/mcp" \
 | `deploy-from-git` | Connect/verify GitHub → pick a repo → detect the stack → create the project → deploy → watch. Optional `repo` / `branch` arguments. |
 | `deploy-a-folder` | The 4-step folder-upload flow, including the out-of-band tarball upload that is deliberately **not** an MCP tool (raw binary can't cross JSON-RPC). |
 | `install-catalog-app` | Browse the catalog → install → handle the `flowHref` that wizard apps (e.g. mail) return instead of installing in-band. |
+| `cluster-and-scale` | Private network → k3s → deploy → scale up/down → recover/clean up. Self-hosted. |
+| `cluster-database` | Create → observe → connect → PostgreSQL backup/restore-to-new → cleanup. Self-hosted. |
+| `backup-and-restore` | Destination/preflight → policy → run → prepare restore → explicit apply → verify. |
+| `migrate-docker-project` | Scan/map → preview → migrate → handle prompts/partial transfers → verify → explicit cutover. Self-hosted. |
 
 Every prompt starts with workspace discovery and selection guidance. Tool references resolve against
 the live registry, so a renamed route never leaves a prompt pointing at a stale tool name.
+
+## Input and workflow contracts
+
+Use `tools/list` as the source of truth for required fields. Path parameters are top-level, nonempty
+strings. The exact values `.` and `..` are rejected so URL normalization cannot select a different
+route; names containing dots, such as `.github`, remain valid. Endpoint query parameters belong in
+`query`; payloads belong in `body`. Invalid or missing required arguments return
+`INVALID_TOOL_ARGUMENTS` before dispatch. Optional all-default bodies are sent as `{}`.
+Validation errors report field paths without echoing submitted values.
+
+A successful call may only have **accepted** asynchronous work. Follow the returned run/deployment/operation
+ID with the corresponding JSON status tool and inspect its final state. Live SSE streams and binary
+uploads stay on HTTP. The job output tool returns captured output; it does not open a live stream.
+
+Concurrency and recovery guards remain mandatory: `revision` for network/cluster configuration,
+`sequence` or `expectedSequence` for durable operations, and `expectedDeploymentId` plus
+`expectedUpdatedAt` for application scaling. Reuse an operation's `requestId` for the same intent after
+a lost response; re-read state before retrying a conflict.
+
+See the [generated tool catalog](/docs/api/mcp-tools) for descriptions, permissions, availability and
+intentional exclusions across every route. The [cluster/scaling guide](/docs/guides/mcp-clusters-and-scaling)
+covers the full lifecycle and its current limits. Policy-driven autoscaling is not implemented.
 
 ## Errors
 

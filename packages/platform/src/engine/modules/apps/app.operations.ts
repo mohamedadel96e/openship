@@ -54,6 +54,12 @@ export const appDependencies: AppDependencies = {
       return { template, draft };
     },
     async hostFit(ctx, id, input = {}) {
+      if (input.projectId) {
+        await authorization.authorize(
+          { ...ctx, scopeMode: "fixed" },
+          { resourceType: "project", resourceId: input.projectId, action: "read" },
+        );
+      }
       if (input.serverId) {
         await authorization.authorize({ ...ctx, scopeMode: "fixed" }, { resourceType: "server", resourceId: input.serverId, action: "read" });
         const server = await repos.server.getInOrganization(input.serverId, ctx.organizationId);

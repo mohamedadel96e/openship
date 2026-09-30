@@ -3,6 +3,7 @@
  */
 
 export const APP_NAME = "Openship";
+export const SUPPORT_EMAIL = "support@openship.io";
 
 /** Authenticated organization admins may intentionally create a shareable
  * invitation without asking the server to deliver email. Shared by the

@@ -182,3 +182,60 @@ export function resolveBuildResources(
     diskMb: resolved.diskMb > 0 ? resolved.diskMb : DEFAULT_BUILD_RESOURCE_CONFIG.diskMb,
   };
 }
+
+/** Shared by installation previews, plan checks, and VM provisioning. */
+export interface CloudServiceResourceInput {
+  name?: string;
+  enabled?: boolean;
+  kind?: string;
+  image?: string | null;
+  build?: unknown;
+  advanced?: {
+    resources?: ResourceConfig | Record<string, unknown> | null;
+    build?: unknown;
+    imageTemplate?: unknown;
+  } | null;
+}
+
+export function cloudDockerNeedsBuild(services: CloudServiceResourceInput[]): boolean {
+  return services.some(
+    (service) =>
+      service.enabled !== false &&
+      Boolean(
+        service.build || service.advanced?.build || (service.kind === "monorepo" && !service.image),
+      ),
+  );
+}
+
+export function cloudDockerResources(input: {
+  resources?: ResourceConfig | Record<string, unknown> | null;
+  buildResources?: ResourceConfig | Record<string, unknown> | null;
+  reserveBuild?: boolean;
+  services: Array<{
+    enabled?: boolean;
+    resources?: ResourceConfig | Record<string, unknown> | null;
+  }>;
+}): ResourceConfig {
+  const resources = input.services
+    .filter((s) => s.enabled !== false)
+    .map((s) => resolveCloudServiceResources(s.resources, input.resources));
+  const build = input.reserveBuild
+    ? resolveBuildResources(input.buildResources, { isCloud: true })
+    : null;
+  // Image pulls need no source-build reservation. Include bounded Docker/OS
+  // overhead; a source build receives temporary RAM released after deployment.
+  return {
+    cpuCores: Math.max(
+      1,
+      Math.ceil(build?.cpuCores ?? 0),
+      Math.ceil(resources.reduce((n, r) => n + r.cpuCores, 0)),
+    ),
+    memoryMb: Math.max(
+      1024,
+      Math.ceil(
+        (512 + (build?.memoryMb ?? 0) + resources.reduce((n, r) => n + r.memoryMb, 0)) / 256,
+      ) * 256,
+    ),
+    diskMb: Math.max(8192, build?.diskMb ?? 0, ...resources.map((r) => r.diskMb)),
+  };
+}

@@ -17,6 +17,8 @@ import {
   resolveLocalized,
   declaredServiceRoutes,
   defaultAppRouteLabel,
+  installServicePorts,
+  serviceRoutingPatch,
   isValidCustomHostname,
   normalizeCustomHostname,
   normalizeServiceLabel,
@@ -26,6 +28,7 @@ import {
   hasMinResources,
   type AppSettingField,
   type AppEndpoint,
+  type AppInstallEndpoint as StoredRoute,
   type InstallPhaseId,
   type InstallPhaseStatus,
 } from "@repo/core";
@@ -33,10 +36,11 @@ import { appsApi, deployApi, servicesApi, projectsApi } from "@/lib/api";
 import type { AppHostFitView, InstallAppRoute } from "@/lib/api/apps";
 import { type Service } from "@/lib/api/services";
 import { connectionsApi } from "@/lib/api/connections";
-import { getApiErrorMessage } from "@/lib/api/client";
+import { ApiError, getApiErrorMessage } from "@/lib/api/client";
 import {
   AppSettingsForm,
   fk,
+  withSettingDefaults,
   type FormValue,
   type FormValidity,
 } from "@/components/app-settings/AppSettingsForm";
@@ -44,7 +48,7 @@ import {
   AppDestinationPicker,
   type AppDestination,
 } from "@/components/deploy/AppDestinationPicker";
-import PublicEndpointsCard from "@/components/routing/PublicEndpointsCard";
+import { RoutingSettingsCard } from "@/components/routing/RoutingSettingsCard";
 import { createPublicEndpoint, type PublicEndpoint } from "@/context/deployment/types";
 import { resolvePublicEndpointHostname } from "@/lib/public-endpoint-payload";
 import {
@@ -63,31 +67,33 @@ import { useCloudDeployPricing } from "@/hooks/useCloudDeployPricing";
 import { LocalDeployComingSoonModal } from "@/components/LocalDeployComingSoonModal";
 import { useLocalDeployGate } from "@/hooks/useLocalDeployGate";
 import { defaultDomainType } from "@/lib/default-domain-type";
+import {
+  defaultAppEndpointExposure,
+  getAppEndpointModes,
+  type AppEndpointExposure as Expo,
+} from "@/lib/app-endpoint-exposure";
 import { installSettledMessage } from "@/lib/install-settled-message";
 import { appInstallDnsTargets, attachDeploymentDomainIds } from "@/lib/deployment-dns";
-import { OptionCard } from "@/app/(dashboard)/(deployment)/deploy/[slug]/components/DeployTargetStep";
 import { AppLogo } from "@/components/AppLogo";
+import { AppDomainConfirmation } from "@/components/apps/AppDomainConfirmation";
 import { VerifiedBadge } from "@/components/apps/VerifiedBadge";
 import { HostingBadge } from "@/components/apps/HostingBadge";
 import { UnverifiedBadge } from "@/components/apps/UnverifiedBadge";
 import DnsRecordsModal from "@/components/domains/DnsRecordsModal";
 import { PageContainer } from "@/components/ui/PageContainer";
+import { CustomSelect } from "@/components/ui/CustomSelect";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { encodeProjectSlug } from "@/utils/repoSlug";
 import { parseContainerPort } from "@/utils/compose-ports";
 
-/**
- * Dedicated app-install wizard — a CLEAN business-only wrapper over the existing
- * deploy pipeline. No ports/services/routes/logs: the app's template defines
- * what to ask (install-step business fields + whether it needs a public URL);
- * the template's known ports drive routing. It's a pure client orchestration of
- * existing endpoints — install → apply settings + domain → buildAccess — with a
- * JSON-mapped progress view: it ATTACHES to the running build over SSE and maps
- * the real backend phase/service boundaries onto an authored stepper, with logs
- * demoted to a foldable detail. "Advanced" hands off to the technical /deploy
- * wizard.
- */
+/** Catalog-driven app installer using the shared deployment pipeline. Business
+ * settings and endpoint choices are saved before deployment; the progress view
+ * maps the existing build stream onto the app's phases and shared log console.
+ * Advanced hands the saved draft to the full deployment wizard. */
 
 type Phase = "form" | "installing" | "done" | "error";
+type ReadStatus = "loading" | "ready" | "error";
 
 const isInstallField = (f: AppSettingField) => f.installStep === true;
 
@@ -119,46 +125,6 @@ function hostPortForEndpoint(
 function containerPortOf(spec: string): number {
   return Number(parseContainerPort(spec));
 }
-
-/**
- * Per-endpoint exposure choice, keyed by `${service}:${port}`.
- *  http: mode port|domain — free-vs-custom is chosen inside the domain detail
- *        (the PublicEndpointsCard toggle), so it's not duplicated as a mode.
- *  tcp:  mode publish|internal.
- */
-type Expo =
-  | { kind: "http"; mode: "port" | "domain"; ep: PublicEndpoint }
-  | { kind: "tcp"; mode: "publish" | "internal" };
-
-/**
- * The picker's starting state for one endpoint: the author's `defaultMode` when
- * valid for the kind, else port-only — which invents nothing.
- *
- * Cloud being CONNECTED used to pre-select `domain`, so on a Cloud instance an
- * operator who touched nothing got *.opsh.io hostnames "by choice". Connectivity
- * is a capability, not an intent. `defaultDomainType` still decides free-vs-custom
- * for the moment the operator does switch to a domain (free needs Cloud).
- */
-function defaultExpo(e: AppEndpoint, cloudConnected: boolean): Expo {
-  if (e.kind === "http") {
-    const mode = e.defaultMode === "domain" || e.defaultMode === "port" ? e.defaultMode : "port";
-    return {
-      kind: "http",
-      mode,
-      ep: createPublicEndpoint({ domainType: defaultDomainType(cloudConnected) }),
-    };
-  }
-  const mode = e.defaultMode === "internal" || e.defaultMode === "publish" ? e.defaultMode : "publish";
-  return { kind: "tcp", mode };
-}
-
-/** One stored/desired public route on a service row (the `publicEndpoints` shape). */
-type StoredRoute = {
-  port: number;
-  domainType: "free" | "custom";
-  domain?: string;
-  customDomain?: string;
-};
 
 /**
  * The routing ALREADY stored on a service row for one endpoint's port, or null
@@ -249,10 +215,9 @@ export default function AppInstallPage() {
   // Desktop mode → the "open on localhost / forward the port" hints are relevant
   // (a VPS is already public; a local app is already localhost).
   const isDesktop = deployMode === "desktop";
-  // Free .opsh.io routing needs Openship Cloud; when it's not connected we
-  // default the install to a port-only (no-domain) deploy instead of letting
-  // preflight hard-fail. Forced true on SaaS/native (CloudContext).
-  const { connected: cloudConnected, requireCloud } = useCloud();
+  // Cloud status selects free vs. custom domains; the template's routing intent
+  // is the same for Cloud, self-hosted, and local targets.
+  const { connected: cloudConnected, loading: cloudLoading, requireCloud } = useCloud();
   const { showModal, hideModal } = useModal();
   const showCloudPricing = useCloudDeployPricing();
   // Desktop mode: apps can't run on this machine yet — see useLocalDeployGate.
@@ -263,6 +228,8 @@ export default function AppInstallPage() {
   // Reopening a draft app passes its existing project id — adopt it instead of
   // creating a duplicate (the backend also get-or-creates, this avoids the call).
   const adoptedProjectId = searchParams.get("projectId");
+  const cancelInstallConfirmation = useRef<(() => void) | null>(null);
+  useEffect(() => () => cancelInstallConfirmation.current?.(), [appId, adoptedProjectId]);
   // A deploy already in flight, carried in the URL (written the moment we enter
   // `installing`) so a hard refresh mid-install RESUMES the progress view —
   // re-attaching to the same SSE stream — instead of dropping back to the form.
@@ -271,11 +238,14 @@ export default function AppInstallPage() {
   // from the API) is fetched so a repo-fresh app opens + installs without a redeploy.
   const bundledTemplate = useMemo(() => getAppTemplate(appId), [appId]);
   const [template, setTemplate] = useState(bundledTemplate);
-  // A repo-fresh template is absent from the dashboard bundle by definition.
-  // Do not treat that initial `undefined` as a 404: wait for the runtime-catalog
-  // request before redirecting. Without this guard, a newly published catalog
-  // app flashes the route and immediately returns to the catalog.
-  const [templateResolved, setTemplateResolved] = useState(Boolean(bundledTemplate));
+  // The runtime read also discovers an existing draft. The bundled template
+  // can render immediately, but cannot authorize installing over unknown routes.
+  const [catalogRead, setCatalogRead] = useState<{ appId: string; status: ReadStatus }>({
+    appId,
+    status: "loading",
+  });
+  const [catalogRevision, setCatalogRevision] = useState(0);
+  const catalogStatus = catalogRead.appId === appId ? catalogRead.status : "loading";
   // The org's existing not-yet-deployed draft of this app, if any. The catalog
   // tiles link here WITHOUT ?projectId, so without this the wizard had no idea a
   // draft existed — it showed template defaults while Install landed on the draft.
@@ -286,7 +256,8 @@ export default function AppInstallPage() {
   } | null>(null);
   useEffect(() => {
     setTemplate(bundledTemplate);
-    setTemplateResolved(Boolean(bundledTemplate));
+    setCatalogRead({ appId, status: "loading" });
+    setOpenDraft(null);
     let cancelled = false;
     appsApi
       .template(appId)
@@ -294,17 +265,21 @@ export default function AppInstallPage() {
         if (cancelled) return;
         if (r?.data) setTemplate(r.data);
         setOpenDraft(r?.draft ?? null);
+        setCatalogRead({ appId, status: "ready" });
       })
-      .catch(() => {
-        /* Keep a bundled fallback if the runtime catalog is temporarily unavailable. */
-      })
-      .finally(() => {
-        if (!cancelled) setTemplateResolved(true);
+      .catch((error) => {
+        if (cancelled) return;
+        if (error instanceof ApiError && error.status === 404) {
+          setTemplate(undefined);
+          setCatalogRead({ appId, status: "ready" });
+        } else {
+          setCatalogRead({ appId, status: "error" });
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [appId, bundledTemplate]);
+  }, [appId, bundledTemplate, catalogRevision]);
   const groups = useMemo(() => (template ? getAppSettings(template) : []), [template]);
   const installFields = useMemo(
     () => flattenSettingFields(groups).filter(isInstallField),
@@ -360,39 +335,51 @@ export default function AppInstallPage() {
   const candidatesFor = (category?: string) =>
     candidates.filter((p) => !category || p.category === category);
 
-  const [values, setValues] = useState<Record<string, FormValue>>(() => {
-    const seed: Record<string, FormValue> = {};
-    for (const f of installFields) seed[fk(f.service, f.key)] = envToSettingValue(f, undefined);
-    return seed;
-  });
+  const [values, setValues] = useState<Record<string, FormValue>>(() =>
+    withSettingDefaults(installFields),
+  );
+  useEffect(() => {
+    setValues((previous) => withSettingDefaults(installFields, previous));
+  }, [installFields]);
   const [expo, setExpo] = useState<Record<string, Expo>>(() => {
     const out: Record<string, Expo> = {};
-    for (const e of appEndpoints) out[endpointKey(e)] = defaultExpo(e, cloudConnected);
+    if (cloudLoading && !cloudConnected) return out;
+    for (const e of appEndpoints) out[endpointKey(e)] = defaultAppEndpointExposure(e, cloudConnected);
     return out;
   });
   // The runtime (overlay-fresh) template can declare endpoints the bundled one
   // didn't, and those arrive AFTER the state above was seeded — fill any missing
   // picker so what the wizard renders is what the install sends.
   useEffect(() => {
+    // Wait for the initial domain-provider choice (free vs. custom); only fill
+    // missing choices, never reset saved routes or user edits.
+    if (cloudLoading && !cloudConnected) return;
     setExpo((prev) => {
       const missing = appEndpoints.filter((e) => !prev[endpointKey(e)]);
       if (missing.length === 0) return prev;
       const next = { ...prev };
-      for (const e of missing) next[endpointKey(e)] = defaultExpo(e, cloudConnected);
+      for (const e of missing) next[endpointKey(e)] = defaultAppEndpointExposure(e, cloudConnected);
       return next;
     });
-  }, [appEndpoints, cloudConnected]);
-  // Author can restrict the exposure choices offered per endpoint via `allowedModes`.
-  const modeAllowed = (e: AppEndpoint, mode: NonNullable<AppEndpoint["defaultMode"]>) =>
-    !e.allowedModes || e.allowedModes.includes(mode);
+  }, [appEndpoints, cloudConnected, cloudLoading]);
+  const [destination, setDestination] = useState<AppDestination | null>(null);
+  const cloudDestination = destination?.deployTarget === "cloud" || (!destination && !selfHosted);
+  const exposureModeLabels = {
+    domain: { label: w.routeDomainLabel, description: w.routeDomainDesc },
+    port: {
+      label: cloudDestination ? w.domainNone : w.routePortLabel,
+      description: cloudDestination ? w.routePortCloudDesc : w.routePortDesc,
+    },
+    publish: { label: w.tcpPublishLabel, description: w.tcpPublishDesc },
+    internal: { label: w.tcpInternalLabel, description: w.tcpInternalDesc },
+  };
   const setExpoMode = (key: string, mode: Expo["mode"]) =>
     setExpo((p) => (p[key] ? { ...p, [key]: { ...p[key], mode } as Expo } : p));
-  const setExpoEp = (key: string, ep: PublicEndpoint) =>
+  const setExpoEp = (key: string, updates: Partial<PublicEndpoint>) =>
     setExpo((p) => {
       const cur = p[key];
-      return cur?.kind === "http" ? { ...p, [key]: { ...cur, ep } } : p;
+      return cur?.kind === "http" ? { ...p, [key]: { ...cur, ep: { ...cur.ep, ...updates } } } : p;
     });
-  const [destination, setDestination] = useState<AppDestination | null>(null);
 
   // Header description: clamped to two lines with a More/Less toggle, because a
   // heavy app's blurb runs long enough to push the form below the fold.
@@ -416,37 +403,6 @@ export default function AppInstallPage() {
     return () => ro.disconnect();
   }, [descExpanded, template?.description]);
 
-  // Does the chosen destination meet what the app declares it needs? Only asked
-  // for an app that declares something (almost none do) — the answer is the
-  // machine's measured capacity, and the fit verdict is computed server-side by
-  // the same function deploy preflight uses, so the notice below and the refusal
-  // can't disagree. Advisory: Install stays enabled and preflight is the gate.
-  const declaresResources = hasMinResources(template?.minResources);
-  const [hostFit, setHostFit] = useState<AppHostFitView | null>(null);
-  useEffect(() => {
-    const appId = template?.id;
-    if (!declaresResources || !appId || !destination) {
-      setHostFit(null);
-      return;
-    }
-    let live = true;
-    void appsApi
-      .hostFit(appId, {
-        deployTarget: destination.deployTarget,
-        serverId: destination.deployTarget === "server" ? destination.serverId : undefined,
-      })
-      .then((res) => {
-        if (live) setHostFit(res.data);
-      })
-      .catch(() => {
-        // An advisory read — a failure means no notice, never a blocked install.
-        if (live) setHostFit(null);
-      });
-    return () => {
-      live = false;
-    };
-  }, [declaresResources, template?.id, destination]);
-
   // Project name shown in Openship. Editable for a fresh install (a second
   // install of the same app auto-suffixes server-side, e.g. "Convex 2"); hidden
   // when reopening an existing draft, which already has its name.
@@ -454,6 +410,7 @@ export default function AppInstallPage() {
 
   const [phase, setPhase] = useState<Phase>(resumeDeploymentId ? "installing" : "form");
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
   // A Stop request is in flight (the cancel POST + teardown). Disables the Stop
   // button. `cancelled` records that the terminal `error` phase was a user Stop,
   // not a failure — the progress view swaps to neutral "cancelled" copy.
@@ -481,11 +438,11 @@ export default function AppInstallPage() {
 
   // Unknown / non-installable / flow apps don't belong here.
   useEffect(() => {
-    if (!templateResolved) return;
+    if (catalogStatus !== "ready") return;
     if (!template || template.kind === "flow" || !template.available) {
       router.replace("/apps/new");
     }
-  }, [templateResolved, template, appId, router]);
+  }, [catalogStatus, template, appId, router]);
 
   // ── Draft re-entry: show what's persisted, not the template defaults ───────
   /** The project label the installer will build free hostnames from — its slug,
@@ -497,7 +454,83 @@ export default function AppInstallPage() {
   // installer itself makes, on `slugify(name)`).
   const targetDraftId =
     adoptedProjectId ?? (openDraft && projectLabel === openDraft.slug ? openDraft.projectId : null);
-  const [draftSlug, setDraftSlug] = useState<string | null>(null);
+
+  const declaresResources = hasMinResources(template?.minResources);
+  const [hostFit, setHostFit] = useState<AppHostFitView | null>(null);
+  const [capacityLoading, setCapacityLoading] = useState(false);
+  const [capacityRevision, setCapacityRevision] = useState(0);
+  // Match the install target, including a draft created before DNS was cancelled.
+  const capacityProjectId = adoptedProjectId ?? projectId ?? targetDraftId;
+  useEffect(() => {
+    const templateId = template?.id;
+    if (!templateId || (selfHosted && (!declaresResources || !destination))) {
+      setHostFit(null);
+      setCapacityLoading(false);
+      return;
+    }
+    let live = true;
+    setHostFit(null);
+    setCapacityLoading(true);
+    void appsApi
+      .hostFit(templateId, {
+        deployTarget: cloudDestination ? "cloud" : destination?.deployTarget,
+        serverId: destination?.deployTarget === "server" ? destination.serverId : undefined,
+        projectId: capacityProjectId ?? undefined,
+      })
+      .then((res) => {
+        if (live) setHostFit(res.data);
+      })
+      .catch(() => {
+        // Preview failure never substitutes for the deployment's authoritative check.
+        if (live) setHostFit(null);
+      })
+      .finally(() => {
+        if (live) setCapacityLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [
+    declaresResources,
+    template?.id,
+    destination,
+    cloudDestination,
+    selfHosted,
+    capacityProjectId,
+    capacityRevision,
+  ]);
+
+  // Checkout opens separately, preserving the form. Refresh the plan when the
+  // operator returns; no polling or automatic deployment follows an upgrade.
+  useEffect(() => {
+    if (selfHosted) return;
+    const refresh = () => setCapacityRevision((value) => value + 1);
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [selfHosted]);
+  const needsCloudUpgrade = !selfHosted && hostFit?.cloud?.status === "upgrade";
+  const checkingCloudCapacity = !selfHosted && capacityLoading;
+
+  const [draftRouting, setDraftRouting] = useState<
+    | { projectId: string; status: "ready"; slug: string | null }
+    | { projectId: string; status: "error" }
+    | null
+  >(null);
+  const currentDraftRouting = draftRouting?.projectId === targetDraftId ? draftRouting : null;
+  const draftRoutingReady =
+    !targetDraftId || !needsExposure || currentDraftRouting?.status === "ready";
+  const draftSlug = currentDraftRouting?.status === "ready" ? currentDraftRouting.slug : null;
+  const configurationReady = catalogStatus === "ready" && draftRoutingReady;
+  const exposureReady =
+    configurationReady && appEndpoints.every((e) => Boolean(expo[endpointKey(e)]));
+  const configurationError =
+    catalogStatus === "error"
+      ? w.catalogLoadFailed
+      : currentDraftRouting?.status === "error"
+        ? w.routingLoadFailed
+        : null;
+  const routeControlsDisabled =
+    busy || !draftRoutingReady || (catalogStatus !== "ready" && !adoptedProjectId);
   /** The default free subdomain LABEL for one endpoint — identical to what the
    *  installer writes when the slug field is left blank (shared helper), so the
    *  preview can't promise a hostname the install won't create. */
@@ -510,30 +543,38 @@ export default function AppInstallPage() {
   // Rehydrate ONCE per draft. Keyed by id, not by effect deps: `appEndpoints` gets
   // a new identity when the overlay-fresh template lands, and re-running then
   // would overwrite picker edits the operator had already made.
-  const rehydratedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!targetDraftId || appEndpoints.length === 0) return;
-    if (rehydratedRef.current === targetDraftId) return;
-    rehydratedRef.current = targetDraftId;
+    if (!targetDraftId) {
+      setDraftRouting(null);
+      return;
+    }
+    if (appEndpoints.length === 0 || draftRouting?.projectId === targetDraftId) return;
     let cancelled = false;
-    void (async () => {
-      const [info, svcRes] = await Promise.all([
-        projectsApi.getInfo(targetDraftId).catch(() => null),
-        servicesApi.list(targetDraftId).catch(() => null),
-      ]);
-      if (cancelled) return;
-      const project = info?.data?.project as { slug?: string; name?: string } | undefined;
-      setDraftSlug(project?.slug ?? project?.name ?? null);
-      const services = (svcRes?.services ?? []) as Service[];
-      if (services.length > 0) {
-        setExpo((prev) => ({ ...prev, ...rehydrateExpo(appEndpoints, services, cloudConnected) }));
-      }
-    })();
+    void Promise.all([projectsApi.getInfo(targetDraftId), servicesApi.list(targetDraftId)])
+      .then(([info, svcRes]) => {
+        if (cancelled) return;
+        const project = info?.data?.project as { slug?: string; name?: string } | undefined;
+        if (!project || !Array.isArray(svcRes?.services))
+          throw new Error("Incomplete draft response");
+        // A catalog update can cancel the pending read. Only mark the draft
+        // restored after its routes are applied, including an empty service list.
+        setExpo((prev) => ({
+          ...prev,
+          ...rehydrateExpo(appEndpoints, svcRes.services, cloudConnected),
+        }));
+        setDraftRouting({
+          projectId: targetDraftId,
+          status: "ready",
+          slug: project.slug ?? (project.name ? slugify(project.name) : null),
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setDraftRouting({ projectId: targetDraftId, status: "error" });
+      });
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetDraftId, appEndpoints]);
+  }, [targetDraftId, appEndpoints, draftRouting, cloudConnected]);
 
   /**
    * The URL an endpoint is ACTUALLY reachable at, read back from the service rows
@@ -750,7 +791,35 @@ export default function AppInstallPage() {
     }
   };
 
-  if (!template) return null;
+  const configurationNotice = !configurationReady && (
+    <div role={configurationError ? "alert" : "status"} className="space-y-3 rounded-2xl bg-card p-4">
+      <p className="flex items-start gap-2 text-sm text-muted-foreground">
+        <UiIcon
+          name={configurationError ? "warning" : "spinner"}
+          className={`mt-0.5 size-4 shrink-0 ${configurationError ? "text-warning" : "animate-spin"}`}
+        />
+        {configurationError ?? w.configurationLoading}
+      </p>
+      {configurationError && (
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => {
+            if (catalogStatus === "error") {
+              setCatalogRead({ appId, status: "loading" });
+              setCatalogRevision((value) => value + 1);
+            } else {
+              setDraftRouting(null);
+            }
+          }}
+        >
+          {w.retryConfiguration}
+        </Button>
+      )}
+    </div>
+  );
+
+  if (!template) return <PageContainer>{configurationNotice}</PageContainer>;
 
   const setField = (f: AppSettingField, v: FormValue) =>
     setValues((prev) => ({ ...prev, [fk(f.service, f.key)]: v }));
@@ -826,8 +895,7 @@ export default function AppInstallPage() {
    *  used to come back as a free route (and then 403 on a disconnected instance).
    *  Nothing is carried over: the wizard now asks about every DECLARED route, so a
    *  stored route for an unasked port is one no operator was ever shown. */
-  const applyDraftRouting = async (pid: string) => {
-    const choices = routeChoices();
+  const applyDraftRouting = async (pid: string, choices: InstallAppRoute[]) => {
     if (choices.length === 0) return;
     const svcRes = await servicesApi.list(pid);
     const services = (svcRes?.services ?? []) as Service[];
@@ -858,29 +926,74 @@ export default function AppInstallPage() {
             : [],
       );
       await servicesApi.update(pid, svc.id, {
-        exposed: publicEndpoints.length > 0,
-        publicEndpoints,
-        ...(publicEndpoints[0] ? { domainType: publicEndpoints[0].domainType } : {}),
+        ...serviceRoutingPatch({ exposed: publicEndpoints.length > 0, publicEndpoints }),
+        ports: installServicePorts(
+          svc.name,
+          template?.services?.find((service) => service.name === svc.name)?.ports,
+          choices,
+          svc.ports as string[] | null,
+        ),
       });
     }
   };
 
-  /** The routing choice, gated exactly as the server gates it — a custom endpoint
-   *  needs its hostname AND that hostname has to be a hostname, and a free one
-   *  needs Openship Cloud (requireCloud pops the same connect modal the deploy
-   *  wizard uses). Null = don't proceed.
+  /** Keep one submission pending through either confirmation. Leaving the
+   * installer cancels it so a stale modal cannot create or deploy a project. */
+  const confirmInstall = (
+    content: (confirm: () => void, cancel: () => void) => React.ReactNode,
+    maxWidth: string,
+  ) =>
+    new Promise<boolean>((resolve) => {
+      let modalId = "";
+      let settled = false;
+      const settle = (proceed: boolean) => {
+        if (settled) return;
+        settled = true;
+        cancelInstallConfirmation.current = null;
+        resolve(proceed);
+      };
+      const finish = (proceed: boolean) => {
+        settle(proceed);
+        hideModal(modalId);
+      };
+      const cancel = () => finish(false);
+      cancelInstallConfirmation.current = cancel;
+      modalId = showModal({
+        maxWidth,
+        width: "100%",
+        showCloseButton: false,
+        onClose: () => settle(false),
+        customContent: content(() => finish(true), cancel),
+      });
+    });
+
+  /** Validate hostnames and managed-domain access before any writes. A missing
+   *  custom hostname can become port-only only after explicit confirmation, and
+   *  only when the catalog allows it. Null = don't proceed.
    *
    *  The shape gate is not decoration: `myhost` / `host:8443` / `host/path` used to
    *  reach the API, fail deep inside the service write, and leave a project row
    *  behind with no services. */
   const validatedRouteChoices = async (): Promise<InstallAppRoute[] | null> => {
     const routes = routeChoices();
-    if (routes.some((r) => r.mode === "custom" && !r.customDomain)) {
+    const missing = routes.filter((route) => route.mode === "custom" && !route.customDomain);
+    if (
+      routes
+        .filter(
+          (route) => route.mode === "port" || (route.mode === "custom" && !route.customDomain),
+        )
+        .some((route) => {
+          const endpoint = appEndpoints.find(
+            (e) => e.service === route.service && e.port === route.port,
+          );
+          return !endpoint || !getAppEndpointModes(endpoint).includes("port");
+        })
+    ) {
       showToast(w.customRequired, "error");
       return null;
     }
     const malformed = routes.find(
-      (r) => r.mode === "custom" && !isValidCustomHostname(r.customDomain ?? ""),
+      (r) => r.mode === "custom" && r.customDomain && !isValidCustomHostname(r.customDomain),
     );
     if (malformed) {
       showToast(
@@ -892,11 +1005,90 @@ export default function AppInstallPage() {
     if (routes.some((r) => r.mode === "free") && !(await requireCloud("managed-project-domain"))) {
       return null;
     }
-    return routes;
+    const withoutDomains = appEndpoints.filter((endpoint) => {
+      if (endpoint.kind !== "http" || !getAppEndpointModes(endpoint).includes("domain"))
+        return false;
+      const route = routes.find((r) => r.service === endpoint.service && r.port === endpoint.port);
+      return (
+        (route?.mode === "custom" && !route.customDomain) ||
+        (route?.mode === "port" && (endpoint.scope === "public" || endpoint.scope === undefined))
+      );
+    });
+    // An empty Free field asks the server to generate a route. Confirm that
+    // intent without freezing the preview label: a second installation may get
+    // a suffixed project name and must keep its own default hostname.
+    const automaticEndpoints = appEndpoints.filter((endpoint) => {
+      const route = routes.find((r) => r.service === endpoint.service && r.port === endpoint.port);
+      return route?.mode === "free" && !route.domain;
+    });
+    if (withoutDomains.length === 0 && automaticEndpoints.length === 0) return routes;
+
+    const confirmed = await confirmInstall(
+      (confirm, cancel) => (
+        <AppDomainConfirmation
+          endpoints={withoutDomains}
+          automaticEndpoints={automaticEndpoints}
+          cloud={cloudDestination}
+          onClose={cancel}
+          onAddDomains={() => {
+            setExpo((previous) => {
+              const next = { ...previous };
+              for (const endpoint of withoutDomains) {
+                const key = endpointKey(endpoint);
+                const current = next[key];
+                if (current?.kind === "http") next[key] = { ...current, mode: "domain" };
+              }
+              return next;
+            });
+            cancel();
+            requestAnimationFrame(() => {
+              const section = document
+                .getElementById(`endpoint-${endpointKey(withoutDomains[0] ?? automaticEndpoints[0]!)}`)
+                ?.closest("section");
+              const field =
+                section?.querySelector<HTMLElement>("input:not([disabled])") ??
+                section?.querySelector<HTMLElement>("button:not([disabled])");
+              field?.scrollIntoView?.({ block: "center" });
+              field?.focus();
+            });
+          }}
+          onConfirm={confirm}
+        />
+      ),
+      "480px",
+    );
+    if (!confirmed) return null;
+    // Only an explicit confirmation can turn an empty custom-domain choice
+    // into no routing. Carry this same plan through new and adopted drafts.
+    setExpo((previous) => {
+      const next = { ...previous };
+      for (const route of missing) {
+        const key = `${route.service}:${route.port}`;
+        const current = next[key];
+        if (current?.kind === "http") next[key] = { ...current, mode: "port" };
+      }
+      return next;
+    });
+    return routes.map((route) =>
+      route.mode === "custom" && !route.customDomain
+        ? { service: route.service, port: route.port, mode: "port" }
+        : route,
+    );
   };
 
-  const install = async () => {
-    if (busy) return;
+  const withSubmission = (run: () => Promise<void>) => async () => {
+    if (submitting.current || busy || !exposureReady) return;
+    submitting.current = true;
+    setBusy(true);
+    try {
+      await run();
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  };
+
+  const install = withSubmission(async () => {
     // Business-field validity gate (required + per-field rules). The form reports
     // this; block with a clear message rather than shipping an invalid install.
     if (formValidity && !formValidity.valid) {
@@ -954,7 +1146,6 @@ export default function AppInstallPage() {
     }
     const routes = await validatedRouteChoices();
     if (!routes) return;
-    setBusy(true);
     setDeploymentId(null);
     setLogs("");
     // Reset the live stepper so a re-install starts from a clean slate.
@@ -986,7 +1177,7 @@ export default function AppInstallPage() {
         }
         pid = data.projectId;
       } else {
-        await applyDraftRouting(pid);
+        await applyDraftRouting(pid, routes);
       }
       setProjectId(pid);
 
@@ -1015,7 +1206,6 @@ export default function AppInstallPage() {
       }
 
       const startDeploy = async (targetPid: string) => {
-        setBusy(true);
         try {
           const dep = await deployApi.buildAccess({
             projectId: targetPid,
@@ -1057,43 +1247,33 @@ export default function AppInstallPage() {
           } else {
             showToast(msg, "error");
           }
-        } finally {
-          setBusy(false);
         }
       };
 
-      // Pre-deploy DNS gate (self-hosted custom domain): surface the records to add
+      // Pre-deploy DNS gate (custom domains): surface the records to add
       // or auto-configure BEFORE the deploy so DNS is pointed when the first-deploy
       // SSL attempt runs.
       const pendingDnsTargets = appInstallDnsTargets(routes ?? []);
-      if (selfHosted && pendingDnsTargets.length > 0) {
+      if (pendingDnsTargets.length > 0) {
         const projectInfo = await projectsApi.getInfo(pid).catch(() => null);
         const domainRows = Array.isArray(projectInfo?.data?.project?.domains)
           ? projectInfo.data.project.domains
           : [];
         const dnsTargets = attachDeploymentDomainIds(pendingDnsTargets, domainRows);
         if (dnsTargets.length > 0) {
-          setBusy(false);
-          let modalId = "";
-          modalId = showModal({
-            customContent: (
+          const confirmed = await confirmInstall(
+            (confirm, cancel) => (
               <DnsRecordsModal
                 targets={dnsTargets}
                 serverId={destination?.deployTarget === "server" ? destination.serverId : undefined}
                 confirmLabel={w.install}
-                onConfirm={() => {
-                  hideModal(modalId);
-                  void startDeploy(pid);
-                }}
-                onCancel={() => {
-                  hideModal(modalId);
-                  setBusy(false);
-                }}
+                onConfirm={confirm}
+                onCancel={cancel}
               />
             ),
-            maxWidth: "560px",
-          });
-          return;
+            "560px",
+          );
+          if (!confirmed) return;
         }
       }
 
@@ -1113,36 +1293,36 @@ export default function AppInstallPage() {
       } else {
         showToast(msg, "error");
       }
-    } finally {
-      setBusy(false);
     }
-  };
+  });
 
   /** Advanced escape: hand off to the technical wizard, reusing an adopted /
    *  already-created draft so we never create a duplicate project. The routing
    *  picked so far travels with the create write — the /deploy wizard then edits
    *  real stored routes instead of ones the server guessed. */
-  const goAdvanced = async () => {
-    if (busy) return;
+  const goAdvanced = withSubmission(async () => {
     const routes = await validatedRouteChoices();
     if (!routes) return;
-    setBusy(true);
     try {
       const pid = adoptedProjectId ?? projectId;
       if (pid) {
+        await applyDraftRouting(pid, routes);
         router.push(`/deploy/${encodeProjectSlug(pid)}`);
         return;
       }
-      const res = await appsApi.install({ templateId: appId, routes });
+      const res = await appsApi.install({
+        templateId: appId,
+        name: appName.trim() || undefined,
+        routes,
+      });
       const data = res.data;
       if (data.kind === "template") {
         router.push(`/deploy/${encodeProjectSlug(data.projectId)}`);
       }
     } catch (err) {
       showToast(getApiErrorMessage(err, w.installFailed), "error");
-      setBusy(false);
     }
-  };
+  });
 
   // ── Progress / done / error states (shared clean progress view) ────────────
   if (phase === "installing" || phase === "done" || phase === "error") {
@@ -1311,9 +1491,39 @@ export default function AppInstallPage() {
   }
 
   // ── Form state ────────────────────────────────────────────────────────────
+  const singleSettingsCard = template.installLayout?.settings === "single";
+  const splitSettingsCards = template.installLayout?.settings === "split";
+  // Existing drafts keep their project name. The same field is used in the
+  // standalone card and catalog-authored layouts.
+  const nameField = !adoptedProjectId && (
+    <div className="min-w-0">
+      <label htmlFor="app-name" className="block text-sm font-medium text-foreground">
+        {w.nameLabel}
+      </label>
+      <Input
+        id="app-name"
+        type="text"
+        value={appName}
+        disabled={busy}
+        onChange={(e) => setAppName(e.target.value)}
+        placeholder={template.name}
+        variant="filled"
+        className="mt-2"
+      />
+      <p className="mt-1.5 text-xs text-muted-foreground">{w.nameHint}</p>
+      {openDraft && targetDraftId === openDraft.projectId && (
+        <p className="mt-2 text-xs text-warning">
+          You already have a not-yet-deployed “{openDraft.name}”. Installing with this
+          name updates it — the options below are the ones it was configured with.
+          Change the name to install a separate copy.
+        </p>
+      )}
+    </div>
+  );
+
   return (
     <PageContainer outerClassName="pb-20">
-      <div className="mx-auto max-w-5xl pt-6">
+      <div className="@container/app-install">
         {/* Back to the app catalog */}
         <button
           type="button"
@@ -1364,51 +1574,37 @@ export default function AppInstallPage() {
         {/* Two columns: what the app needs (left) + where it goes & the deploy
             action (right, sticky). Mirrors the deploy wizard's config/sidebar
             split so the destination switch + Deploy button live together. */}
-        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[1fr_360px]">
+        <div className="mt-6 grid grid-cols-1 items-start gap-6 @5xl/app-install:grid-cols-[minmax(0,1fr)_340px]">
           {/* LEFT — business settings + public URL */}
           <div className="min-w-0 space-y-5">
-            {/* Name — how the app appears in Openship. A fresh install can name
-                it (a 2nd install of the same type auto-suffixes server-side);
-                reopening a draft keeps its existing name, so hide it then. */}
-            {!adoptedProjectId && (
-              <div className="rounded-2xl border border-border/50 bg-card p-5">
-                <label htmlFor="app-name" className="text-sm font-semibold text-foreground">
-                  {w.nameLabel}
-                </label>
-                <p className="mt-0.5 text-xs text-muted-foreground">{w.nameHint}</p>
-                <input
-                  id="app-name"
-                  type="text"
-                  value={appName}
-                  onChange={(e) => setAppName(e.target.value)}
-                  placeholder={template.name}
-                  className="mt-3 w-full rounded-xl border border-border/50 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/25"
-                />
-                {/* This name resolves to an existing, never-deployed draft — say so.
-                    Install UPDATES that draft (its settings below are rehydrated
-                    from it); rename to install a second, separate copy instead. */}
-                {openDraft && targetDraftId === openDraft.projectId && (
-                  <p className="mt-2 text-xs text-warning">
-                    You already have a not-yet-deployed “{openDraft.name}”. Installing with this
-                    name updates it — the options below are the ones it was configured with.
-                    Change the name to install a separate copy.
-                  </p>
+            {(nameField || installFields.length > 0) && (
+              <div
+                className={
+                  splitSettingsCards
+                    ? "grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-5"
+                    : "space-y-5"
+                }
+              >
+                {!singleSettingsCard && nameField && (
+                  <div className="rounded-2xl bg-card p-5">{nameField}</div>
+                )}
+
+                {(installFields.length > 0 || (singleSettingsCard && nameField)) && (
+                  <AppSettingsForm
+                    groups={groups}
+                    values={values}
+                    onChange={setField}
+                    secretSetLabel={t.projectSettings.appSettings.secretSet}
+                    showAdvanced
+                    filter={isInstallField}
+                    flat={template.installLayout?.settings !== "grouped"}
+                    columns={template.installLayout?.columns}
+                    leadingContent={singleSettingsCard ? nameField : undefined}
+                    title={splitSettingsCards ? undefined : t.projectSettings.appSettings.modeApp}
+                    onValidityChange={setFormValidity}
+                  />
                 )}
               </div>
-            )}
-
-            {installFields.length > 0 && (
-              <AppSettingsForm
-                groups={groups}
-                values={values}
-                onChange={setField}
-                secretSetLabel={t.projectSettings.appSettings.secretSet}
-                showAdvanced
-                filter={isInstallField}
-                flat
-                title={t.projectSettings.appSettings.modeApp}
-                onValidityChange={setFormValidity}
-              />
             )}
 
             {/* Declared connections — this app needs a value (e.g. DATABASE_URL)
@@ -1455,65 +1651,80 @@ export default function AppInstallPage() {
               </div>
             )}
 
-            {/* Exposure — asked per endpoint. Web endpoints get the domain flow
+            {/* Routing — asked per endpoint. Web endpoints get the domain flow
                 (or port-only); databases (raw TCP) publish a port (firewall) or
                 stay internal. Reuses the deploy wizard's routing core. */}
             {needsExposure && (
-              <div className="rounded-2xl border border-border/50 bg-card p-5">
+              <div className="@container/app-routes rounded-2xl bg-card p-5">
                 <h3 className="text-sm font-semibold text-foreground">{w.exposeTitle}</h3>
-                <div className="mt-4 space-y-6">
+                <fieldset
+                  disabled={routeControlsDisabled}
+                  className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 @min-[38rem]/app-routes:grid-cols-2"
+                >
                   {appEndpoints.map((e) => {
                     const key = endpointKey(e);
                     const st = expo[key];
-                    if (!st) return null;
+                    if (!st) {
+                      return (
+                        <div
+                          key={key}
+                          aria-busy="true"
+                          className="h-48 animate-pulse rounded-xl bg-muted/40"
+                        />
+                      );
+                    }
+                    const modes = getAppEndpointModes(e);
                     return (
-                      <div key={key}>
-                        <div className="mb-2 flex items-center gap-2">
-                          <span className="text-sm font-medium text-foreground">{e.label}</span>
-                          <span className="rounded-full bg-muted/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                      <section
+                        key={key}
+                        aria-labelledby={`endpoint-${key}`}
+                        className="min-w-0 space-y-3 rounded-xl bg-card p-4"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <h4
+                            id={`endpoint-${key}`}
+                            title={e.label}
+                            className="min-w-0 truncate text-sm font-medium text-foreground"
+                          >
+                            {e.label}
+                          </h4>
+                          <span className="shrink-0 rounded-md bg-muted/60 px-2 py-1 text-xs text-muted-foreground">
                             {e.kind === "http" ? w.httpBadge : w.tcpBadge}
-                          </span>
-                          <span className="font-mono text-[11px] text-muted-foreground/50">
-                            :{e.port}
+                            <span className="ms-1.5 font-mono">{e.port}</span>
                           </span>
                         </div>
 
+                        <CustomSelect
+                          aria-label={`${e.label}: ${w.exposeTitle}`}
+                          value={st.mode}
+                          options={modes.map((value) => ({ value, ...exposureModeLabels[value] }))}
+                          onChange={(mode) => setExpoMode(key, mode)}
+                          variant="filled"
+                          triggerClassName="bg-muted/60 hover:bg-muted"
+                          disabled={routeControlsDisabled || modes.length < 2}
+                        />
+
                         {st.kind === "http" ? (
-                          <div className="space-y-2">
-                            {modeAllowed(e, "port") && (
-                              <OptionCard
-                                value="port"
-                                selected={st.mode === "port"}
-                                onSelect={() => setExpoMode(key, "port")}
-                                icon={<UiIcon name="network" className="size-4" />}
-                                label={w.routePortLabel}
-                                description={w.routePortDesc}
-                              />
-                            )}
-                            {modeAllowed(e, "domain") && (
-                              <OptionCard
-                                value="domain"
-                                selected={st.mode === "domain"}
-                                onSelect={() => setExpoMode(key, "domain")}
-                                icon={<UiIcon name="globe" className="size-4" />}
-                                label={w.routeDomainLabel}
-                                description={w.routeDomainDesc}
-                              />
-                            )}
-                            {/* Free-vs-custom + the domain/slug input live here only. */}
+                          <>
+                            {/* One editor per declared route; the template owns the ports. */}
                             {st.mode === "domain" && (
-                              <div className="mt-3">
-                                <PublicEndpointsCard
+                              <div>
+                                <RoutingSettingsCard
+                                  disabled={routeControlsDisabled}
                                   /* The DEFAULT free label for THIS route — the card
                                      previews it, and the installer writes exactly it
                                      when the slug is left blank. */
                                   projectName={defaultFreeLabel(e)}
-                                  endpoints={[st.ep]}
-                                  hasServer
-                                  runtimePort={String(e.port)}
-                                  allowPortEdit={false}
-                                  hideHeader
-                                  onChange={(eps) => eps[0] && setExpoEp(key, eps[0])}
+                                  domain={st.ep.domain}
+                                  customDomain={st.ep.customDomain}
+                                  domainType={st.ep.domainType}
+                                  onDomainChange={(domain) => setExpoEp(key, { domain })}
+                                  onCustomDomainChange={(customDomain) =>
+                                    setExpoEp(key, { customDomain })
+                                  }
+                                  onDomainTypeChange={(domainType) =>
+                                    setExpoEp(key, { domainType })
+                                  }
                                 />
                                 {st.ep.domainType === "free" && !cloudConnected && (
                                   <p className="mt-2 text-xs text-warning">
@@ -1532,60 +1743,44 @@ export default function AppInstallPage() {
                                   )}
                               </div>
                             )}
-                            {st.mode === "port" && isDesktop && (
-                              <p className="mt-2 text-xs text-muted-foreground/70">
-                                {w.desktopReachNote}
+                            {st.mode === "port" && (
+                              <p className="text-xs leading-relaxed text-muted-foreground">
+                                {cloudDestination ? w.routePortCloudDesc : w.routePortDesc}
+                                {isDesktop && !cloudDestination && <> {w.desktopReachNote}</>}
                               </p>
                             )}
-                          </div>
+                          </>
                         ) : (
-                          <div className="space-y-2">
-                            {modeAllowed(e, "publish") && (
-                              <OptionCard
-                                value="publish"
-                                selected={st.mode === "publish"}
-                                onSelect={() => setExpoMode(key, "publish")}
-                                icon={<UiIcon name="network" className="size-4" />}
-                                label={w.tcpPublishLabel}
-                                description={w.tcpPublishDesc}
-                              />
-                            )}
-                            {modeAllowed(e, "internal") && (
-                              <OptionCard
-                                value="internal"
-                                selected={st.mode === "internal"}
-                                onSelect={() => setExpoMode(key, "internal")}
-                                icon={<UiIcon name="lock" className="size-4" />}
-                                label={w.tcpInternalLabel}
-                                description={w.tcpInternalDesc}
-                              />
-                            )}
+                          <>
                             {st.mode === "publish" && (
-                              <p className="mt-2 text-xs text-warning">
+                              <p className="text-xs leading-relaxed text-warning">
                                 {interpolate(w.tcpFirewallNote, { port: String(e.port) })}
                               </p>
                             )}
-                            {st.mode === "internal" && isDesktop && (
-                              <p className="mt-2 text-xs text-muted-foreground/70">
-                                {w.desktopReachNote}
+                            {st.mode === "internal" && (
+                              <p className="text-xs leading-relaxed text-muted-foreground">
+                                {w.tcpInternalDesc}
+                                {isDesktop && !cloudDestination && <> {w.desktopReachNote}</>}
                               </p>
                             )}
-                          </div>
+                          </>
                         )}
-                      </div>
+                      </section>
                     );
                   })}
-                </div>
+                </fieldset>
               </div>
             )}
           </div>
 
           {/* RIGHT — destination + deploy action (sticky) */}
-          <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+          <div className="min-w-0 space-y-4 @5xl/app-install:sticky @5xl/app-install:top-6">
             {/* Destination — where to install (reuses the deploy target picker) */}
             <div className="rounded-2xl border border-border/50 bg-card p-5">
               <h3 className="text-sm font-semibold text-foreground">{w.destinationTitle}</h3>
-              <p className="mt-0.5 text-xs text-muted-foreground">{w.destinationHint}</p>
+              {selfHosted && (
+                <p className="mt-0.5 text-xs text-muted-foreground">{w.destinationHint}</p>
+              )}
 
               {/* State the app's own floor before the picker, so the choice is
                   informed rather than corrected afterwards. */}
@@ -1617,8 +1812,33 @@ export default function AppInstallPage() {
               {/* Declared minimum vs. the destination's measured capacity. Shown
                   only on a real shortfall — an unmeasurable box reports "unknown",
                   which is never one. */}
+              {needsCloudUpgrade && (
+                <div
+                  role="status"
+                  className="mt-4 space-y-2 rounded-xl bg-warning/10 px-3.5 py-3 text-sm"
+                >
+                  <p className="font-medium text-warning">{w.cloudFitTitle}</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {hostFit?.cloud?.message}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setCapacityRevision((value) => value + 1)}
+                    disabled={capacityLoading || busy}
+                    className="inline-flex items-center gap-1.5 rounded-lg text-xs font-medium text-foreground hover:underline focus-visible:outline-primary disabled:opacity-50"
+                  >
+                    <UiIcon name="refresh" className="size-3.5" />
+                    {w.checkCapacityAgain}
+                  </button>
+                </div>
+              )}
+              {hostFit?.cloud?.status === "unavailable" && (
+                <p role="status" className="mt-3 text-xs text-muted-foreground">
+                  {w.cloudFitUnavailable}
+                </p>
+              )}
               {hostFit && !hostFit.fit.ok && (
-                <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-warning/40 bg-warning/[0.05] px-3.5 py-3 text-xs text-warning">
+                <div className="mt-4 flex items-start gap-2.5 rounded-xl bg-warning/10 px-3.5 py-3 text-xs text-warning">
                   <UiIcon name="warning" className="mt-0.5 size-4 shrink-0" />
                   <div className="space-y-1">
                     <p className="font-semibold">
@@ -1648,26 +1868,44 @@ export default function AppInstallPage() {
 
             {/* Actions */}
             <div className="space-y-2">
-              <button
-                type="button"
-                onClick={install}
-                disabled={busy || (formValidity ? !formValidity.valid : false)}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-              >
-                {busy ? (
-                  <UiIcon name="spinner" className="size-4 animate-spin" />
-                ) : (
-                  <UiIcon name="arrow-right" className="size-4 rtl:rotate-180" />
-                )}
-                {busy ? w.installing : w.install}
-              </button>
+              {configurationNotice}
+              {needsCloudUpgrade ? (
+                <a
+                  href="/billing/plans"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-primary"
+                >
+                  {w.upgradePlan}
+                  <UiIcon name="arrow-up-right" className="size-4" />
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={install}
+                  disabled={
+                    busy ||
+                    checkingCloudCapacity ||
+                    !exposureReady ||
+                    (formValidity ? !formValidity.valid : false)
+                  }
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busy ? (
+                    <UiIcon name="spinner" className="size-4 animate-spin" />
+                  ) : (
+                    <UiIcon name="arrow-right" className="size-4 rtl:rotate-180" />
+                  )}
+                  {checkingCloudCapacity ? w.checkingCapacity : w.install}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={goAdvanced}
-                disabled={busy}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                disabled={busy || !exposureReady}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
               >
-                <UiIcon name="sliders" className="size-3.5" /> {w.advanced}
+                <UiIcon name="sliders" className="size-4" /> {w.advanced}
               </button>
             </div>
           </div>

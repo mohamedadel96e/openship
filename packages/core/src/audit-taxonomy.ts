@@ -762,6 +762,13 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
     tone: "danger",
     description: "Cloud resources may have been paused — review billing.",
   },
+  "billing.credit_low": {
+    category: "billing",
+    action: "approached the credit limit for",
+    label: "Cloud credits running low",
+    tone: "warning",
+    description: "Review the remaining allowance before Cloud workloads are interrupted.",
+  },
   "billing.credit_exhausted": {
     category: "billing",
     action: "ran out of credits for",

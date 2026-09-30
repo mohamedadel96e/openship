@@ -4,7 +4,7 @@
  * installation list, installation token mint).
  *
  * Extracted from cloud-saas.controller. The handlers in that file now
- * only do HTML/JSON rendering — every policy decision (cookie allowlist,
+ * only do HTML/JSON rendering — every policy decision (browser proof,
  * workspace binding, install-state attribution, installation lookup
  * with 404 mapping) lives here and is unit-testable in isolation.
  *
@@ -15,15 +15,19 @@
  */
 
 import crypto from "node:crypto";
-import { auth, COOKIE_PREFIX } from "../../lib/auth";
-import { cloudRuntimeTarget } from "../../config/env";
+import { cloudRuntimeTarget, env } from "../../config/env";
 import { repos } from "@repo/db";
-import { safeErrorMessage } from "@repo/core";
+import { AppError, safeErrorMessage } from "@repo/core";
+import type { GitHubInstallationSelection } from "@repo/contracts";
 import * as githubAuth from "../github/github.auth";
 import { createEphemeralStore } from "../../lib/ephemeral-store";
 import { buildBackgroundContext } from "../../lib/background-context";
 import { resolveOrgOwner } from "../../lib/org-actor";
-import { verifyGitHubInstallationForUser } from "../github/github.installation-verification";
+import {
+  listGitHubInstallationsForUser,
+  verifyGitHubInstallationForUser,
+} from "../github/github.installation-verification";
+import { REPOSITORY_OAUTH_STATE_PREFIX, beginRepositoryAuthorization, repositoryOAuthStateCookie, repositoryOAuthCookieName, assertRepositoryConnectionActor } from "../github/github-repository-authorization";
 
 // ─── OAuth bridge store (shared between handoff + bridge handlers) ──────────
 //
@@ -35,6 +39,7 @@ import { verifyGitHubInstallationForUser } from "../github/github.installation-v
 interface OauthBridgeRow {
   userId: string;
   sessionToken: string;
+  organizationId: string;
 }
 
 export const OAUTH_BRIDGE_TTL_MS = 5 * 60 * 1000;
@@ -57,150 +62,33 @@ async function resolveCloudOwnerById(
   return { ownerUserId: owner!.userId, organizationId };
 }
 
-// ─── OAuth bridge: cookie allowlist policy ───────────────────────────────────
-
-/**
- * SECURITY INVARIANT: forward ONLY the OAuth state cookies, NEVER the
- * SaaS session cookie. The state cookie carries the encrypted
- * link.userId binding (better-auth/dist/state.mjs lines 14-19,
- * callback.mjs:102-128 reads link.userId straight out of the decrypted
- * state — it never consults c.context.session). So the popup browser
- * doesn't need any session cookie to complete the OAuth callback.
- *
- * If we ever forwarded the SaaS session cookie here, we'd silently log
- * the popup window into the SaaS dashboard at api.openship.io from a
- * popup opened by a local self-hosted instance — that's confused-deputy
- * territory. Future Better Auth versions might start emitting unexpected
- * Set-Cookie headers during linkSocialAccount; this allowlist makes that
- * change inert.
- *
- * Better Auth's default state strategy is verification-table-backed
- * (picked because `database: drizzleAdapter(...)` is set in lib/auth.ts),
- * and that strategy names the signed state cookie "state" — NOT
- * "oauth_state". See node_modules/better-auth/dist/state.mjs:43
- * (`settings?.cookieName ?? "state"`). The "oauth_state" name only
- * applies when advanced.storeStateStrategy === "cookie". We forward
- * both names so this stays correct if the strategy ever changes.
- */
-export function filterForwardableStateCookies(
-  cookies: string[],
-  cookiePrefix: string,
-): { forwarded: string[]; names: string[] } {
-  const allowedCookieNames = [
-    "state",                                       // default (verification-table) strategy
-    `${cookiePrefix}.state`,                       // prefixed
-    `__Secure-${cookiePrefix}.state`,              // secure-prefixed (HTTPS prod)
-    "oauth_state",                                 // cookie-strategy default name
-    `${cookiePrefix}.oauth_state`,                 // cookie-strategy prefixed
-    `__Secure-${cookiePrefix}.oauth_state`,        // cookie-strategy secure-prefixed
-  ];
-  const forwarded: string[] = [];
-  const names: string[] = [];
-  for (const cookie of cookies) {
-    const cookieName = cookie.split("=")[0]?.trim() ?? "";
-    if (allowedCookieNames.some((n) => cookieName === n || cookieName.startsWith(`${n}.`))) {
-      forwarded.push(cookie);
-      names.push(cookieName);
-    }
-  }
-  return { forwarded, names };
-}
-
-function getSetCookieHeaders(headers: Headers): string[] {
-  // Node 18+ exposes getSetCookie on Headers; fall back for older envs.
-  const anyHeaders = headers as Headers & { getSetCookie?: () => string[] };
-  if (typeof anyHeaders.getSetCookie === "function") {
-    return anyHeaders.getSetCookie();
-  }
-  const out: string[] = [];
-  headers.forEach((value, key) => {
-    if (key.toLowerCase() === "set-cookie") out.push(value);
-  });
-  return out;
-}
-
-// ─── OAuth bridge: bridge-token → linkSocialAccount → redirect ──────────────
+// ─── OAuth bridge: same repository grant without a SaaS browser session ──────
 
 export type GithubLinkStartResult =
   | { kind: "redirect"; url: string; forwardCookies: string[]; forwardedNames: string[]; userId: string }
   | { kind: "missing-token" }
   | { kind: "expired" }
-  | { kind: "no-url"; status: number; bodySnippet: string }
   | { kind: "failed"; error: string };
 
-export async function startGithubLinkFromBridgeToken(
-  token: string | undefined,
-): Promise<GithubLinkStartResult> {
-  if (!token) {
-    return { kind: "missing-token" };
-  }
-
+export async function startGithubLinkFromBridgeToken(token: string | undefined): Promise<GithubLinkStartResult> {
+  if (!token) return { kind: "missing-token" };
   const bridge = await oauthBridgeStore.consume(token);
-  if (!bridge) {
-    return { kind: "expired" };
-  }
-
+  if (!bridge) return { kind: "expired" };
   try {
-    // The Better Auth `bearer` plugin (configured in lib/auth.ts) accepts
-    // `Authorization: Bearer <session.token>` and converts it to the
-    // signed cookie format internally. This avoids us having to
-    // hand-construct the signed cookie value (which is what was failing
-    // before — Better Auth's wire format is very particular about
-    // encoding + ordering and getting it wrong silently returns 401).
-    const linkHeaders = new Headers();
-    linkHeaders.set("Authorization", `Bearer ${bridge.sessionToken}`);
-
-    const linkResult = await auth.api.linkSocialAccount({
-      body: {
-        provider: "github",
-        callbackURL: `${cloudRuntimeTarget.api}/api/cloud/github/oauth-success`,
-        disableRedirect: true,
-      },
-      headers: linkHeaders,
-      asResponse: true,
-    });
-
-    if (linkResult instanceof Response) {
-      // Read the body ONCE into text up-front. Trying to .clone() after
-      // .json() throws "Body has already been consumed" — so we capture
-      // the bytes once and parse the same string for both the success
-      // path (looking for { url }) and the error log fallback.
-      const status = linkResult.status;
-      const bodyText = await linkResult.text().catch(() => "");
-
-      let redirectUrl: string | null = linkResult.headers.get("location");
-      if (!redirectUrl && bodyText) {
-        try {
-          const body = JSON.parse(bodyText) as { url?: string };
-          redirectUrl = body?.url ?? null;
-        } catch {
-          // Not JSON; redirectUrl stays null and we log below.
-        }
-      }
-
-      if (redirectUrl) {
-        const linkCookies = getSetCookieHeaders(linkResult.headers);
-        const { forwarded, names } = filterForwardableStateCookies(linkCookies, COOKIE_PREFIX);
-        return {
-          kind: "redirect",
-          url: redirectUrl,
-          forwardCookies: forwarded,
-          forwardedNames: names,
-          userId: bridge.userId,
-        };
-      }
-
-      // No URL — log the actual response body so we can see what Better
-      // Auth is complaining about. Without this we just see "no URL" and
-      // have no signal on whether it's an auth issue, a config issue,
-      // or something else.
-      return { kind: "no-url", status, bodySnippet: bodyText.slice(0, 300) };
-    }
-
-    return { kind: "failed", error: "linkSocialAccount returned a non-Response" };
-  } catch (err) {
-    return { kind: "failed", error: err instanceof Error ? err.message : "Unknown error" };
-  }
+    const session = await repos.session.findByToken(bridge.sessionToken);
+    if (!session || session.userId !== bridge.userId || session.expiresAt <= new Date()) return { kind: "expired" };
+    const install = await buildOrgScopedInstallUrl(bridge.userId, bridge.organizationId);
+    const result = await beginRepositoryAuthorization({
+      userId: bridge.userId, organizationId: bridge.organizationId, sessionId: session.id,
+    }, install.state, "bridge");
+    // This is the only cookie issued to the browser. No Openship session moves
+    // from a self-hosted caller into the operator's system browser.
+    return {
+      kind: "redirect", url: result.url, userId: bridge.userId,
+      forwardCookies: [repositoryOAuthStateCookie(result.state, result.browserNonce)],
+      forwardedNames: [repositoryOAuthCookieName(result.state)],
+    };
+  } catch (error) { return { kind: "failed", error: safeErrorMessage(error) }; }
 }
 
 // ─── Install URL: org-bound state ────────────────────────────────────────────
@@ -215,7 +103,7 @@ export async function buildOrgScopedInstallUrl(
   initiatingUserId: string,
   organizationId: string,
 ): Promise<{ url: string; state: string }> {
-  const state = crypto.randomBytes(24).toString("base64url");
+  const state = `${REPOSITORY_OAUTH_STATE_PREFIX}${crypto.randomBytes(24).toString("base64url")}`;
   await repos.githubInstallState.purgeExpired().catch(() => 0);
   await repos.githubInstallState.create({
     state,
@@ -223,9 +111,84 @@ export async function buildOrgScopedInstallUrl(
     organizationId,
     expiresAt: new Date(Date.now() + 10 * 60 * 1000),
   });
-  const baseUrl = githubAuth.getInstallUrl();
-  const url = `${baseUrl}?state=${encodeURIComponent(state)}`;
-  return { url, state };
+  // GitHub sends an already-installed App to its settings page without a setup
+  // callback. Start on Openship so the user can explicitly claim that existing
+  // installation instead of getting stuck waiting for another GitHub install.
+  const url = new URL("/api/cloud/github/install-callback", cloudRuntimeTarget.api);
+  url.search = new URLSearchParams({ flow: "select", state }).toString();
+  return { url: url.toString(), state };
+}
+
+export type GithubInstallSelectionResult =
+  | {
+      kind: "ready";
+      state: string;
+      workspaceName: string;
+      installUrl: string;
+      installations: GitHubInstallationSelection["installations"];
+    }
+  | { kind: "missing-params" }
+  | { kind: "state-expired" }
+  | { kind: "forbidden"; message: string }
+  | { kind: "failed"; error: string };
+
+/** Offer existing installations without importing them into a workspace.
+ * Selection uses the same one-shot, user/workspace-bound callback as a new
+ * GitHub install; the claim re-verifies access after the user makes a choice. */
+export async function getGithubInstallSelection(
+  state: string | undefined,
+): Promise<GithubInstallSelectionResult> {
+  if (!state) return { kind: "missing-params" };
+  try {
+    const binding = await repos.githubInstallState.find(state);
+    if (!binding?.organizationId || binding.sourceId || binding.flow !== "install") {
+      return { kind: "state-expired" };
+    }
+    await assertRepositoryConnectionActor(
+      binding.userId,
+      binding.organizationId,
+      binding.payload.sessionId,
+    );
+    const workspace = await repos.organization.findById(binding.organizationId);
+    if (!workspace) return { kind: "state-expired" };
+
+    const appId = Number(env.GITHUB_APP_ID);
+    if (!Number.isSafeInteger(appId) || appId <= 0) {
+      throw new Error("The Openship GitHub App is not configured.");
+    }
+    const available = await listGitHubInstallationsForUser(binding.userId);
+    if (!available) {
+      return {
+        kind: "forbidden",
+        message: "GitHub authorization is missing. Start the connection again from Openship.",
+      };
+    }
+    const installUrl = new URL(githubAuth.getInstallUrl());
+    installUrl.searchParams.set("state", state);
+    const connected = await repos.gitInstallation.listByOrganization(binding.organizationId);
+    return {
+      kind: "ready",
+      state,
+      workspaceName: workspace.name,
+      installUrl: installUrl.toString(),
+      installations: available
+        .filter((installation) => installation.app_id === appId && !installation.suspended_at)
+        .map((installation) => ({
+          id: installation.id,
+          login: installation.account.login,
+          avatarUrl: installation.account.avatar_url,
+          type: installation.account.type,
+          connected: connected.some(
+            (entry) => !entry.sourceId && entry.installationId === installation.id,
+          ),
+        })),
+    };
+  } catch (error) {
+    if (error instanceof AppError && error.statusCode < 500) {
+      return { kind: "forbidden", message: error.message };
+    }
+    return { kind: "failed", error: safeErrorMessage(error) };
+  }
 }
 
 // ─── Install callback: state-based attribution ───────────────────────────────
@@ -237,7 +200,7 @@ export type GithubInstallAttributionResult =
   | { kind: "invalid-installation-id"; raw: string }
   | { kind: "pending-approval" }
   | { kind: "forbidden"; message: string }
-  | { kind: "failed"; installationId: number; error: string };
+  | { kind: "failed"; installationId?: number; error: string };
 
 export async function attributeGithubInstall(input: {
   installationIdRaw: string | undefined;
@@ -248,15 +211,15 @@ export async function attributeGithubInstall(input: {
 }): Promise<GithubInstallAttributionResult> {
   const { installationIdRaw, setupAction, state, clientIp, userAgent } = input;
 
-  if (!installationIdRaw || !state) {
+  if (!state || (!installationIdRaw && setupAction !== "request")) {
     return { kind: "missing-params" };
   }
 
   console.log(
     `[github install-callback] hit installation_id=${installationIdRaw} setup_action=${setupAction} state_present=true`,
   );
-  const installationId = Number(installationIdRaw);
-  if (!Number.isSafeInteger(installationId) || installationId <= 0) {
+  const installationId = installationIdRaw ? Number(installationIdRaw) : undefined;
+  if (installationIdRaw && (!Number.isSafeInteger(installationId) || installationId! <= 0)) {
     return { kind: "invalid-installation-id", raw: installationIdRaw };
   }
 
@@ -265,28 +228,23 @@ export async function attributeGithubInstall(input: {
   // exact initiating user + workspace and works across SaaS replicas/restarts.
   // Peek first; the atomic claim below consumes only after GitHub verification.
   const stateRow = await repos.githubInstallState.find(state).catch(() => null);
-  if (!stateRow || !stateRow.organizationId) {
+  if (!stateRow || !stateRow.organizationId || stateRow.flow !== "install" || stateRow.sourceId) {
     console.log("[github install-callback] state not found or expired");
     return { kind: "state-expired" };
   }
   const userId = stateRow.userId;
   const organizationId = stateRow.organizationId;
 
-  // State proves who was authorized at issuance. Re-check membership so a
-  // user removed during the GitHub round-trip cannot finish mutating that
-  // workspace with a still-live capability.
-  let membership: Awaited<ReturnType<typeof repos.member.find>>;
+  // Recheck permission and, for repository OAuth, the initiating session through
+  // installation completion. Logging out or losing access invalidates the flow.
   try {
-    membership = await repos.member.find(organizationId, userId);
+    await assertRepositoryConnectionActor(userId, organizationId, stateRow.payload.sessionId);
   } catch (error) {
-    return { kind: "failed", installationId, error: safeErrorMessage(error) };
-  }
-  if (!membership) {
-    await repos.githubInstallState.remove(state).catch(() => {});
-    return {
-      kind: "forbidden",
-      message: "You no longer have access to the Openship workspace that started this install.",
-    };
+    const message = error instanceof AppError ? error.message : "Could not verify workspace access. Try again.";
+    await repos.githubInstallState.recordFailure(state, userId, organizationId, message).catch(() => {});
+    return error instanceof AppError && error.statusCode < 500
+      ? { kind: "forbidden", message }
+      : { kind: "failed", installationId, error: message };
   }
 
   // setup_action="request" means the user lacked admin perms on the org
@@ -294,9 +252,11 @@ export async function attributeGithubInstall(input: {
   // The later installation.created webhook has no Openship workspace binding,
   // so the user must restart the state-bound install after approval.
   if (setupAction === "request") {
-    const consumed = await repos.githubInstallState.consume(state).catch(() => null);
+    const consumed = await repos.githubInstallState.pendingApproval(state, userId, organizationId);
     return consumed ? { kind: "pending-approval" } : { kind: "state-expired" };
   }
+
+  if (!installationId) return { kind: "missing-params" };
 
   try {
     // GitHub documents installation_id as attacker-controlled. The canonical
@@ -304,6 +264,7 @@ export async function attributeGithubInstall(input: {
     // JWT to resolve the same installation before any durable claim occurs.
     const verification = await verifyGitHubInstallationForUser(userId, installationId);
     if (verification.kind === "forbidden") {
+      await repos.githubInstallState.recordFailure(state, userId, organizationId, verification.message);
       return { kind: "forbidden", message: verification.message };
     }
     const installation = verification.installation;
@@ -341,6 +302,8 @@ export async function attributeGithubInstall(input: {
       );
     });
 
+    const { cloudAnalytics } = await import("../cloud-analytics");
+    cloudAnalytics.capture({ organizationId, userId, source: "dashboard" }, "cloud_github_connected", { method: "app" }, `github:${organizationId}:app:${installationId}`);
     await repos.auditEvent
       .create({
         organizationId,
@@ -374,7 +337,9 @@ export async function attributeGithubInstall(input: {
       organizationId,
     };
   } catch (err) {
-    return { kind: "failed", installationId, error: safeErrorMessage(err) };
+    const error = safeErrorMessage(err);
+    await repos.githubInstallState.recordFailure(state, userId, organizationId, error).catch(() => {});
+    return { kind: "failed", installationId, error };
   }
 }
 

@@ -86,11 +86,13 @@ curl -X POST "$OPENSHIP_URL/api/projects" \
 
 ## Scale a stateless application on a cluster
 
-Self-hosted projects can target a [ready K3s server cluster](/docs/api/servers).
+Self-hosted projects can target a [ready server cluster](/docs/api/servers).
 Saving the target requires fleet administration. Choose a registry repository for source builds;
 cluster nodes pull immutable release images using the saved registry credentials.
-This currently supports a single stateless application or worker, without persistent mounts or a
-Compose stack. Database replication requires storage and an engine operator.
+This supports a single application or worker whose instances can start on any selected server.
+Project-owned shared volumes can persist files across instances; node-local bind mounts and
+Compose conversion require a separate migration. PostgreSQL and Redis use their own managed
+database lifecycle and replication.
 
 ```ts
 const current = await ship.projects.getClusterWorkload("proj_123");
@@ -117,7 +119,36 @@ Replica changes are configuration releases. They reuse the active image, wait fo
 use the existing update/rollback history. Allow capacity for the old and new releases together.
 `status` and `observedAt` describe the last observation; saved `config` describes future intent.
 OpenShip Edge currently enters through the first cluster control server. Automatic gateway
-failover, database operators and policy-driven autoscaling are separate delivery stages.
+failover and policy-driven autoscaling are not implemented.
+
+### Share application files
+
+Enable shared storage on the server cluster first. Use `createClusterVolume` to create a project
+volume, then add its name and mount path to the cluster configuration and deploy. Each release
+retains its reviewed volume identities. `listClusterVolumes` and `streamClusterVolumeEvents`
+report attachment health, independent copies, expansion and backups.
+
+Shared-file backups use the cluster's configured external destination. Schedules can run hourly
+or daily. `listClusterVolumeBackups` includes archives whose original volume was deleted;
+restore into a new volume and verify its contents before attaching it to the application.
+Disconnect and deploy before deleting a volume. External backups survive volume removal.
+
+### Add, import or recover a database
+
+Create PostgreSQL or Redis through `createClusterDatabase`, then inspect progress until ready.
+Database instances and Redis shards scale independently of application replicas. A Redis shard
+change requires a verified backup and explicit review.
+
+`listClusterDatabaseImports` returns eligible backups of this project's existing PostgreSQL or
+Redis services. Use a selected backup with `importFrom`, or recover a managed database archive
+with `restoreFrom`. A PostgreSQL 17-to-18 upgrade uses `copyFrom` to build a separate database.
+Each path preserves the source. You can prepare imported databases before changing the app's
+cluster target; it must later select the same cluster.
+
+Verify the recovered data, then explicitly save or replace the managed application connection
+with both databases' current sequences. Redeploy to use it. For a final cutover, pause source
+writes and take a fresh recovery point; writes after capture are not copied automatically.
+See the [database workflow](/docs/guides/mcp-clusters-and-scaling#database-and-backup-workflows).
 
 ## Update a project
 
@@ -467,7 +498,7 @@ IDs.
 | Operation | SDK | REST API |
 | --- | --- | --- |
 | Read the selected cluster, active release and observed replicas. | `projects.getClusterWorkload(id)` | `GET /api/projects/:id/cluster`<br />`project:read` · Self-hosted |
-| Save a ready self-hosted cluster target and stateless workload configuration. Requires fleet administration and the current project timestamp. | `projects.setClusterTarget(id, input)` | `PATCH /api/projects/:id/cluster`<br />`project:write` · Self-hosted |
+| Save a ready self-hosted cluster target, application configuration and optional shared-file mounts. Requires fleet administration and the current project timestamp. | `projects.setClusterTarget(id, input)` | `PATCH /api/projects/:id/cluster`<br />`project:write` · Self-hosted |
 | Apply a replica count through a deployment using the active immutable image. Requires active deployment and project timestamp preconditions. | `projects.scaleClusterWorkload(id, input)` | `POST /api/projects/:id/cluster/scale`<br />`project:write` · Self-hosted |
 
 ### Cluster databases
@@ -475,14 +506,29 @@ IDs.
 | Operation | SDK | REST API |
 | --- | --- | --- |
 | List the project's operator-managed databases and saved observations. Available on self-hosted OpenShip. | `projects.listClusterDatabases(id)` | `GET /api/projects/:id/cluster/databases`<br />`project:read` · Self-hosted |
+| List eligible PostgreSQL and Redis backup imports from this project. Requires project administrator access; source backups and running services are preserved. | `projects.listClusterDatabaseImports(id)` | `GET /api/projects/:id/cluster/databases/imports`<br />`project:read` · Self-hosted |
 | Read saved database progress, or refresh the operator's instances, volumes and archive status with observe. Does not start or retry setup. | `projects.getClusterDatabase(id, input)` | `POST /api/projects/:id/cluster/databases/inspect`<br />`project:read` · Self-hosted |
-| Create PostgreSQL or Redis on the project's ready server cluster with a stable request UUID. PostgreSQL can restore a completed archive into a new database. Requires fleet administration. | `projects.createClusterDatabase(id, input)` | `POST /api/projects/:id/cluster/databases`<br />`project:write` · Self-hosted |
-| Apply supported resource, PostgreSQL replica or backup settings with the database's current sequence. Engine changes and Redis resharding require a separate migration. | `projects.updateClusterDatabase(id, input)` | `PATCH /api/projects/:id/cluster/databases`<br />`project:write` · Self-hosted |
+| Create PostgreSQL or Redis on a ready server cluster with a stable request UUID. Recover a database archive, import an existing project backup or create an upgraded PostgreSQL copy. Requires fleet administration; the source is preserved. | `projects.createClusterDatabase(id, input)` | `POST /api/projects/:id/cluster/databases`<br />`project:write` · Self-hosted |
+| Apply supported resource, replica or backup settings with the current sequence. Redis shard changes require explicit review and a verified backup; PostgreSQL major upgrades use a new database copy. | `projects.updateClusterDatabase(id, input)` | `PATCH /api/projects/:id/cluster/databases`<br />`project:write` · Self-hosted |
 | Resume a failed or interrupted database operation from its saved intent. The previous controller is fenced and accepted operator resources are inspected before reuse. | `projects.retryClusterDatabase(id, input)` | `POST /api/projects/:id/cluster/databases/retry`<br />`project:write` · Self-hosted |
-| Request a PostgreSQL archive at the configured S3 destination. The operator owns backup execution; retry reuses the accepted backup request. | `projects.backupClusterDatabase(id, input)` | `POST /api/projects/:id/cluster/databases/backup`<br />`project:write` · Self-hosted |
+| Request a PostgreSQL or Redis archive at the configured S3 destination. Native controllers and Jobs own execution; retry reuses the accepted backup request. | `projects.backupClusterDatabase(id, input)` | `POST /api/projects/:id/cluster/databases/backup`<br />`project:write` · Self-hosted |
 | Stop a disconnected database with name and sequence confirmation. deleteData=false retains persistent disks; true explicitly reclaims owned storage. S3 archives are kept. | `projects.removeClusterDatabase(id, input)` | `DELETE /api/projects/:id/cluster/databases`<br />`project:write` · Self-hosted |
-| Save a private connection URL in the project environment without overwriting an existing variable. Set envKey to null to disconnect. Redeploy explicitly to apply connection changes. | `projects.connectClusterDatabase(id, input)` | `POST /api/projects/:id/cluster/databases/connect`<br />`project:write` · Self-hosted |
+| Save a private database URL in the project environment, or explicitly replace another managed database binding using both current sequences. Set envKey to null to disconnect. Redeploy to apply the reviewed change. | `projects.connectClusterDatabase(id, input)` | `POST /api/projects/:id/cluster/databases/connect`<br />`project:write` · Self-hosted |
 | Subscribe to replayable database progress snapshots over SSE. Reconnection only reads saved state and never repeats a mutation. | `projects.streamClusterDatabaseEvents(id, options?)` | `GET /api/projects/:id/cluster/databases/stream`<br />`project:read` · Self-hosted |
+
+### Shared files
+
+| Operation | SDK | REST API |
+| --- | --- | --- |
+| Read shared file volumes, independent copies, attachment health and backup status. | `projects.listClusterVolumes(id)` | `GET /api/projects/:id/cluster/volumes`<br />`project:read` · Self-hosted |
+| List project file archives, including backups whose original volume was deleted. | `projects.listClusterVolumeBackups(id)` | `GET /api/projects/:id/cluster/volumes/backups`<br />`project:read` · Self-hosted |
+| Create a replicated shared volume or restore an archive into a new one using a stable request ID. Attach it through cluster configuration and deploy. | `projects.createClusterVolume(id, input)` | `POST /api/projects/:id/cluster/volumes`<br />`project:write` · Self-hosted |
+| Grow a shared volume using its current resourceVersion. Observe status until expansion completes; shrinking is unsupported. | `projects.resizeClusterVolume(id, input)` | `PATCH /api/projects/:id/cluster/volumes`<br />`project:write` · Self-hosted |
+| Save a file-volume backup to the cluster's configured external destination using a stable request ID. Pause application writes when consistency requires it. | `projects.backupClusterVolume(id, input)` | `POST /api/projects/:id/cluster/volumes/backup`<br />`project:write` · Self-hosted |
+| Schedule hourly or daily file backups with a retained archive count, or choose manual to stop the schedule. | `projects.scheduleClusterVolumeBackups(id, input)` | `PATCH /api/projects/:id/cluster/volumes/backups`<br />`project:write` · Self-hosted |
+| Permanently delete a project file archive after confirming its exact backup name. The source volume is preserved. | `projects.removeClusterVolumeBackup(id, input)` | `DELETE /api/projects/:id/cluster/volumes/backups`<br />`project:write` · Self-hosted |
+| Delete an unmounted volume with resourceVersion, name and data-deletion confirmation. Disconnect and redeploy first; external archives are preserved. | `projects.removeClusterVolume(id, input)` | `DELETE /api/projects/:id/cluster/volumes`<br />`project:write` · Self-hosted |
+| Subscribe to current file-volume and archive snapshots over SSE without repeating mutations on reconnect. | `projects.streamClusterVolumeEvents(id, options?)` | `GET /api/projects/:id/cluster/volumes/stream`<br />`project:read` · Self-hosted |
 
 ### Environments and settings
 

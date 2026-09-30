@@ -1298,11 +1298,27 @@ export async function modifyLabels(
   input: { ids: string[]; folder?: FolderSlug; addLabels?: string[]; removeLabels?: string[] },
 ): Promise<void> {
   const mailbox = folderToMailbox(input.folder ?? 'inbox');
+  // The client sends Gmail labels, where INBOX and SPAM are folders. On IMAP
+  // they're mailboxes, so move the message instead of storing a keyword.
+  // Removing one without adding a label is Gmail's archive.
+  const add = input.addLabels ?? [];
+  const remove = input.removeLabels ?? [];
+  let moveTo: string | null = null;
+  if (add.includes('SPAM')) {
+    moveTo = 'Junk';
+  } else if (add.includes('INBOX')) {
+    moveTo = 'INBOX';
+  } else if (add.length === 0 && (remove.includes('INBOX') || remove.includes('SPAM'))) {
+    moveTo = 'Archive';
+  }
   const uidOnly = (id: string) => {
     const m = /^uid:(\d+)$/.exec(id);
     return m ? [Number(m[1])] : null;
   };
   await withImap(auth, async (client) => {
+    // Dovecot doesn't auto-create Archive. CREATE on an existing mailbox
+    // returns ALREADYEXISTS, which imapflow resolves as `created: false`.
+    if (moveTo === 'Archive') await client.mailboxCreate('Archive');
     const lock = await client.getMailboxLock(mailbox);
     try {
       for (const id of input.ids) {
@@ -1315,6 +1331,10 @@ export async function modifyLabels(
           found = search && search.length > 0 ? search : null;
         }
         if (!found) continue;
+        if (moveTo) {
+          if (moveTo !== mailbox) await client.messageMove(found, moveTo, { uid: true });
+          continue;
+        }
         if (input.addLabels && input.addLabels.length > 0) {
           await client.messageFlagsAdd(found, input.addLabels, { uid: true });
         }

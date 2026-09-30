@@ -298,7 +298,8 @@ async function classifyRecord(
     return { action: "conflict", current: `${existing.length} existing records` };
   }
   if (!target) return { action: "create" };
-  if (target.content === desired.content) return { action: "in-sync", current: target.content };
+  const content = provider.formatContent?.(desired.type, desired.content) ?? desired.content;
+  if (target.content === content) return { action: "in-sync", current: target.content };
   return { action: isOpenshipManaged(target) ? "update" : "adopt", current: target.content };
 }
 

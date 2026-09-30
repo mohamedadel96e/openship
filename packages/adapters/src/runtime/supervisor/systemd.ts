@@ -45,11 +45,19 @@ export function escapeSystemdEnvValue(value: string): string {
 
 export class SystemdSupervisor implements ProcessSupervisor {
   readonly name = "systemd";
+  private readonly artifactExecutor: CommandExecutor;
+  private readonly user?: string;
 
   constructor(
     private readonly executor: CommandExecutor,
     private readonly workDir: string,
-  ) {}
+    // System services may need sudo; release files and their metadata must
+    // remain owned by the deployment login so later builds can still use them.
+    options: { artifactExecutor?: CommandExecutor; user?: string } = {},
+  ) {
+    this.artifactExecutor = options.artifactExecutor ?? executor;
+    this.user = options.user;
+  }
 
   // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -66,13 +74,13 @@ export class SystemdSupervisor implements ProcessSupervisor {
   }
 
   private async writeArtifactPath(id: string, path: string): Promise<void> {
-    await this.executor.mkdir(`${this.workDir}/.artifacts`);
-    await this.executor.writeFile(this.artifactFile(id), path);
+    await this.artifactExecutor.mkdir(`${this.workDir}/.artifacts`);
+    await this.artifactExecutor.writeFile(this.artifactFile(id), path);
   }
 
   private async readArtifactPath(id: string): Promise<string | null> {
     try {
-      const content = await this.executor.readFile(this.artifactFile(id));
+      const content = await this.artifactExecutor.readFile(this.artifactFile(id));
       return content.trim() || null;
     } catch {
       return null;
@@ -80,7 +88,7 @@ export class SystemdSupervisor implements ProcessSupervisor {
   }
 
   private async removeArtifactPath(id: string): Promise<void> {
-    await this.executor.rm(this.artifactFile(id));
+    await this.artifactExecutor.rm(this.artifactFile(id));
   }
 
   /**
@@ -96,13 +104,16 @@ export class SystemdSupervisor implements ProcessSupervisor {
       .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
       .map(([k, v]) => `Environment="${k}=${escapeSystemdEnvValue(v)}"`)
       .join("\n");
+    // User= takes the literal login from id -un, not a quoted word list like
+    // Environment=. Quotes would become part of the account name (217/USER).
+    const userLine = this.user ? `\nUser=${this.user.replaceAll("%", "%%")}` : "";
 
     return `[Unit]
 Description=Openship deployment ${opts.deploymentId}
 After=network.target
 
 [Service]
-Type=exec
+Type=exec${userLine}
 WorkingDirectory=${opts.workDir}
 ExecStart=/bin/sh -lc ${sq(opts.startCommand)}
 ${envLines}
@@ -212,7 +223,7 @@ WantedBy=multi-user.target
     // Clean up artifact directory
     const artifactPath = await this.readArtifactPath(deploymentId);
     if (artifactPath) {
-      await this.executor.rm(artifactPath);
+      await this.artifactExecutor.rm(artifactPath);
     }
     await this.removeArtifactPath(deploymentId);
   }

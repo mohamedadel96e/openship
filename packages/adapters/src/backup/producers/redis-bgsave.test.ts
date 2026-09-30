@@ -342,6 +342,32 @@ describe("redis capture proves BGSAVE actually ran", () => {
     expect(res.stdout).toBe("RDBDATA");
   });
 
+  it.each([
+    "Background saving started",
+    "ERR Background save already in progress",
+  ])("captures a completed save in the same LASTSAVE second (%s)", async (reply) => {
+    const script = (await dumpScript()).replace("-lt 300 ]", "-lt 2 ]");
+    const res = await runScript(script, {
+      AFTER: "1000",
+      BGSAVE_REPLY: reply,
+      INFO_OUT: "rdb_bgsave_in_progress:0\nrdb_last_bgsave_status:ok",
+    });
+    expect(res.code, res.stderr).toBe(0);
+    expect(res.stdout).toBe("RDBDATA");
+  });
+
+  it("does not accept an earlier successful save when BGSAVE was not acknowledged", async () => {
+    const script = (await dumpScript()).replace("-lt 300 ]", "-lt 2 ]");
+    const res = await runScript(script, {
+      AFTER: "1000",
+      NO_START: "1",
+      BGSAVE_REPLY: "NOPERM this user has no permissions to run the 'bgsave' command",
+      INFO_OUT: "rdb_bgsave_in_progress:0\nrdb_last_bgsave_status:ok",
+    });
+    expect(res.code).toBe(92);
+    expect(res.stdout).toBe("");
+  });
+
   it("is not fooled by redis-cli's own auth warning", async () => {
     // The warning arrives on stderr for EVERY call, so a `2>&1` capture reads
     // "Warning: …\n2000" as the timestamp — non-numeric, and every password-protected

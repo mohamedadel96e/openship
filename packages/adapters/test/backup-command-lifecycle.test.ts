@@ -130,6 +130,7 @@ describe("cloud backups use the workspace's shared binary transport", () => {
       yield { event: "stdout", data: bytes.toString("base64") };
       const marker = command.at(-1)!.match(/openship-exit-[a-f0-9-]+:/)![0];
       yield { event: "stdout", data: Buffer.from(`\x1e${marker}0\x1f`).toString("base64") };
+      expect(kill).not.toHaveBeenCalled();
       yield { event: "exit", exit_code: 1 };
       throw new Error("must finish at the command exit");
     });
@@ -145,7 +146,8 @@ describe("cloud backups use the workspace's shared binary transport", () => {
         timeoutSeconds: 21_600,
       }),
     );
-    expect(kill).not.toHaveBeenCalled();
+    // The SDK's kill endpoint also releases an already completed task record.
+    expect(kill).toHaveBeenCalledExactlyOnceWith("backup-task");
   });
 
   it("rejects an unverified success instead of keeping a truncated dump", async () => {

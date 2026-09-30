@@ -56,6 +56,21 @@
       "type": "array",
       "items": { "$ref": "#/definitions/settingGroup" }
     },
+    "installLayout": {
+      "description": "Optional install-form presentation. Omit to keep the separate name card and one-column settings card.",
+      "type": "object",
+      "required": ["settings"],
+      "properties": {
+        "settings": {
+          "description": "single combines the project name and install fields in one card; split puts them in adjacent cards that stack on narrow containers; grouped preserves settings group headings with a separate name card.",
+          "enum": ["single", "split", "grouped"]
+        },
+        "columns": {
+          "description": "Default field columns when space allows. Narrow containers stack; group columns override this in grouped mode.",
+          "enum": [1, 2]
+        }
+      }
+    },
     "prepare": {
       "description": "Commands run inside a service container after start. Must be re-run safe.",
       "type": "array",
@@ -163,6 +178,17 @@
         "image": {
           "description": "Container image to pull. Pin a version — unpinned tags are rejected in review. Exactly one of image|build per service.",
           "type": "string"
+        },
+        "resources": {
+          "description": "Initial container CPU, memory and disk limits. Saved as editable service resources; explicit settings survive a failed-install retry.",
+          "type": "object",
+          "required": ["cpuCores", "memoryMb", "diskMb"],
+          "additionalProperties": false,
+          "properties": {
+            "cpuCores": { "type": "number", "minimum": 0.25 },
+            "memoryMb": { "type": "integer", "minimum": 128 },
+            "diskMb": { "type": "integer", "minimum": 64 }
+          }
         },
         "build": {
           "description": "Inline Docker build context — build the service image instead of pulling it (a base image needing extra packages + a provisioning ENTRYPOINT). Mutually exclusive with image. Built on the deploy host via the normal build pipeline.",
@@ -293,6 +319,10 @@
         "id": { "description": "Stable group id.", "type": "string" },
         "label": { "description": "Group heading.", "type": "string" },
         "description": { "description": "Group help text.", "type": "string" },
+        "columns": {
+          "description": "Field columns when space allows, in installed settings and grouped installs. Narrow containers always stack.",
+          "enum": [1, 2]
+        },
         "fields": { "type": "array", "items": { "$ref": "#/definitions/settingField" } }
       }
     },
@@ -333,6 +363,7 @@
         "patternError": { "description": "Message shown when pattern fails.", "type": "string" },
         "default": { "description": "Prefilled value.", "type": "string" },
         "placeholder": { "description": "Input placeholder.", "type": "string" },
+        "fullWidth": { "description": "Span the whole row in a two-column form.", "type": "boolean" },
         "secret": { "description": "Store encrypted and mask on display.", "type": "boolean" },
         "trueValue": {
           "description": "For type:\"boolean\" — env value written when on, e.g. \"1\" or \"yes\".",
@@ -521,11 +552,11 @@
           "type": "boolean"
         },
         "scope": {
-          "description": "Declares reachability intent.",
+          "description": "Declares reachability intent. Defaults to public for HTTP and internal for TCP.",
           "enum": ["public", "internal", "local"]
         },
         "defaultMode": {
-          "description": "Preselected exposure.",
+          "description": "Preselected routing mode, constrained by allowedModes. Defaults follow kind and scope, independently of the deployment target.",
           "enum": ["domain", "port", "publish", "internal"]
         },
         "allowedModes": {

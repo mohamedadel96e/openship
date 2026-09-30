@@ -94,11 +94,8 @@ export function useAttentionFeed() {
     showBroken,
     showBehind,
     /**
-     * 0, 1 or 2 — how many cards the attention slot will actually render, hides
-     * included. The home column spends this as a budget, dropping its least urgent
-     * card per alert panel (Activity at 1, Apps at 2). Counting hidden panels as
-     * absent is deliberate: hiding one hands that space straight back, which is the
-     * trade the operator made by hiding it.
+     * Number of visible attention panels, excluding those the operator hid.
+     * Home uses this to give alerts priority over Activity and Quick Tip.
      */
     cards: (showBroken ? 1 : 0) + (showBehind ? 1 : 0),
     hide,

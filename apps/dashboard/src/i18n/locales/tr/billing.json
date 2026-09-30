@@ -1,4 +1,21 @@
 {
+  "home": {
+    "label": "Openship Cloud",
+    "title": "Yayına hazır mısınız?",
+    "plansAndBilling": "Planlar ve faturalandırma",
+    "description": "Büyümeye alan tanıyan, yönetilen derlemeler ve barındırma.",
+    "manageDescription": "Planınız, kullanımınız ve faturalarınız tek bir yerde.",
+    "purchasesUnavailable": "Yeni abonelikler şu anda kullanılamıyor.",
+    "viewPlans": "Planları keşfet"
+  },
+  "welcome": {
+    "eyebrow": "Her şey hazır",
+    "title": "{name} planına hoş geldiniz",
+    "description": "Cloud planınız etkin. Şimdi kullanmaya başlayabilirsiniz.",
+    "dismiss": "Karşılama penceresini kapat",
+    "openProjects": "Projeleri aç",
+    "viewPlan": "Planımı görüntüle"
+  },
   "capacity": {
     "title": "Kapasite ve Kullanım",
     "subtitle": "Planınıza dahil kapasite ve ne kadar kullandığınız. Canlı veriler Openship Cloud'dan senkronize edilir.",
@@ -89,6 +106,14 @@
     "replacementNotice": "Planı veya faturalandırma aralığını değiştirmek, ödeme sonrasında seçilen tam fiyatla yeni bir dönem başlatır. Otomatik orantılı ücret hesaplaması yapılmaz.",
     "changeViaSupport": "Mevcut aboneliğinizi değiştirmek için destekle iletişime geçin.",
     "billingUnavailable": "Bu hesap için satın alma henüz kullanılamıyor."
+  },
+  "complimentary": {
+    "label": "Ücretsiz plan · Ücret alınmaz",
+    "untilRevoked": "İptal edilene kadar etkin",
+    "expiresOn": "{date} tarihine kadar kullanılabilir",
+    "creditsRenewOn": "Krediler {date} tarihinde yenilenir",
+    "changeViaSupport": "Ücretsiz planınızdaki değişiklikleri destek ekibi yönetir.",
+    "topupsUnavailable": "Ücretsiz planınızdaki ek kullanımı destek ekibi yönetir."
   },
   "pricing": {
     "custom": "Özel",
@@ -306,9 +331,9 @@
     "creditsPerCycle": "Fatura dönemi başına {amount} kredi",
     "buildTime": "Derleme süresi",
     "buildMinutes": "Ayda {amount} dk",
-    "buildHint": "Kodunuzu derlemek için harcanan süre. 5 dakikalık bir derleme, aylık hakkınızdan 5 dakika kullanır.",
-    "apps": "Çalışan hizmetler",
-    "appsHint": "Aynı anda çalışan uygulamalar, veritabanları ve arka plan görevleri. Çalışan her Compose hizmeti bu sınıra dahil edilir.",
+    "buildHint": "Derlemeler, kaynak tüketimlerine göre ortak kullanım hakkını tüketir. Ayrı bir süre sınırı yalnızca kayıtlı planınızda yer alıyorsa uygulanır.",
+    "apps": "Hizmet kotası",
+    "appsHint": "Dağıtılmış projeler ve sıradaki dağıtımlar için ayrılan kapasite. Henüz dağıtılmamış taslaklar kotayı kullanmaz.",
     "machine": "Hizmet başına CPU ve bellek",
     "machineHint": "Bir hizmet için seçilebilen en yüksek CPU ve bellek boyutudur. Bu bir sınırdır, ortak bakiye değildir.",
     "projects": "Projeler",
@@ -320,7 +345,7 @@
     "setupOnly": "Abonelik gerekli",
     "setupHint": "Proje oluşturmak, kod derlemek ve uygulama çalıştırmak için bir Cloud planı seçin.",
     "includedTitle": "Kaynaklarınız",
-    "limitsHint": "Planınızdaki projeler, çalışan servisler ve aylık derleme süresi.",
+    "limitsHint": "Planınızdaki projeler, çalışan hizmetler ve varsa derleme süresi sınırı.",
     "balanceRule": "Kullanım hakkı bitince uygulamalar duraklatılır. Devam etmek için kullanım ekleyin veya kaynak limitlerini artırmak için planınızı yükseltin.",
     "reset": "Derleme kotası {date} tarihinde yenilenir",
     "cpuHint": "Zaman içindeki işlem gücü kullanımıdır. 1 vCPU’nun 1 saat çalışması 1 vCPU-saat eder.",
@@ -340,7 +365,12 @@
     "usageIncluded": "Ortak kullanım hakkı dahil",
     "usageSummary": "Derlemeler ve çalışan uygulamalar ortak bir kullanım hakkını paylaşır. Daha büyük makineler ve daha uzun çalışma süreleri daha fazla tüketir.",
     "usageDetails": "Kullanım ayrıntıları",
-    "usagePercent": "%{percent} kullanıldı"
+    "usagePercent": "%{percent} kullanıldı",
+    "poolHint": "Durdurulanlar ve bekleyen değişiklikler dahil tüm çalışma alanlarında paylaşılır.",
+    "creditUnitsHint": "Krediler dakikayı değil kaynak tüketimini ölçer. CPU, bellek, disk etkinliği ve aktarımın ayrı ücretleri vardır.",
+    "topupCapacityHint": "Yüklemeler kullanım kredisi ekler. Daha fazla CPU, RAM veya depolama için planı yükseltin.",
+    "poolTitle": "Paylaşılan kapasite",
+    "poolCapacity": "{cpu} vCPU · {ram} GB bellek · {disk} GB disk"
   },
   "onboarding": {
     "workspaceDescription": "Proje oluşturmak, kod derlemek ve uygulamalarınızı çalıştırmak için bir Cloud planı seçin. Abonelik öncesinde proje veya işlem kaynağı dahil değildir.",
@@ -404,5 +434,18 @@
     "currentPeriod": "Geçerli fatura dönemi",
     "viewUsage": "Ayrıntılı kullanımı görüntüle",
     "bandwidthPerMonth": "{amount} GB / ay"
+  },
+  "creditAlert": {
+    "lowTitle": "Cloud kredileri azalıyor",
+    "lowDescription": "Satın alınan krediler dahil kotanızın %{percent} kadarını kullandınız. {credits} kredi kaldı.",
+    "graceTitle": "Ek tolerans kredilerini kullanıyorsunuz",
+    "graceDescription": "Ücretli kredileriniz tükendi. Yeni iş yükleri engellenmeden önce {credits} tolerans kredisi kaldı.",
+    "exhaustedTitle": "Cloud kredileri tükendi",
+    "exhaustedDescription": "Kredi eklenene veya ücretli kotanız yenilenene kadar yeni iş yükleri engellenir. Seçeneklerinizi görmek için faturalamayı açın.",
+    "buyCredits": "Daha fazla kredi al",
+    "openBilling": "Faturalamayı aç",
+    "close": "Anladım",
+    "opening": "Bu uyarıdaki kuruluşun faturalama sayfası açılıyor…",
+    "wrongOrganization": "Bu faturalama bağlantısı hesabınız için kullanılamıyor. Uyarıdaki kuruluşa ait bir hesapla oturum açın."
   }
 }

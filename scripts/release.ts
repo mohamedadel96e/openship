@@ -11,6 +11,8 @@
  *                                         # 0.1.1-rc.2 → 0.1.1     (promote: rc → stable)
  *   bun scripts/release.ts <explicit>     # set to literal "0.2.0-beta.3"
  *   bun scripts/release.ts --dry-run patch
+ *   bun scripts/release.ts continue       # resume an unpublished release with
+ *                                         # current code and verified reuse
  *
  *   bun run release                       # NO args in a terminal → interactive
  *                                         # wizard over every option below. It
@@ -53,6 +55,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildWizardArgs, type WizardAnswers } from "./release-args";
 import { extractChangelogSection } from "./changelog-notes";
+import { RESUME_TRAILER, resumeRuns, unpublishedReleaseRuns } from "./release-resume";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ROOT_PKG = join(ROOT, "package.json");
@@ -164,6 +167,15 @@ if (args.length === 0 && process.stdin.isTTY && process.stdout.isTTY) {
 // Branch out here, before any version/semver handling treats "docker" as a bump.
 if (cmd === "docker") {
   releaseDocker();
+  process.exit(0);
+}
+if (cmd === "continue") {
+  try {
+    await continueRelease();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   process.exit(0);
 }
 
@@ -352,6 +364,8 @@ function usageAndExit(code = 1): never {
       "                 never moves :latest. Omit [tag] → images tagged short SHA.",
       "                 `--ref=<branch>` builds that branch (default: current).",
       "                 e.g.  bun run release docker 0.0.0-rc.1",
+      "  continue       resume the current unpublished release with HEAD; reuse",
+      "                 successful checks/builds only when their inputs match.",
       "",
       "  publish        ANNOUNCE this release: write a release advisory so the in-app",
       "                 update banner prompts users below this version. WITHOUT it the",
@@ -432,7 +446,7 @@ function retireExistingTag(t: string): void {
  * pass/fail and exits when the run finishes. Degrades gracefully (prints the
  * Actions URL) if `gh` is missing, not authed, or the run isn't found yet.
  */
-function watchCi(t: string, fallbackUrl: string): void {
+function watchCi(t: string, fallbackUrl: string, notBefore = Date.now() - 30_000): void {
   const have = spawnSync("gh", ["--version"], { encoding: "utf8" });
   if (have.status !== 0) {
     if (fallbackUrl) log(`Watch the build:  ${fallbackUrl}`);
@@ -454,9 +468,12 @@ function watchCi(t: string, fallbackUrl: string): void {
         databaseId: number;
         headBranch: string;
         event: string;
+        createdAt: string;
       }>;
       // Tag-triggered runs show headBranch === the tag name.
-      const match = runs.find((r) => r.headBranch === t || r.headBranch === `refs/tags/${t}`);
+      const match = runs.find((r) =>
+        (r.headBranch === t || r.headBranch === `refs/tags/${t}`) && Date.parse(r.createdAt) >= notBefore,
+      );
       if (match) runId = String(match.databaseId);
     } catch {
       // keep polling
@@ -479,6 +496,61 @@ function watchCi(t: string, fallbackUrl: string): void {
 }
 
 /* ─── Docker image release (GHCR-only, via workflow_dispatch) ────────── */
+
+/** Continue an unpublished tag. Compare-and-swap protects against another
+ * maintainer moving it between inspection and push. Published bytes are never
+ * retagged by this path; they require a new version instead. */
+async function continueRelease(): Promise<void> {
+  if (!dryRun) preflight();
+  const targetTag = `v${readVersion(API_PKG)}`;
+  const repository = ghOwnerRepo();
+  if (!repository) throw new Error("Cannot determine the GitHub repository from origin.");
+  const repo = `${repository.owner}/${repository.repo}`;
+  const remoteRef = git("ls-remote", "--refs", "origin", `refs/tags/${targetTag}`, { capture: true }).trim();
+  const remoteOid = remoteRef.split(/\s+/)[0];
+  if (!remoteOid || !/^[a-f0-9]{40}$/.test(remoteOid))
+    throw new Error(`No existing ${targetTag} to continue. Use release current for a new release.`);
+  const releaseResult = spawnSync("gh", ["api", `repos/${repo}/releases/tags/${targetTag}`], { encoding: "utf8", cwd: ROOT });
+  if (releaseResult.status === 0 && !JSON.parse(releaseResult.stdout).draft)
+    throw new Error(`${targetTag} is already published. Release a new version instead of changing its bytes.`);
+  if (releaseResult.status !== 0 && !releaseResult.stderr.includes("HTTP 404"))
+    throw new Error("Could not verify whether this GitHub release is already published.");
+  const version = targetTag.slice(1);
+  const npm = spawnSync("npm", ["view", `openship@${version}`, "version", "--json"], { encoding: "utf8", cwd: ROOT });
+  if (npm.status === 0)
+    throw new Error(`openship@${version} is already on npm. Release a new version instead.`);
+  if (!npm.stderr.includes("E404")) throw new Error("Could not verify whether this version is already on npm.");
+
+  const previous = await unpublishedReleaseRuns(repo, targetTag);
+  if (!previous.some((run) => run.conclusion !== "success"))
+    throw new Error(`No failed release run found for ${targetTag}.`);
+  // Read the inspected remote object, not a potentially stale local tag.
+  git("fetch", "--no-tags", "origin", `refs/tags/${targetTag}`);
+  if (git("rev-parse", "FETCH_HEAD", { capture: true }).trim() !== remoteOid)
+    throw new Error("The release tag changed during inspection. Retry continuation.");
+  git("merge-base", "--is-ancestor", "FETCH_HEAD^{commit}", "HEAD");
+  const annotation = git("cat-file", "-p", "FETCH_HEAD", { capture: true });
+  const runIds = [...new Set([...previous.map((run) => String(run.id)), ...resumeRuns(annotation)])].slice(0, 12);
+  log(`Continue ${targetTag} with ${git("rev-parse", "--short", "HEAD", { capture: true }).trim()}`);
+  log(`Previous runs: ${runIds.join(", ")}`);
+  log("Successful checks and build artifacts are reused only when their source and workflow inputs match.");
+  log("Failed or affected jobs run normally; publishing still requires every gate to pass.");
+  if (dryRun) {
+    log("[dry-run] would push the current branch and update the unpublished tag with this resume record.");
+    return;
+  }
+  git("push", "origin", `HEAD:refs/heads/${currentBranch()}`);
+  const localRef = spawnSync("git", ["rev-parse", "--verify", `refs/tags/${targetTag}`], { encoding: "utf8", cwd: ROOT });
+  git("tag", "-f", "-a", targetTag, "HEAD", "-m", `${targetTag}\n\n${RESUME_TRAILER} ${runIds.join(",")}`);
+  const started = Date.now() - 5_000;
+  const push = spawnSync("git", ["push", `--force-with-lease=refs/tags/${targetTag}:${remoteOid}`, "origin", `refs/tags/${targetTag}`], { stdio: "inherit", cwd: ROOT });
+  if (push.status !== 0) {
+    if (localRef.status === 0) git("update-ref", `refs/tags/${targetTag}`, localRef.stdout.trim());
+    else git("update-ref", "-d", `refs/tags/${targetTag}`);
+    throw new Error("The release tag could not be updated; the local tag was restored.");
+  }
+  watchCi(targetTag, `https://github.com/${repo}/actions`, started);
+}
 
 /** owner/repo parsed from origin, or null when origin isn't a GitHub remote. */
 function ghOwnerRepo(): { owner: string; repo: string } | null {
@@ -838,6 +910,7 @@ async function runWizard(): Promise<string[] | null> {
     const mode = await pick("What do you want to release?", [
       { value: "version" as const, label: "A version", hint: "bump + tag + GitHub release + installers" },
       { value: "docker" as const, label: "Docker images only", hint: "GHCR; no tag, no release, :latest untouched" },
+      { value: "continue" as const, label: "Continue a failed release", hint: "current code; reuse successful, unchanged jobs" },
     ]);
     if (mode === CANCEL) return null;
 
@@ -846,7 +919,7 @@ async function runWizard(): Promise<string[] | null> {
     if (mode === "docker") {
       answers.dockerTag = await ask("image tag (empty = short SHA):");
       answers.dockerRef = await ask("branch to build:", branch);
-    } else {
+    } else if (mode === "version") {
       // Preview each bump's real target so the choice is concrete.
       const preview = (k: BumpKind) => computeNext(current, { kind: k });
       const bump = await pick(

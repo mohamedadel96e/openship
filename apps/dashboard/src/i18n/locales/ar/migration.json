@@ -169,7 +169,7 @@
     "cardTitle": "خدمات موجودة",
     "cardDesc": "رحّل نشر Docker أو Compose قيد التشغيل إلى Openship.",
     "action": "ترحيل Docker",
-    "tab": "خادم موجود",
+    "tab": "استيراد مشروع موجود",
     "comingSoon": "ترحيل Docker قادم قريبًا"
   },
   "view": {

@@ -3,6 +3,76 @@ import { getPlatformKernel } from "@repo/platform/engine/lib/platform";
 import { operationContext, operationData } from "../../lib/operation-context";
 import { operationEvents } from "../../lib/operation-stream";
 
+export const clusterStorage = {
+  async backup(c: Context) {
+    return c.json(
+      await operationData(
+        c,
+        getPlatformKernel().servers.configureClusterStorageBackup(operationContext(c), {
+          ...(await c.req.json()),
+          clusterId: c.req.param("id")!,
+        }),
+      ),
+      202,
+    );
+  },
+  async get(c: Context) {
+    return c.json(
+      await operationData(
+        c,
+        getPlatformKernel().servers.getClusterStorage(operationContext(c), {
+          clusterId: c.req.param("id")!,
+          observe: c.req.query("observe") === "true",
+        }),
+      ),
+    );
+  },
+  async setup(c: Context) {
+    return c.json(
+      await operationData(
+        c,
+        getPlatformKernel().servers.setupClusterStorage(operationContext(c), {
+          ...(await c.req.json()),
+          clusterId: c.req.param("id")!,
+        }),
+      ),
+      202,
+    );
+  },
+  async retry(c: Context) {
+    return c.json(
+      await operationData(
+        c,
+        getPlatformKernel().servers.retryClusterStorage(operationContext(c), {
+          ...(await c.req.json()),
+          clusterId: c.req.param("id")!,
+        }),
+      ),
+      202,
+    );
+  },
+  async remove(c: Context) {
+    return c.json(
+      await operationData(
+        c,
+        getPlatformKernel().servers.removeClusterStorage(operationContext(c), {
+          ...(await c.req.json()),
+          clusterId: c.req.param("id")!,
+        }),
+      ),
+      202,
+    );
+  },
+  events(c: Context) {
+    return operationEvents(c, (signal) =>
+      getPlatformKernel().servers.openClusterStorageEvents(
+        operationContext(c),
+        c.req.param("id")!,
+        { signal },
+      ),
+    );
+  },
+};
 export const clusterRuntime = {
   async get(c: Context) {
     return c.json(

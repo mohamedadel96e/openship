@@ -30,7 +30,7 @@ const r = secureRouter(serviceTerminalRoutes, {
 });
 
 // Ticket endpoint — normal HTTP auth + permission gate.
-r.post("/ticket", { tag: "terminal:write" }, issueTicket);
+r.post("/ticket", { tag: "terminal:write", mcpExcluded: "Single-use browser WebSocket terminal ticket. Use the service exec tool for bounded commands over MCP." }, issueTicket);
 
 // WS upgrade — auth happens inside upgradeWebSocket via single-use
 // ticket (issued by POST /ticket under terminal:write) or session-cookie

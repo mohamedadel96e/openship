@@ -1,7 +1,7 @@
 import { findActiveDeployment } from "@repo/platform/engine/lib/active-deployment";
 import { repos, type Domain, type Project } from "@repo/db";
 import { resolveWorkload, safeErrorMessage } from "@repo/core";
-import { edgeProxyFor, resolveServedStaticPath } from "@repo/adapters";
+import { edgeProxyFor, PAGE_CONTAINER_PREFIX, resolveServedStaticPath } from "@repo/adapters";
 import { compileProjectRoutingFields } from "../../lib/project-routing-fields";
 import {
   comparePublicRouteRows,
@@ -18,6 +18,8 @@ import { resolveLiveUpstreamUrl, resolveRouteStrategy } from "../../lib/upstream
 import {
   describeCandidatePorts,
   resolveProjectServiceUpstream,
+  withServiceRuntimeOverride,
+  type ServiceRuntimeOverride,
 } from "../../lib/project-service-upstream";
 import { isArtifactRef, isRealContainerRef } from "../../lib/container-ref";
 import { resolveServicePort } from "../../lib/deployable-service";
@@ -39,6 +41,7 @@ import {
 } from "../../lib/route-apply.service";
 import { observedLoopbackPublishFromUrl } from "../deployments/observed-host-port-claims";
 import { env } from "../../config/env";
+import { resolveProjectLiveDeployTarget } from "../projects/project-deploy-target";
 
 type ProjectRouteProject = Pick<Project, "id" | "slug">;
 type RouteStateProject = Pick<Project, "slug">;
@@ -278,6 +281,8 @@ export async function syncProjectRouteState(
  * deploy — they have no live upstream to point at here.
  */
 export interface ReapplyProjectLiveRoutesOptions {
+  /** Observe a started replacement before its runtime identity is committed. */
+  serviceRuntime?: ServiceRuntimeOverride;
   /**
    * The self-app (control plane) project legitimately routes its public
    * hostname to its OWN dashboard port on loopback — that's the whole point
@@ -359,8 +364,13 @@ export async function reapplyProjectLiveRoutes(
     console.warn(message);
     opts.onWarning?.(message);
   };
-  const isCloud = !!project.cloudWorkspaceId;
-  if (!isCloud && !project.activeDeploymentId) return;
+  if (!project.activeDeploymentId) return;
+  const deployment = await findActiveDeployment(project);
+  if (!deployment) {
+    warn(`[project-route] ${project.slug}: no active deployment row — skipping live route re-apply`);
+    return;
+  }
+  const isCloud = (await resolveProjectLiveDeployTarget(project, deployment)).deployTarget === "cloud";
 
   // Read the project's rows ONCE. `state` needs the project-level subset;
   // `allDomainRows` keeps the service-scoped ones too, because the canonical row
@@ -413,9 +423,13 @@ export async function reapplyProjectLiveRoutes(
 
   // Cloud: no upstream resolution — the workspace/page owns routing by port.
   if (isCloud) {
-    const registers: RouteRegister[] = current
+    // Docker's following topology pass publishes each complete table once.
+    // Writing root-only routes here would temporarily erase its path rules.
+    const cloudDocker = !!(deployment.meta as DeploymentMeta | null)?.cloudDockerWorkspace;
+    const page = deployment.containerId?.startsWith(PAGE_CONTAINER_PREFIX);
+    const registers: RouteRegister[] = cloudDocker ? [] : current
       .filter(
-        (domain) => !domain.targetPath && !topologyHostnames.has(domain.hostname.toLowerCase()),
+        (domain) => (!domain.targetPath || page) && !topologyHostnames.has(domain.hostname.toLowerCase()),
       )
       .map((domain) => ({
         hostname: domain.hostname,
@@ -425,6 +439,7 @@ export async function reapplyProjectLiveRoutes(
         isCustomDomain: !managedHostnameToSlug(domain.hostname),
       }));
     await reconcileProjectRoutes(project, {
+      deployment,
       registers,
       removes,
       onWarning: opts.onWarning,
@@ -435,13 +450,6 @@ export async function reapplyProjectLiveRoutes(
 
   // Self-hosted: resolve the deployment's routing + runtime ONCE (the same
   // resolver deploy/delete use), then compute each upstream from the container.
-  const deployment = await findActiveDeployment(project);
-  if (!deployment) {
-    warn(
-      `[project-route] ${project.slug}: no active deployment row — skipping live route re-apply`,
-    );
-    return;
-  }
   // Held for the `finally` below: a remote-server platform binds a
   // Docker-over-SSH loopback bridge that only `dispose` closes, and this runs on
   // every live route edit. Releasing it leaves `routing` fully usable — dispose
@@ -490,7 +498,15 @@ export async function reapplyProjectLiveRoutes(
       }
     };
 
-    const containerId = deployment.containerId;
+    const storedRows = await repos.service.listByDeployment(deployment.id).catch(() => []);
+    const replacement = opts.serviceRuntime;
+    const replacedRow = replacement
+      ? storedRows.find((row) => row.serviceId === replacement.serviceId)
+      : undefined;
+    const containerId =
+      replacement && replacedRow?.containerId && replacedRow.containerId === deployment.containerId
+        ? replacement.containerId
+        : deployment.containerId;
     // The `"compose"` sentinel means the release has no single container a
     // project-level question resolves to. It is NOT a container id — passing it to a
     // runtime is what this guard exists to stop.
@@ -512,7 +528,7 @@ export async function reapplyProjectLiveRoutes(
      * answer. An unmatched port falls through to the primary container exactly as it
      * did before, and is skipped (never guessed onto a service) when there isn't one.
      */
-    const liveRows = await repos.service.listByDeployment(deployment.id).catch(() => []);
+    const liveRows = withServiceRuntimeOverride(storedRows, opts.serviceRuntime);
     const serviceDefs = await repos.service.listByProject(project.id);
     const serviceUpstreams =
       serviceDefs.length > 0

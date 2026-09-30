@@ -19,6 +19,7 @@ const footerLinks = {
     { label: "Trust & Security", href: "/trust" },
     { label: "About", href: "/about" },
     { label: "Contact", href: "/contact" },
+    { label: "Support", href: "/support" },
   ],
   Legal: [
     { label: "Privacy", href: "/privacy" },

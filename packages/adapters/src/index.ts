@@ -64,6 +64,7 @@ export { DEFAULT_RESOURCE_CONFIG, DEFAULT_BUILD_RESOURCE_CONFIG } from "./types"
 export type {
   RuntimeAdapter,
   RuntimeCapability,
+  ReleaseCommandOptions,
   MultiServiceRuntimeAdapter,
   MultiServiceGroupHandle,
   MultiServiceDeployConfig,
@@ -117,7 +118,11 @@ export {
   PAGE_CONTAINER_PREFIX,
   provisionCloudWorkspace,
 } from "./runtime/cloud";
-export { CloudDockerRuntime, CLOUD_DOCKER_IMAGE, type CloudDockerOptions } from "./runtime/cloud/docker";
+export {
+  CloudDockerRuntime,
+  CLOUD_DOCKER_IMAGE,
+  type CloudDockerOptions,
+} from "./runtime/cloud/docker";
 export { cloudWorkspaceStatus, waitForCloudDockerWorkspace } from "./runtime/cloud/workspace-ready";
 export { CloudWorkspaceExecutor } from "./runtime/cloud/workspace-executor";
 export { BuildLogger } from "./runtime/build-pipeline";
@@ -173,7 +178,7 @@ export {
 } from "./runtime/volume-namespace";
 
 // ─── Infrastructure layer ────────────────────────────────────────────────────
-export type { RoutingProvider, SslProvider, ProvisionCertOptions } from "./infra/types";
+export type { RoutingProvider, SslProvider, ProvisionCertOptions, DnsCertificateProvider } from "./infra/types";
 export { NginxProvider, type NginxProviderOptions, type RateLimitConfig } from "./infra/nginx";
 // For the upstream-down e2e in apps/api: it asserts on the real marker rather than a copy of
 // the string, which could drift from the page it is checking for.
@@ -572,7 +577,7 @@ export {
 } from "./platform";
 
 // ─── Oblien SDK (re-export for single source of truth) ───────────────────────
-export { Oblien } from "./oblien";
+export { Oblien, cloudWorkspaceCreationFailure } from "./oblien";
 export type {
   NamespaceUsageUnits,
   NamespaceUsageUnitBucket,
@@ -591,9 +596,19 @@ export {
   type ManagedHostTransaction,
   type ManagedHostReceipt,
 } from "./network/managed-network";
-export { k3sTools, k3sFirewallScript, type K3sHostContext, type K3sHostInspection } from "./cluster/k3s";
+export {
+  k3sTools,
+  k3sFirewallScript,
+  type K3sHostContext,
+  type K3sHostInspection,
+} from "./cluster/k3s";
 export * from "./cluster/kubernetes-api";
+export * from "./cluster/kubernetes-mutation";
+export * from "./cluster/storage";
+export * from "./cluster/storage-host";
+export * from "./cluster/volumes";
 export * from "./cluster/kubernetes-label";
 export * from "./cluster/database";
+export { databaseArchiveName } from "./cluster/redis-backups";
 export * from "./runtime/kubernetes";
 export { splitRuntimeEnv, droppedRuntimeEnvMessage } from "./runtime/runtime-env";

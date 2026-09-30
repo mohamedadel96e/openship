@@ -2,7 +2,7 @@
 
 import { Icon as UiIcon } from "@repo/ui/icons";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import {
   dataTransferApi,
@@ -39,14 +39,16 @@ export function ImportModal({ open, onClose }: { open: boolean; onClose: () => v
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ImportResult | null>(null);
-  const currentKey = JSON.stringify(selection);
+  const importLock = useRef(false);
+  const currentKey = JSON.stringify({ selection, mode });
   const reviewed = !!preview && reviewedKey === currentKey;
   const hasSelection = selection.scope === "instance" || !!selection.projectIds?.length;
+  const requiresPassphrase = preview?.requiresPassphrase ?? preview?.hasSecrets ?? false;
   const canImport =
     reviewed &&
     hasSelection &&
     !preview.blockers.length &&
-    (!preview.hasSecrets || selection.includeSecrets === false || !!passphrase);
+    (!requiresPassphrase || selection.includeSecrets === false || !!passphrase);
   const patch = (value: Partial<ImportSelection>) =>
     setSelection((current) => ({ ...current, ...value }));
   const reportProgress = (done: number, total: number) => setProgress({ done, total });
@@ -64,11 +66,12 @@ export function ImportModal({ open, onClose }: { open: boolean; onClose: () => v
       if (chosen.size > 500_000_000) throw new Error("Export files must be no larger than 500 MB.");
       const initial = await dataTransferApi.previewFile(chosen, undefined, reportProgress);
       setArchiveScope(initial.scope);
-      // Project selection is the safe default, including when starting from a
-      // full instance archive. Whole-instance restore remains an explicit choice.
+      // Preserve what the user exported. Replacing an instance is reviewed here
+      // and confirmed at apply; it must not silently become a project-only merge.
+      const nextMode: ImportMode = initial.scope === "instance" ? "wipe" : "merge";
       const next: ImportSelection = {
-        scope: initial.projects.length ? "projects" : initial.scope,
-        ...(initial.projects.length
+        scope: initial.scope,
+        ...(initial.scope === "projects" && initial.projects.length
           ? { projectIds: initial.projects.map((project) => project.id) }
           : {}),
         conflictPolicy: "skip",
@@ -80,9 +83,10 @@ export function ImportModal({ open, onClose }: { open: boolean; onClose: () => v
         overwriteDependencies: false,
       };
       setSelection(next);
+      setMode(nextMode);
       const review = await dataTransferApi.previewFile(chosen, next);
       setPreview(review);
-      setReviewedKey(JSON.stringify(next));
+      setReviewedKey(JSON.stringify({ selection: next, mode: nextMode }));
     } catch (error) {
       setError(getApiErrorMessage(error, "Could not inspect this export."));
     } finally {
@@ -106,7 +110,7 @@ export function ImportModal({ open, onClose }: { open: boolean; onClose: () => v
     }
   };
   const apply = async () => {
-    if (!file || !canImport || busy) return;
+    if (!file || !canImport || busy || importLock.current) return;
     const effectiveMode = selection.scope === "projects" ? "merge" : mode;
     if (
       effectiveMode === "wipe" &&
@@ -115,6 +119,7 @@ export function ImportModal({ open, onClose }: { open: boolean; onClose: () => v
       )
     )
       return;
+    importLock.current = true;
     setBusy(true);
     setError("");
     try {
@@ -132,6 +137,7 @@ export function ImportModal({ open, onClose }: { open: boolean; onClose: () => v
       // Destination state may have changed since review; keep the uploaded file.
       setReviewedKey("");
     } finally {
+      importLock.current = false;
       setBusy(false);
     }
   };
@@ -243,7 +249,7 @@ export function ImportModal({ open, onClose }: { open: boolean; onClose: () => v
                             }
                           : {}),
                       });
-                      setMode("merge");
+                      setMode(scope === "instance" ? "wipe" : "merge");
                     }}
                   >
                     <option value="projects" disabled={!preview.projects.length}>
@@ -281,8 +287,9 @@ export function ImportModal({ open, onClose }: { open: boolean; onClose: () => v
                         <option value="overwrite">Overwrite matching project records</option>
                       </select>
                       <span className="block pt-1 font-normal text-muted-foreground">
-                        Overwrite updates matching configuration and history. Destination-only
-                        records remain. Shared server connections are reused.
+                        Overwrite replaces the selected projects with the exported records,
+                        including removing destination-only records in the selected categories.
+                        Other projects and shared server connections are kept.
                       </span>
                     </label>
                     {preview.projects.some(
@@ -462,7 +469,13 @@ export function ImportModal({ open, onClose }: { open: boolean; onClose: () => v
                   onChange={(includeSecrets) => patch({ includeSecrets })}
                   disabled={busy || !preview.hasSecrets}
                 />
-                {preview.hasSecrets && selection.includeSecrets !== false && (
+                {!preview.hasSecrets && (
+                  <p className="text-xs text-warning">
+                    This file contains no environment values or credentials. Export it again
+                    from the source to move those values.
+                  </p>
+                )}
+                {requiresPassphrase && selection.includeSecrets !== false && (
                   <label className="block space-y-1 text-xs font-medium text-foreground">
                     Transfer password
                     <input
@@ -486,6 +499,12 @@ export function ImportModal({ open, onClose }: { open: boolean; onClose: () => v
                     warnings={preview.warnings}
                     blockers={reviewed ? preview.blockers : []}
                   />
+                  {reviewed && !!preview.rowsRemoved && (
+                    <p className="text-xs text-muted-foreground">
+                      {preview.rowsRemoved.toLocaleString()} destination-only records will be
+                      removed from the selected projects.
+                    </p>
+                  )}
                   <div className="flex flex-wrap gap-3">
                     <button
                       type="button"

@@ -115,11 +115,10 @@ describe("tools/list respects the mode", () => {
 });
 
 describe("the memo cannot freeze a list built under the wrong mode", () => {
-  it("resetMcpToolCache re-derives from the current mode", () => {
+  it("re-derives automatically when availability changes", () => {
     const first = toolPaths().length;
     envMock.CLOUD_MODE = true;
-    // No reset: the memo is deliberately still serving the self-hosted list.
-    expect(toolPaths().length).toBe(first);
+    expect(toolPaths().length).toBeLessThan(first);
     resetMcpToolCache();
     expect(toolPaths().length).toBeLessThan(first);
   });

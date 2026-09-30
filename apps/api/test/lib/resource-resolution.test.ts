@@ -75,11 +75,11 @@ describe("resolveBuildResources", () => {
     });
   });
 
-  it("keeps the build-sized default on cloud", () => {
+  it("keeps the bounded build default on cloud", () => {
     expect(resolveBuildResources(null, { isCloud: true })).toEqual({
-      cpuCores: 4,
-      memoryMb: 8192,
-      diskMb: 10240,
+      cpuCores: 1,
+      memoryMb: 2048,
+      diskMb: 8192,
     });
   });
 });

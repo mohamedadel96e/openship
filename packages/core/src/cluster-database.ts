@@ -1,5 +1,6 @@
 import { AppError } from "./errors";
 import type { SetupLog, SetupStepProgress } from "./cluster-runtime";
+import { incrementalBackupStorage, type StoredBackupArtifact } from "./backup-storage";
 
 /** Deployable database capabilities. Deliberately separate from the canvas planner. */
 export const CLUSTER_DATABASE_TEMPLATES = [
@@ -29,6 +30,8 @@ export const CLUSTER_DATABASE_TEMPLATES = [
 export type ClusterDatabaseEngine = "postgres" | "redis";
 export interface ClusterDatabaseConfig {
   engine: ClusterDatabaseEngine;
+  /** Omitted on existing databases; their PostgreSQL major remains 17. */
+  version?: "17" | "18";
   mode: "standalone" | "cluster";
   /** PostgreSQL instances, or Redis shards (one follower per shard). */
   instances: number;
@@ -45,6 +48,13 @@ export interface ClusterDatabaseConfig {
 }
 /** Server-derived restore identity; the client never supplies archive paths. */
 export interface ClusterDatabaseRestoreSource {
+  format?: "postgres-physical" | "redis-rdb-set" | "postgres-logical" | "backup-artifact";
+  pinId?: string;
+  runtimeId?: string;
+  sourceConfig?: ClusterDatabaseConfig;
+  sourceSequence?: number;
+  backupRunId?: string;
+  artifact?: ClusterDatabaseImportArtifact;
   databaseId: string;
   backupName: string;
   backupId: string;
@@ -52,6 +62,44 @@ export interface ClusterDatabaseRestoreSource {
   destinationPath: string;
   serverName: string;
   endpoint: string | null;
+}
+export type ClusterDatabaseImportArtifact = StoredBackupArtifact & {
+  name: string;
+  payloadKind: "pg_dump" | "redis_rdb";
+  sha256: string;
+};
+export const clusterPostgresVersion = (config: ClusterDatabaseConfig) => config.version ?? "17";
+
+/** Saved native dumps only. Never infer an import command from a filename. */
+export function validateClusterDatabaseImportArtifact(
+  value: unknown,
+): asserts value is ClusterDatabaseImportArtifact {
+  const artifact = value as ClusterDatabaseImportArtifact | null;
+  if (
+    !artifact ||
+    !["pg_dump", "redis_rdb"].includes(artifact.payloadKind) ||
+    !artifact.name ||
+    !/^[a-zA-Z0-9._/-]+$/.test(artifact.key) ||
+    artifact.key.split("/").some((part) => !part || part === "." || part === "..") ||
+    !Number.isSafeInteger(artifact.sizeBytes) ||
+    artifact.sizeBytes < 1 ||
+    !/^[a-f0-9]{64}$/.test(artifact.sha256) ||
+    !["none", "gzip", "zstd"].includes(String(artifact.metadata?.compression ?? "none")) ||
+    artifact.metadata?.encrypted ||
+    artifact.metadata?.encryption
+  )
+    throw new AppError(
+      "Choose a completed PostgreSQL or Redis backup with verified integrity and a supported native dump format.",
+      422,
+      "CLUSTER_DATABASE_IMPORT_FORMAT",
+    );
+  incrementalBackupStorage(artifact);
+  if (JSON.stringify(artifact).length > 200_000)
+    throw new AppError(
+      "This incremental backup has too many parts for a database import. Capture a full database backup and select it here.",
+      422,
+      "CLUSTER_DATABASE_IMPORT_FORMAT",
+    );
 }
 export interface ClusterDatabaseBackup {
   name: string;
@@ -68,7 +116,11 @@ export const CLUSTER_DATABASE_STEPS = [
   "database",
   "verify",
 ] as const;
-export type ClusterDatabaseStep = (typeof CLUSTER_DATABASE_STEPS)[number] | "remove" | "backup";
+export type ClusterDatabaseStep =
+  | (typeof CLUSTER_DATABASE_STEPS)[number]
+  | "remove"
+  | "backup"
+  | "restore";
 export type ClusterDatabaseStatus =
   | "provisioning"
   | "ready"
@@ -114,6 +166,11 @@ export function validateClusterDatabase(config: ClusterDatabaseConfig): void {
   };
   if (!["postgres", "redis"].includes(config.engine))
     invalid("Choose a supported database engine.");
+  if (
+    config.version !== undefined &&
+    (config.engine !== "postgres" || !["17", "18"].includes(config.version))
+  )
+    invalid("Choose PostgreSQL 17 or 18. Redis uses the supported version supplied by OpenShip.");
   if (!["standalone", "cluster"].includes(config.mode)) invalid("Choose standalone or cluster.");
   if (
     !Number.isInteger(config.instances) ||
@@ -143,8 +200,6 @@ export function validateClusterDatabase(config: ClusterDatabaseConfig): void {
       "Use a database name starting with a letter, followed by letters, digits or underscores.",
     );
   if (config.backup) {
-    if (config.engine !== "postgres")
-      invalid("Automated archive backups are currently supported by the PostgreSQL template.");
     if (!config.backup.destinationId || config.backup.destinationId.length > 128)
       invalid("Choose an existing S3 backup destination.");
     if (!["daily", "hourly", "manual"].includes(config.backup.schedule))
@@ -154,16 +209,26 @@ export function validateClusterDatabase(config: ClusterDatabaseConfig): void {
       config.backup.retentionDays < 7 ||
       config.backup.retentionDays > 365
     )
-      invalid("Keep PostgreSQL archives for between 7 and 365 days.");
+      invalid("Keep database archives for between 7 and 365 days.");
   }
 }
 
-/** No silent major upgrade, topology conversion, volume shrink, or Redis resharding. */
+/** No silent topology conversion or data redistribution. */
 export function validateClusterDatabaseUpdate(
   before: ClusterDatabaseConfig,
   after: ClusterDatabaseConfig,
+  review?: { confirmRedisRebalance?: boolean },
 ) {
   validateClusterDatabase(after);
+  if (
+    before.engine === "postgres" &&
+    clusterPostgresVersion(before) !== clusterPostgresVersion(after)
+  )
+    throw new AppError(
+      "Create an upgraded copy, verify its data, then switch the application connection. Major database versions cannot be changed in place.",
+      422,
+      "CLUSTER_DATABASE_IMMUTABLE",
+    );
   if (
     ["engine", "mode", "storageClass", "databaseName"].some(
       (key) =>
@@ -189,12 +254,20 @@ export function validateClusterDatabaseUpdate(
       422,
       "CLUSTER_DATABASE_IMMUTABLE",
     );
-  if (after.engine === "redis" && after.instances !== before.instances)
-    throw new AppError(
-      "Changing the shard count requires a reviewed data migration. Redis shard counts cannot be changed by an application scale operation.",
-      422,
-      "CLUSTER_DATABASE_IMMUTABLE",
-    );
+  if (after.engine === "redis" && after.instances !== before.instances) {
+    if (!review?.confirmRedisRebalance)
+      throw new AppError(
+        "Review and confirm the Redis data migration before changing its shard count.",
+        422,
+        "CLUSTER_DATABASE_REBALANCE_REVIEW",
+      );
+    if (!before.backup || !after.backup)
+      throw new AppError(
+        "Save a backup destination before changing Redis data partitions. OpenShip will verify a backup before moving data.",
+        422,
+        "CLUSTER_DATABASE_BACKUP_REQUIRED",
+      );
+  }
   if (before.backup && after.backup?.destinationId !== before.backup.destinationId)
     throw new AppError(
       "Keep this database's archive destination to preserve its recovery history. You can change the schedule or restore into a new database with a different destination.",

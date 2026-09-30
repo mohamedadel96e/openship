@@ -1,4 +1,21 @@
 {
+  "home": {
+    "label": "Openship Cloud",
+    "title": "¿Listo para lanzar?",
+    "plansAndBilling": "Planes y facturación",
+    "description": "Compilaciones y alojamiento gestionados, con espacio para crecer.",
+    "manageDescription": "Tu plan, uso y facturación en un solo lugar.",
+    "purchasesUnavailable": "Las nuevas suscripciones no están disponibles por el momento.",
+    "viewPlans": "Explorar planes"
+  },
+  "welcome": {
+    "eyebrow": "Todo listo",
+    "title": "Te damos la bienvenida a {name}",
+    "description": "Tu plan Cloud está activo. Es hora de ponerlo en marcha.",
+    "dismiss": "Cerrar bienvenida",
+    "openProjects": "Abrir proyectos",
+    "viewPlan": "Ver mi plan"
+  },
   "capacity": {
     "title": "Capacidad y uso",
     "subtitle": "Capacidad incluida en tu plan y cuánto has usado. Las cifras en vivo se sincronizan desde Openship Cloud.",
@@ -89,6 +106,14 @@
     "replacementNotice": "Cambiar el plan o el intervalo de facturación inicia un nuevo ciclo al precio completo seleccionado después del pago. No hay prorrateo automático.",
     "changeViaSupport": "Contacta con soporte para cambiar tu suscripción actual.",
     "billingUnavailable": "Las compras aún no están disponibles para esta cuenta."
+  },
+  "complimentary": {
+    "label": "Plan de cortesía · Sin cargo",
+    "untilRevoked": "Activo hasta que se revoque",
+    "expiresOn": "Disponible hasta el {date}",
+    "creditsRenewOn": "Los créditos se renuevan el {date}",
+    "changeViaSupport": "Soporte gestiona los cambios de tu plan de cortesía.",
+    "topupsUnavailable": "Soporte gestiona el uso adicional de tu plan de cortesía."
   },
   "pricing": {
     "custom": "Personalizado",
@@ -306,9 +331,9 @@
     "creditsPerCycle": "{amount} créditos / ciclo de facturación",
     "buildTime": "Tiempo de compilación",
     "buildMinutes": "{amount} min / mes",
-    "buildHint": "Tiempo dedicado a compilar tu código. Una compilación de 5 minutos consume 5 minutos de tu cuota mensual.",
-    "apps": "Servicios activos",
-    "appsHint": "Aplicaciones, bases de datos y procesos en ejecución al mismo tiempo. Cada servicio Compose activo cuenta para este límite.",
+    "buildHint": "Las compilaciones consumen la asignación compartida según los recursos que utilizan. Solo se aplica un límite de tiempo independiente si está incluido en tu plan guardado.",
+    "apps": "Cupos de servicios",
+    "appsHint": "Reservados por proyectos desplegados y despliegues en cola. Los borradores sin desplegar no consumen cupos.",
     "machine": "CPU y memoria por servicio",
     "machineHint": "La capacidad máxima de CPU y memoria para un servicio. Es un límite, no un saldo compartido.",
     "projects": "Proyectos",
@@ -320,7 +345,7 @@
     "setupOnly": "Requiere suscripción",
     "setupHint": "Elige un plan de Cloud para crear proyectos, compilar código y ejecutar apps.",
     "includedTitle": "Tus recursos",
-    "limitsHint": "Proyectos, servicios en ejecución y tiempo de compilación mensual de tu plan.",
+    "limitsHint": "Proyectos, servicios en ejecución y cualquier límite de tiempo de compilación incluido en tu plan.",
     "balanceRule": "Las apps se pausan al agotarse la cuota de uso. Añade más uso para continuar o mejora el plan para aumentar los límites de recursos.",
     "reset": "La cuota de compilación se renueva el {date}",
     "cpuHint": "Procesamiento utilizado a lo largo del tiempo. 1 vCPU durante 1 hora equivale a 1 vCPU-hora.",
@@ -340,7 +365,12 @@
     "usageIncluded": "Incluye una cuota de uso compartida",
     "usageSummary": "Las compilaciones y las apps en ejecución comparten una cuota de uso. Las máquinas más grandes y los tiempos de ejecución más largos consumen más.",
     "usageDetails": "Detalles de uso",
-    "usagePercent": "{percent}% utilizado"
+    "usagePercent": "{percent}% utilizado",
+    "poolHint": "Compartido por todos los espacios, incluidos los detenidos y los cambios pendientes.",
+    "creditUnitsHint": "Los créditos miden consumo de recursos, no minutos. CPU, memoria, actividad de disco y transferencia tienen tarifas propias.",
+    "topupCapacityHint": "Las recargas añaden créditos de uso. Mejora el plan para ampliar CPU, RAM o almacenamiento.",
+    "poolTitle": "Capacidad compartida",
+    "poolCapacity": "{cpu} vCPU · {ram} GB de RAM · {disk} GB de disco"
   },
   "onboarding": {
     "workspaceDescription": "Elige un plan de Cloud para crear proyectos, compilar código y ejecutar tus apps. Antes de suscribirte no se incluyen proyectos ni recursos de cómputo.",
@@ -404,5 +434,18 @@
     "currentPeriod": "Período de facturación actual",
     "viewUsage": "Ver uso detallado",
     "bandwidthPerMonth": "{amount} GB / mes"
+  },
+  "creditAlert": {
+    "lowTitle": "Quedan pocos créditos de Cloud",
+    "lowDescription": "Has usado el {percent}% de tu cuota, incluidos los créditos comprados. Quedan {credits} créditos.",
+    "graceTitle": "Estás usando créditos de margen",
+    "graceDescription": "Tus créditos pagados se han agotado. Quedan {credits} créditos de margen antes de bloquear nuevas cargas de trabajo.",
+    "exhaustedTitle": "Créditos de Cloud agotados",
+    "exhaustedDescription": "Las nuevas cargas de trabajo están bloqueadas hasta que añadas créditos o se renueve tu cuota pagada. Abre la facturación para ver tus opciones.",
+    "buyCredits": "Comprar más créditos",
+    "openBilling": "Abrir facturación",
+    "close": "Entendido",
+    "opening": "Abriendo la facturación de la organización de esta alerta…",
+    "wrongOrganization": "Este enlace de facturación no está disponible para tu cuenta. Inicia sesión con una cuenta de la organización de la alerta."
   }
 }

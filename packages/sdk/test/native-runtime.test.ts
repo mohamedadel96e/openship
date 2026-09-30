@@ -1,10 +1,32 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { createShip, OperationError, type OwnedShip, type VerifiedIdentity } from "../src/native";
+
+// The engine owns a real worker, so a fetch mock in this test's thread would not
+// reach GitHub validation. Preload only the provider fixture inside each worker.
+vi.mock("node:worker_threads", async (original) => {
+  const actual = await original<typeof import("node:worker_threads")>();
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(filename: string | URL, options: import("node:worker_threads").WorkerOptions = {}) {
+        super(filename, {
+          ...options,
+          execArgv: [
+            ...(options.execArgv ?? []),
+            "--import",
+            new URL("./fixtures/github-fetch.mjs", import.meta.url).href,
+          ],
+        });
+      }
+    },
+  };
+});
 
 const execute = promisify(execFile);
 const key = "native-integration-test-persistent-key-32-bytes";
@@ -14,6 +36,56 @@ beforeAll(async () => {
 }, 60_000);
 
 describe("owned native platform on Node", () => {
+  it("streams shared file status and routes storage status through the native worker", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "openship-native-storage-"));
+    let identity: VerifiedIdentity | null = null;
+    let ship: OwnedShip<string> | undefined;
+    const cancellation = new AbortController();
+    try {
+      ship = await createShip({
+        instanceId: "storage",
+        stateDirectory: directory,
+        storage: { driver: "pglite", dataDir: "memory://" },
+        encryptionKey: key,
+        runtime: "bare",
+        routing: "none",
+        administration: true,
+        identity: { resolve: async () => identity },
+      });
+      const mapped = await ship.operator!.ensureIdentity({
+        issuer: "storage", subject: "alice", email: "alice@example.test",
+      });
+      identity = { user: mapped.user, sessionId: "storage" };
+      await ship.start();
+      const scope = await ship.scope({ identity: "verified", organizationId: mapped.personalOrganizationId });
+      const project = await scope.projects.create({ name: "Files", slug: "files", gitProvider: "upload" });
+      expect(await scope.projects.listClusterVolumes(project.id)).toEqual([]);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const events = scope.projects.streamClusterVolumeEvents(project.id, { signal: cancellation.signal });
+        try {
+          const first = await events.next();
+          expect(first.value?.event).toBe("snapshot");
+          expect(JSON.parse(first.value!.data).run).toEqual({ volumes: [], backups: [] });
+        } finally {
+          await events.return(undefined);
+        }
+      }
+      const storage = scope.servers.clusterStorageEvents("missing-cluster", { signal: cancellation.signal });
+      try {
+        await expect(storage.next()).rejects.toMatchObject({ code: "NOT_FOUND" });
+      } finally {
+        await storage.return(undefined);
+      }
+      cancellation.abort();
+      await expect(scope.projects.streamClusterVolumeEvents(project.id, { signal: cancellation.signal }).next())
+        .rejects.toMatchObject({ name: "AbortError" });
+    } finally {
+      cancellation.abort();
+      await ship?.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("persists operator notices while ordinary scopes only read public announcements", async () => {
     const directory = await mkdtemp(join(tmpdir(), "openship-native-notices-"));
     let identity: VerifiedIdentity | null = null;
@@ -151,6 +223,8 @@ describe("owned native platform on Node", () => {
       expect(await scope.notifications.testChannel(inbox.channel.id)).toEqual({ ok: true, verified: true });
       const subscription = await scope.notifications.upsertSubscription({ category: "deploy.failed", channelId: inbox.channel.id, enabled: true });
       await scope.settings.setCloneCredentials({ token: "persistent-private-token", asDefault: true });
+      await expect(scope.settings.setCloneCredentials({ token: "rejected-token" }))
+        .rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_ERROR" });
       await scope.settings.setTransferPreferences({ transferMode: "direct", transferCompression: "zstd" });
       expect(await scope.updates.list()).toEqual([]);
       expect(await scope.updates.scan()).toEqual({ scanned: 0, supported: 0 });
@@ -177,6 +251,7 @@ describe("owned native platform on Node", () => {
       await expect(scope.notifications.removeChannel(inbox.channel.id)).rejects.toMatchObject({ code: "TOKEN_READ_ONLY" });
       identity = { user: bob.user, sessionId: "bob" };
       const other = await ship.scope({ identity: "verified", organizationId: bob.personalOrganizationId });
+      expect((await other.settings.get()).cloneToken.hasToken).toBe(false);
       expect(await other.notifications.listChannels()).toEqual([]);
       await expect(other.notifications.testChannel(created.channel.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
     } finally { await ship?.close(); await rm(directory, { recursive: true, force: true }); }
@@ -770,6 +845,74 @@ describe("owned native platform on Node", () => {
       await rm(directory, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("serves a native HTTP app, immediately redeploys a directory with updated env, and stops it on deletion", async () => {
+    const listener = createServer();
+    await new Promise<void>((resolve, reject) => {
+      listener.once("error", reject);
+      listener.listen(0, "127.0.0.1", resolve);
+    });
+    const port = (listener.address() as import("node:net").AddressInfo).port;
+    await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+
+    const directory = await mkdtemp(join(tmpdir(), "openship-native-http-"));
+    const source = join(directory, "source");
+    await mkdir(source);
+    let identity: VerifiedIdentity | null = null;
+    const ship = await createShip({
+      instanceId: "http-app", stateDirectory: directory, storage: { driver: "pglite", dataDir: "memory://" },
+      encryptionKey: key, runtime: "bare", routing: "none", administration: true,
+      policy: { allowHostExecution: true, sourceRoots: [source] },
+      identity: { resolve: async () => identity },
+    });
+    let cleanup: (() => Promise<void>) | undefined;
+    try {
+      const mapped = await ship.operator!.ensureIdentity({ issuer: "host", subject: "http-owner", email: "http@example.test" });
+      identity = { user: mapped.user, sessionId: "http-session" };
+      await ship.start();
+      const scope = await ship.scope({ identity: "verified", organizationId: mapped.personalOrganizationId });
+      const files = (version: number) => ({
+        "package.json": JSON.stringify({ name: "native-http-app", private: true, type: "module", scripts: { start: "node server.mjs" } }),
+        "openship.json": JSON.stringify({ runtime: "bare", workload: "web", port, installCommand: "", buildCommand: "", startCommand: "node server.mjs" }),
+        "server.mjs": [
+          'import { createServer } from "node:http";',
+          `const server = createServer((_req, res) => res.end(JSON.stringify({ version: ${version}, value: process.env.SDK_TEST_VALUE ?? null })));`,
+          `server.listen(Number(process.env.PORT || ${port}), "127.0.0.1");`,
+          'process.on("SIGTERM", () => server.close(() => process.exit(0)));',
+        ].join("\n"),
+      });
+      const first = await scope.deploy({ name: "native-http-app", source: { type: "files", files: files(1) } });
+      const projectId = first.project_id;
+      cleanup = async () => { expect(await scope.projects.remove(projectId)).toMatchObject({ ok: true }); };
+      const wait = async (deploymentId: string) => {
+        const outcome = await scope.deployment(deploymentId).wait({ timeoutMs: 30_000, pollIntervalMs: 50 });
+        expect(outcome, JSON.stringify(await scope.deployments.logs(deploymentId))).toMatchObject({ success: true, status: "ready" });
+      };
+      const url = `http://127.0.0.1:${port}`;
+      const checkHttp = async (version: number, value: string | null) => {
+        const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ version, value });
+      };
+
+      await wait(first.deployment_id);
+      await checkHttp(1, null);
+      await scope.projects.mergeEnvVars(projectId, {
+        environment: "production", upserts: [{ key: "SDK_TEST_VALUE", value: "directory-v2", isSecret: false }], deletes: [],
+      });
+      for (const [path, content] of Object.entries(files(2))) await writeFile(join(source, path), content);
+      const second = await scope.deploy({ name: "native-http-app", projectId, source: { type: "directory", path: source } });
+      await wait(second.deployment_id);
+      await checkHttp(2, "directory-v2");
+      expect((await scope.deployments.list({ projectId })).total).toBe(2);
+      await cleanup();
+      cleanup = undefined;
+      await expect(fetch(url, { signal: AbortSignal.timeout(2000) })).rejects.toThrow();
+    } finally {
+      try { await cleanup?.(); }
+      finally { await ship.close(); await rm(directory, { recursive: true, force: true }); }
+    }
+  }, 90_000);
 
   it("deploys generated code through the real pipeline and keeps artifacts inside its owned directory", async () => {
     const directory = await mkdtemp(join(tmpdir(), "openship-generated-test-"));

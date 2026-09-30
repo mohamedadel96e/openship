@@ -18,7 +18,7 @@ import type { ResolvedPlanGrant } from "./billing-plan-grants";
 
 // Read compatibility for subscriptions sold before Openship owned its offers.
 // New checkouts never use these platform catalog IDs.
-const LEGACY_PLAN_IDS: Readonly<Record<PlanTierId, string>> = {
+const LEGACY_PLAN_IDS: Readonly<Partial<Record<PlanTierId, string>>> = {
   free: "free", starter: "hobby", pro: "pro", team: "scale", enterprise: "enterprise",
 };
 
@@ -26,14 +26,37 @@ const LEGACY_PLAN_IDS: Readonly<Record<PlanTierId, string>> = {
 // allowances for new offers without an enforced namespace traffic policy.
 export const CLOUD_EDGE_BANDWIDTH_GB: Readonly<Record<PlanTierId, number | null>> = {
   free: 0,
+  hobby: null,
   starter: null,
   pro: null,
   team: null,
   enterprise: null,
 };
 
-export const OFFER_VERSION = "1";
+export const OFFER_VERSION = "3";
 export const offerReference = (tier: PlanTierId) => `openship:${tier}:v${OFFER_VERSION}`;
+
+export function supportedOfferReference(reference: string | undefined, tier: PlanTierId): boolean {
+  return reference === offerReference(tier) || (tier !== "hobby" &&
+    (reference === `openship:${tier}:v1` || reference === `openship:${tier}:v2`));
+}
+
+/** v1 left resource sizes inherited from the Enterprise reseller. Apply the
+ * documented safety ceiling without changing paid credits, price or period.
+ * New offers retain their complete saved allocation through renewal. */
+export function savedResourceLimits(tier: PlanTierId, offer: OblienOffer): ReturnType<typeof cloudNamespaceLimits> {
+  if (!offer.resourceLimits || !supportedOfferReference(offer.reference, tier)) invalidContract();
+  const legacy = offer.reference === `openship:${tier}:v1`;
+  const ceiling = cloudNamespaceLimits(tier);
+  const keys = Object.keys(ceiling) as Array<keyof typeof ceiling>;
+  return Object.fromEntries(keys.map(key => {
+    const saved = offer.resourceLimits![key];
+    if (!legacy && (saved === undefined || (tier !== "enterprise" && saved === null))) invalidContract();
+    const policy = saved ?? null;
+    const limit = ceiling[key];
+    return [key, legacy && limit != null ? (policy == null ? limit : Math.min(policy, limit)) : policy];
+  })) as typeof ceiling;
+}
 
 function invalidContract(): never {
   throw new AppError(
@@ -55,15 +78,16 @@ export function subscriptionPlan(subscription: OblienSubscription, organizationI
   }
   const { offer, metadata } = subscription;
   const tier = metadata?.openship_plan as PlanTierId;
-  if (!PLAN_IDS.includes(tier) || tier === "free" || !offer || offer.reference !== offerReference(tier) ||
-      metadata?.openship_offer_version !== OFFER_VERSION || !metadata.openship_organization || !metadata.openship_namespace ||
+  const version = metadata?.openship_offer_version;
+  if (!PLAN_IDS.includes(tier) || tier === "free" || !offer || !metadata || !supportedOfferReference(offer.reference, tier) ||
+      !["1", "2", OFFER_VERSION].includes(version ?? "") || offer.reference !== `openship:${tier}:v${version}` || !metadata.openship_organization || !metadata.openship_namespace ||
       (organizationId !== undefined && metadata.openship_organization !== organizationId) ||
       (namespace !== undefined && metadata.openship_namespace !== namespace) || !offer.policy || !offer.resourceLimits) invalidContract();
   let decoded: unknown;
   try { decoded = JSON.parse(metadata.openship_limits ?? ""); } catch { invalidContract(); }
   const parsed = planLimitsSchema.strict().safeParse(decoded);
   if (!parsed.success) invalidContract();
-  return { tier, limits: parsed.data, resourceLimits: offer.resourceLimits };
+  return { tier, limits: parsed.data, resourceLimits: savedResourceLimits(tier, offer) };
 }
 
 /** Openship controls the price, credit allowance and checkout copy. */
@@ -139,6 +163,7 @@ export function presentCloudPlans(requestedLocale?: string): BillingPlans {
           ? null
           : fromOblienCredits(raw.billing.yearlyCreditsPerCycle),
       limits: { ...plan.limits, workloads: [...plan.limits.workloads] },
+      resourceLimits: cloudNamespaceLimits(id),
       features: [...plan.features],
       inheritedFrom: plan.inheritedFrom ?? null,
       support: plan.support,
@@ -159,7 +184,7 @@ export async function cloudPlan(tier: PlanTierId, subscription?: OblienSubscript
   // Legacy subscriptions have no saved reseller price. Preserve their controls
   // and measured balance without displaying the new catalog as a past purchase.
   if (!plan || subscription?.tierId !== "reseller" || !subscription.offer) return null;
-  const { limits } = subscriptionPlan(subscription);
+  const { limits, resourceLimits } = subscriptionPlan(subscription);
   const offer = subscription.offer;
   const yearly = subscription.billingInterval === "yearly";
   return {
@@ -167,6 +192,7 @@ export async function cloudPlan(tier: PlanTierId, subscription?: OblienSubscript
     name: offer.name,
     description: offer.description ?? "",
     limits: { ...limits, workloads: [...limits.workloads] },
+    resourceLimits,
     features: [],
     inheritedFrom: null,
     price: { monthly: yearly ? null : offer.unitAmount, annual: yearly ? offer.unitAmount : null },
@@ -183,6 +209,7 @@ export function complimentaryCloudPlan(grant: ResolvedPlanGrant) {
   return {
     ...plan, name: grant.offer.name, description: grant.offer.description ?? "",
     limits: { ...grant.limits, workloads: [...grant.limits.workloads] },
+    resourceLimits: grant.resourceLimits,
     features: [], inheritedFrom: null, campaign: null,
     price: { monthly: 0, annual: null }, effectivePrice: { monthly: 0 }, listPrice: { monthly: 0 },
     monthlyCredits: fromOblienCredits(grant.offer.credits), annualCredits: null,

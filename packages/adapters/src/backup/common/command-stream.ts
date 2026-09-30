@@ -16,9 +16,9 @@ export function captureCommandOutput(child: RawCommand, opts?: ExecuteCommandOpt
   const consumer = watchArtifactConsumer(stdout, "Backup command");
   let stderr = "";
   let idle: ReturnType<typeof setTimeout> | undefined;
-  let rejectTimeout!: (error: Error) => void;
-  const timeout = new Promise<never>((_, reject) => {
-    rejectTimeout = reject;
+  let rejectFailure!: (error: Error) => void;
+  const failure = new Promise<never>((_, reject) => {
+    rejectFailure = reject;
   });
   const idleMs = opts?.idleTimeoutMs ?? CAPTURE_IDLE_TIMEOUT_MS;
   const timeoutMs = opts?.timeoutMs ?? CAPTURE_TIMEOUT_MS;
@@ -26,7 +26,7 @@ export function captureCommandOutput(child: RawCommand, opts?: ExecuteCommandOpt
     clearTimeout(idle);
     idle = setTimeout(
       () =>
-        rejectTimeout(
+        rejectFailure(
           new Error(`Backup command produced no data for ${Math.round(idleMs / 1000)}s`),
         ),
       idleMs,
@@ -35,7 +35,7 @@ export function captureCommandOutput(child: RawCommand, opts?: ExecuteCommandOpt
   };
   const ceiling = setTimeout(
     () =>
-      rejectTimeout(
+      rejectFailure(
         new Error(`Backup command exceeded its ${Math.round(timeoutMs / 1000)}s ceiling`),
       ),
     timeoutMs,
@@ -45,9 +45,14 @@ export function captureCommandOutput(child: RawCommand, opts?: ExecuteCommandOpt
     stderr = (stderr + chunk.toString("utf8")).slice(-16 * 1024);
     touch();
   };
-  const onError = (error: Error) => stdout.destroy(error);
+  const onError = (error: Error) => {
+    // The process may still run after stdout reaches EOF. Destroying that
+    // already-closed stream cannot signal cancellation or a later stderr error.
+    rejectFailure(error);
+    stdout.destroy(error);
+  };
   const onAbort = () =>
-    stdout.destroy(
+    onError(
       opts?.signal?.reason instanceof Error
         ? opts.signal.reason
         : new Error("Backup command cancelled"),
@@ -69,7 +74,7 @@ export function captureCommandOutput(child: RawCommand, opts?: ExecuteCommandOpt
       const [code] = await Promise.race([
         Promise.all([child.onClose, finished(stdout, { readable: false, cleanup: true })]),
         consumer.promise,
-        timeout,
+        failure,
       ]);
       return { code, stderr };
     } catch (error) {

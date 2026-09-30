@@ -10,16 +10,17 @@
   },
   "page": {
     "title": "新建项目",
-    "subtitle": "导入仓库、粘贴 URL 或从模板开始",
+    "subtitle": "部署应用或导入你自己的项目。",
     "tabs": {
       "folder": "文件夹",
       "github": "GitHub",
-      "url": "Git URL",
-      "template": "模板"
+      "templates": "模板",
+      "gitUrl": "Git 链接"
     }
   },
   "connect": {
     "connectGithub": "连接 GitHub",
+    "deployApp": "部署应用",
     "manageInSettings": "在设置中管理",
     "terminal": {
       "title": "连接 GitHub",
@@ -45,6 +46,20 @@
       "ghCliDesc": "使用你本机的 GitHub 登录。无需云端。",
       "useGhCli": "使用 gh CLI",
       "connecting": "连接中…"
+    },
+    "installationPicker": {
+      "title": "选择 GitHub 访问权限",
+      "description": "为此工作区选择现有的 App 安装。",
+      "sharedHint": "在此使用不会更改其他 Openship 连接。",
+      "connect": "使用此账户",
+      "connected": "已连接",
+      "installAnother": "在其他 GitHub 账户上安装",
+      "failed": "无法连接此安装。",
+      "tryAgain": "重新开始",
+      "successTitle": "GitHub 已连接",
+      "successDescription": "仓库访问已就绪，可以返回 Openship。",
+      "errorTitle": "GitHub 连接需要处理",
+      "returnToApp": "返回资源库"
     }
   },
   "folderUpload": {
@@ -124,8 +139,6 @@
     "noMatchingDesc": "请尝试其他搜索词或调整筛选条件",
     "noReposDesc": "此账户尚无任何仓库",
     "privateBadge": "私有",
-    "localOnly": "仅限本地",
-    "localOnlyTooltip": "Openship App 未安装在 {owner} 上。仅支持本地构建——在该所有者上安装 App 即可启用远程部署。",
     "repoCountSingular": "{count} 个仓库",
     "repoCountPlural": "{count} 个仓库",
     "matching": "匹配“{query}”",
@@ -159,7 +172,7 @@
     "checking": "检查中…",
     "notConnectedManage": "未连接——在设置中管理",
     "optional": "可选",
-    "footnote": "本地库通过 gh CLI 访问；远程部署使用短期令牌——",
+    "footnote": "管理用于浏览和部署仓库的 GitHub 连接。",
     "manageGithubSettings": "在设置中管理 GitHub"
   },
   "urlImport": {

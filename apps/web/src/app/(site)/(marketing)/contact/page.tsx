@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Navbar, Footer } from "@/components/landing";
 import { ContactForm } from "@/components/contact-form";
+import { SUPPORT_EMAIL } from "@repo/core";
 
 const PAGE_TITLE = "Contact Us";
 const PAGE_DESCRIPTION =
@@ -36,7 +37,7 @@ export default function ContactPage() {
               <span className="legal-title-soft">Send us a message.</span>
             </h1>
             <p className="legal-meta">
-              Fill out the form below and we&rsquo;ll reply within 24 hours.
+              Send a request to the Openship team. We&rsquo;ll save it and reply by email.
             </p>
           </div>
         </section>
@@ -48,9 +49,9 @@ export default function ContactPage() {
                 <p className="legal-toc-title">Contact info</p>
                 <ol>
                   <li>
-                    <a href="mailto:support@oblien.com">
+                    <a href={`mailto:${SUPPORT_EMAIL}`}>
                       <span className="legal-toc-n">01</span>
-                      Support
+                      {SUPPORT_EMAIL}
                     </a>
                   </li>
                   <li>

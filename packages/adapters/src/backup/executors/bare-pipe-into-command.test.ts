@@ -84,27 +84,41 @@ describe("BareBackupExecutor.pipeIntoCommand ceiling", () => {
   });
 
   it("bounds the staging fallback's transfer, and cleans up after it", async () => {
+    vi.useFakeTimers();
     const { stat } = await import("node:fs/promises");
     let stagedDir: string | undefined;
+    let transferStarted!: () => void;
+    const transferring = new Promise<void>((resolve) => {
+      transferStarted = resolve;
+    });
 
     // No `execWithInput` — the shape a local, non-SSH CommandExecutor has, which is the
     // only way into the staging branch.
     const exec = {
       rawExec: async (command: string) => {
         expect(command).not.toContain("psql");
-        return { stdout: Readable.from([]), stderr: Readable.from([]), onClose: Promise.resolve(0), kill: () => {} };
+        return {
+          stdout: Readable.from([]),
+          stderr: Readable.from([]),
+          onClose: Promise.resolve(0),
+          kill: () => {},
+        };
       },
       transferIn: async (localDir: string) => {
         stagedDir = localDir;
+        transferStarted();
         return new Promise<never>(() => {});
       },
     };
 
-    await expect(
+    const assertion = expect(
       executorWith(exec).pipeIntoCommand(service, ["sh", "-c", "psql"], Readable.from(["dump"]), {
         timeoutMs: 120,
       }),
     ).rejects.toThrow(/may hold partial data/);
+    await transferring;
+    await vi.advanceTimersByTimeAsync(120);
+    await assertion;
 
     // The staged artifact is the module's last unbounded resource — a ceiling that
     // leaked it would fill the control plane's disk one abandoned restore at a time.
@@ -113,32 +127,58 @@ describe("BareBackupExecutor.pipeIntoCommand ceiling", () => {
   });
 
   it("hands the staging fallback's remaining budget to the exec itself", async () => {
+    vi.useFakeTimers();
     let killed = false;
     let onClose: (code: number) => void = () => {};
+    let transferStarted!: () => void;
+    const transferring = new Promise<void>((resolve) => {
+      transferStarted = resolve;
+    });
+    let loaderStarted!: () => void;
+    const loading = new Promise<void>((resolve) => {
+      loaderStarted = resolve;
+    });
     const exec = {
-      rawExec: async (command: string) => command.includes("psql") ? ({
-        stdout: Readable.from([]),
-        stderr: new PassThrough(),
-        onClose: new Promise<number>((resolve) => {
-          onClose = resolve;
-        }),
-        // What `execStream`'s own ceiling reaches for. Before the budget was forwarded
-        // this was never called, because there was no ceiling to reach it with.
-        kill: () => {
-          killed = true;
-          onClose(137);
-        },
-      }) : ({ stdout: Readable.from([]), stderr: Readable.from([]), onClose: Promise.resolve(0), kill: () => {} }),
-      transferIn: async () => {},
+      rawExec: async (command: string) =>
+        command.includes("psql")
+          ? {
+              stdout: Readable.from([]),
+              stderr: new PassThrough(),
+              onClose: new Promise<number>((resolve) => {
+                onClose = resolve;
+                loaderStarted();
+              }),
+              // What `execStream`'s own ceiling reaches for. Before the budget was forwarded
+              // this was never called, because there was no ceiling to reach it with.
+              kill: () => {
+                killed = true;
+                onClose(137);
+              },
+            }
+          : {
+              stdout: Readable.from([]),
+              stderr: Readable.from([]),
+              onClose: Promise.resolve(0),
+              kill: () => {},
+            },
+      transferIn: async () => {
+        transferStarted();
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      },
     };
 
-    await expect(executorWith(exec).pipeIntoCommand(
-      service,
-      ["sh", "-c", "psql"],
-      Readable.from(["dump"]),
-      { timeoutMs: 150 },
-    )).rejects.toThrow(/ceiling/);
-
+    const assertion = expect(
+      executorWith(exec).pipeIntoCommand(service, ["sh", "-c", "psql"], Readable.from(["dump"]), {
+        timeoutMs: 150,
+      }),
+    ).rejects.toThrow(/ceiling/);
+    await transferring;
+    await vi.advanceTimersByTimeAsync(60);
+    await loading;
+    await vi.advanceTimersByTimeAsync(89);
+    expect(killed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await assertion;
     expect(killed).toBe(true);
   });
 });

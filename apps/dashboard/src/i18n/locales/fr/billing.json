@@ -1,4 +1,21 @@
 {
+  "home": {
+    "label": "Openship Cloud",
+    "title": "Prêt à lancer ?",
+    "plansAndBilling": "Offres et facturation",
+    "description": "Builds et hébergement gérés, avec de la place pour grandir.",
+    "manageDescription": "Votre offre, votre utilisation et votre facturation au même endroit.",
+    "purchasesUnavailable": "Les nouveaux abonnements sont indisponibles pour le moment.",
+    "viewPlans": "Découvrir les offres"
+  },
+  "welcome": {
+    "eyebrow": "Tout est prêt",
+    "title": "Bienvenue sur {name}",
+    "description": "Votre offre Cloud est active. À vous de jouer.",
+    "dismiss": "Fermer le message de bienvenue",
+    "openProjects": "Ouvrir les projets",
+    "viewPlan": "Voir mon offre"
+  },
   "capacity": {
     "title": "Capacité et utilisation",
     "subtitle": "Capacité incluse dans votre forfait et ce que vous avez utilisé. Les chiffres en direct se synchronisent depuis Openship Cloud.",
@@ -89,6 +106,14 @@
     "replacementNotice": "Changer d’offre ou de périodicité démarre un nouveau cycle au tarif complet choisi après paiement. Aucun prorata automatique n’est appliqué.",
     "changeViaSupport": "Contactez l’assistance pour modifier votre abonnement actuel.",
     "billingUnavailable": "Les achats ne sont pas encore disponibles pour ce compte."
+  },
+  "complimentary": {
+    "label": "Offert · Sans frais",
+    "untilRevoked": "Actif jusqu’à révocation",
+    "expiresOn": "Disponible jusqu’au {date}",
+    "creditsRenewOn": "Crédits renouvelés le {date}",
+    "changeViaSupport": "Le support gère les modifications de votre forfait offert.",
+    "topupsUnavailable": "Le support gère l’usage supplémentaire de votre forfait offert."
   },
   "pricing": {
     "custom": "Personnalisé",
@@ -306,9 +331,9 @@
     "creditsPerCycle": "{amount} crédits / cycle de facturation",
     "buildTime": "Temps de compilation",
     "buildMinutes": "{amount} min / mois",
-    "buildHint": "Temps consacré au build de votre code. Un build de 5 minutes utilise 5 minutes de votre quota mensuel.",
-    "apps": "Services actifs",
-    "appsHint": "Applications, bases de données et workers exécutés en même temps. Chaque service Compose actif compte dans cette limite.",
+    "buildHint": "Les builds consomment le quota partagé selon les ressources utilisées. Une limite de temps distincte ne s’applique que si elle est incluse dans votre offre enregistrée.",
+    "apps": "Places de services",
+    "appsHint": "Réservées par les projets déployés et les déploiements en attente. Les brouillons non déployés n'utilisent aucune place.",
     "machine": "CPU et mémoire par service",
     "machineHint": "La capacité maximale de CPU et de mémoire pour un service. Il s’agit d’une limite, pas d’un solde partagé.",
     "projects": "Projets",
@@ -320,7 +345,7 @@
     "setupOnly": "Abonnement requis",
     "setupHint": "Choisissez une offre Cloud pour créer des projets, compiler votre code et exécuter des apps.",
     "includedTitle": "Vos ressources",
-    "limitsHint": "Projets, services actifs et temps de build mensuel de votre offre.",
+    "limitsHint": "Projets, services en cours et éventuelle limite de temps de build incluse dans votre offre.",
     "balanceRule": "Les apps sont mises en pause lorsque le quota est épuisé. Ajoutez de l’utilisation pour continuer ou passez à une offre supérieure pour augmenter les limites.",
     "reset": "Le quota de compilation est renouvelé le {date}",
     "cpuHint": "Puissance de calcul utilisée dans le temps. 1 vCPU pendant 1 heure correspond à 1 vCPU-heure.",
@@ -340,7 +365,12 @@
     "usageIncluded": "Quota d’utilisation partagé inclus",
     "usageSummary": "Les builds et les apps en cours d’exécution partagent un quota d’utilisation. Les machines plus grandes et les durées plus longues consomment davantage.",
     "usageDetails": "Détails de l’utilisation",
-    "usagePercent": "{percent} % utilisé"
+    "usagePercent": "{percent} % utilisé",
+    "poolHint": "Partagé entre tous les espaces, y compris ceux arrêtés et les changements en attente.",
+    "creditUnitsHint": "Les crédits mesurent la consommation, pas des minutes. CPU, mémoire, activité disque et transfert ont chacun leur tarif.",
+    "topupCapacityHint": "Les recharges ajoutent des crédits. Changez de forfait pour augmenter CPU, RAM ou stockage.",
+    "poolTitle": "Capacité partagée",
+    "poolCapacity": "{cpu} vCPU · {ram} Go de RAM · {disk} Go de disque"
   },
   "onboarding": {
     "workspaceDescription": "Choisissez une offre Cloud pour créer des projets, compiler votre code et exécuter vos apps. Aucun projet ni ressource de calcul n’est inclus avant l’abonnement.",
@@ -404,5 +434,18 @@
     "currentPeriod": "Période de facturation actuelle",
     "viewUsage": "Voir la consommation détaillée",
     "bandwidthPerMonth": "{amount} Go / mois"
+  },
+  "creditAlert": {
+    "lowTitle": "Crédits Cloud bientôt épuisés",
+    "lowDescription": "Vous avez utilisé {percent}% de votre quota, crédits achetés inclus. Il reste {credits} crédits.",
+    "graceTitle": "Vous utilisez les crédits de tolérance",
+    "graceDescription": "Vos crédits payés sont épuisés. Il reste {credits} crédits de tolérance avant le blocage des nouvelles charges de travail.",
+    "exhaustedTitle": "Crédits Cloud épuisés",
+    "exhaustedDescription": "Les nouvelles charges de travail sont bloquées jusqu’à l’ajout de crédits ou au renouvellement payé du quota. Consultez la facturation pour voir vos options.",
+    "buyCredits": "Acheter des crédits",
+    "openBilling": "Ouvrir la facturation",
+    "close": "Compris",
+    "opening": "Ouverture de la facturation de l’organisation concernée…",
+    "wrongOrganization": "Ce lien de facturation est indisponible pour votre compte. Connectez-vous avec un compte membre de l’organisation concernée."
   }
 }

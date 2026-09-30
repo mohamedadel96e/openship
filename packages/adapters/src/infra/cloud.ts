@@ -1,11 +1,36 @@
 import type { Oblien, DomainRoute } from "oblien";
+import { isIP } from "node:net";
+import { AppError } from "@repo/core";
 import type { ManualCert, RouteConfig, SslResult } from "../types";
 import type { RoutingProvider, SslProvider, ProvisionCertOptions } from "./types";
 import type { CloudAdminProxy } from "../runtime/cloud";
 import { cloudPageHostnames } from "../runtime/cloud/page-hostnames";
 
+/** Older Page GET responses use flat fields; connect/renew and newer GETs use
+ * the SDK's nested shape. Both must retain an explicit hostname binding. */
+interface PageDomainInfo {
+  domain?: string;
+  customDomain?: string;
+  ssl?: { status?: string | null; expiresAt?: string | null } | null;
+  sslStatus?: string | null;
+  sslExpiry?: string | null;
+}
+
+const normalizeHostname = (hostname: string) => hostname.trim().toLowerCase();
+const disconnected = () => new AppError(
+  "This domain has no Cloud route for this project. Retry routing from Domains & Routes, then verify HTTPS.",
+  409, "CLOUD_DOMAIN_NOT_CONNECTED",
+);
+
+function checkDomainBinding(bound: string | null | undefined, domain: string): void {
+  if (typeof bound !== "string" || normalizeHostname(bound) !== normalizeHostname(domain)) {
+    throw new AppError("The Cloud domain binding changed. Refresh Domains & Routes and retry.", 409, "CLOUD_DOMAIN_CHANGED");
+  }
+}
+
 /** Routing and certificates are provider-owned; no host proxy or certbot here. */
 export class CloudInfraProvider implements RoutingProvider, SslProvider {
+  readonly certificateManagement = "provider" as const;
   constructor(private readonly client: Oblien, private readonly options: {
     namespace?: string; adminProxy?: CloudAdminProxy; dockerWorkspaceId?: string;
   } = {}) {}
@@ -14,7 +39,7 @@ export class CloudInfraProvider implements RoutingProvider, SslProvider {
 
   private async pageForDomain(domain: string) {
     if (!this.options.namespace) throw new Error("Cloud infrastructure requires an organization-scoped platform");
-    const normalized = domain.toLowerCase();
+    const normalized = normalizeHostname(domain);
     const matches = (await this.pages.list()).pages.filter(page =>
       page.namespace === this.options.namespace && cloudPageHostnames(page).includes(normalized));
     if (matches.length > 1) throw new Error("Cloud hostname has ambiguous Page ownership");
@@ -28,14 +53,37 @@ export class CloudInfraProvider implements RoutingProvider, SslProvider {
     return page;
   }
 
+  private async pageDomain(slug: string, domain: string): Promise<PageDomainInfo> {
+    const { domain: info } = await this.pages.getDomain(slug) as { domain: PageDomainInfo | null };
+    checkDomainBinding(info?.customDomain ?? info?.domain, domain);
+    return info!;
+  }
+
+  private async workspaceDomain(workspaceId: string, domain: string) {
+    if (this.options.dockerWorkspaceId && workspaceId !== this.options.dockerWorkspaceId) throw disconnected();
+    const domains = this.client.workspace(workspaceId).domains;
+    const info = await domains.get();
+    checkDomainBinding(info?.customDomain, domain);
+    return { domains, info: info! };
+  }
+
+  private async certificatePage(domain: string) {
+    const page = await this.pageForDomain(domain);
+    if (!page || (this.options.dockerWorkspaceId && (page.source_workspace_id !== this.options.dockerWorkspaceId ||
+        page.exported_path !== `/opt/openship/cloud-docker/routes/${page.slug}`))) throw disconnected();
+    return page;
+  }
+
   private async owner(domain: string): Promise<DomainRoute | undefined> {
     if (!this.options.namespace) throw new Error("Cloud infrastructure requires an organization-scoped platform");
     const result = this.options.adminProxy?.domainRoutes
       ? await this.options.adminProxy.domainRoutes()
-      : await this.client.domain.routes();
-    return result.data.find((route) =>
-      route.hostname.toLowerCase() === domain.toLowerCase() &&
+      : await this.client.domain.routes({ namespace: this.options.namespace });
+    const matches = result.data.filter((route) =>
+      normalizeHostname(route.hostname) === normalizeHostname(domain) &&
       route.namespace === this.options.namespace);
+    if (matches.length > 1) throw new AppError("Cloud hostname ownership is ambiguous. Retry after the provider state updates.", 502, "CLOUD_DOMAIN_AMBIGUOUS");
+    return matches[0];
   }
 
   async registerRoute(route: RouteConfig): Promise<void> {
@@ -59,12 +107,40 @@ export class CloudInfraProvider implements RoutingProvider, SslProvider {
       });
       return;
     }
-    if (owner.owner_type !== "workspace" || !route.targetUrl) {
+    // Public workspace ports are registered as `port`; custom workspace
+    // domains use `workspace`. In both cases owner_id is the workspace ID.
+    if (!["workspace", "port"].includes(owner.owner_type) || !route.targetUrl) {
       throw new Error("Cloud route target does not match its owning resource");
     }
     const target = new URL(route.targetUrl);
-    const current = new URL(owner.target.includes("://") ? owner.target : `http://${owner.target}`);
-    if (target.hostname !== current.hostname || target.username || target.password) {
+    if (!["http:", "https:"].includes(target.protocol) || target.username || target.password) {
+      throw new Error("Cloud route target must belong to its owning workspace");
+    }
+    // `target` becomes a compiled JSON table after routes.set(), and a stored
+    // raw IP can become stale after a restart. Revalidate the live resource;
+    // neither representation of the previous target is ownership evidence.
+    const workspace = await this.client.workspace(owner.owner_id).get();
+    if (
+      workspace.id !== owner.owner_id ||
+      workspace.namespace !== this.options.namespace ||
+      (this.options.dockerWorkspaceId && owner.owner_id !== this.options.dockerWorkspaceId)
+    ) {
+      throw new AppError(
+        "Cloud route workspace is no longer in this project or organization",
+        409,
+        "CLOUD_ROUTE_OWNER_CHANGED",
+      );
+    }
+    const ip = workspace.ip;
+    if (typeof ip !== "string" || !isIP(ip)) {
+      throw new AppError(
+        "The Cloud workspace has no current network address. Start it and retry routing.",
+        409,
+        "CLOUD_WORKSPACE_NOT_READY",
+      );
+    }
+    const current = new URL(`http://${isIP(ip) === 6 ? `[${ip}]` : ip}`);
+    if (target.hostname !== current.hostname) {
       throw new Error("Cloud route target must belong to its owning workspace");
     }
     const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
@@ -94,24 +170,19 @@ export class CloudInfraProvider implements RoutingProvider, SslProvider {
       const page = await this.pageForDomain(domain);
       if (!page) throw new Error("Cloud route Page is unavailable");
       if (owner.is_custom) {
-        const current = await this.pages.getDomain(page.slug);
-        if (current.domain?.domain.toLowerCase() !== domain.toLowerCase()) {
-          throw new Error("Cloud domain changed while removing its route; retry the operation");
-        }
+        await this.pageDomain(page.slug, domain);
         await this.pages.disconnectDomain(page.slug);
       }
       else await this.pages.disable(page.slug);
       return;
     }
-    if (owner.owner_type !== "workspace") throw new Error("Cloud route is owned by an unsupported resource type");
-    const ws = this.client.workspace(owner.owner_id);
+    if (!["workspace", "port"].includes(owner.owner_type))
+      throw new Error("Cloud route is owned by an unsupported resource type");
     if (owner.is_custom) {
-      const current = await ws.domains.get();
-      if (current?.customDomain.toLowerCase() !== domain.toLowerCase()) {
-        throw new Error("Cloud domain changed while removing its route; retry the operation");
-      }
-      await ws.domains.disconnect();
+      const { domains } = await this.workspaceDomain(owner.owner_id, domain);
+      await domains.disconnect();
     } else {
+      const ws = this.client.workspace(owner.owner_id);
       const ports = await ws.publicAccess.list();
       let removed = false;
       for (const exposed of ports) {
@@ -138,17 +209,16 @@ export class CloudInfraProvider implements RoutingProvider, SslProvider {
 
   async verifyCert(domain: string): Promise<SslResult> {
     const owner = await this.owner(domain);
-    if (!owner) throw new Error("Domain is not connected to this organization's cloud resources");
+    if (!owner) throw disconnected();
     if (!owner.is_custom) return { domain, expiresAt: "", issuer: "oblien", verified: false, reason: "not_local" };
     if (owner.owner_type === "page") {
-      const page = await this.pageForDomain(domain);
-      if (!page) throw new Error("Cloud route Page is unavailable");
-      const { domain: info } = await this.pages.getDomain(page.slug);
-      return this.certificate(domain, info?.ssl.status, info?.ssl.expiresAt);
+      const page = await this.certificatePage(domain);
+      const info = await this.pageDomain(page.slug, domain);
+      return this.certificate(domain, info.ssl?.status ?? info.sslStatus, info.ssl?.expiresAt ?? info.sslExpiry);
     }
     if (owner.owner_type !== "workspace") throw new Error("Certificate is owned by an unsupported cloud resource");
-    const info = await this.client.workspace(owner.owner_id).domains.get();
-    return this.certificate(domain, info?.sslStatus, info?.sslExpiry);
+    const { info } = await this.workspaceDomain(owner.owner_id, domain);
+    return this.certificate(domain, info.sslStatus, info.sslExpiry);
   }
 
   async provisionCert(domain: string, opts?: ProvisionCertOptions): Promise<SslResult> {
@@ -159,14 +229,17 @@ export class CloudInfraProvider implements RoutingProvider, SslProvider {
 
   async renewCert(domain: string): Promise<SslResult> {
     const owner = await this.owner(domain);
-    if (!owner) throw new Error("Domain is not connected to this organization's cloud resources");
+    if (!owner) throw disconnected();
     if (!owner.is_custom) return this.verifyCert(domain);
     if (owner.owner_type === "page") {
-      const page = await this.pageForDomain(domain);
-      if (!page) throw new Error("Cloud route Page is unavailable");
+      const page = await this.certificatePage(domain);
+      await this.pageDomain(page.slug, domain);
       await this.pages.renewSSL(page.slug);
     }
-    else if (owner.owner_type === "workspace") await this.client.workspace(owner.owner_id).domains.renewSSL();
+    else if (owner.owner_type === "workspace") {
+      const { domains } = await this.workspaceDomain(owner.owner_id, domain);
+      await domains.renewSSL();
+    }
     else throw new Error("Certificate is owned by an unsupported cloud resource");
     const result = await this.verifyCert(domain);
     return result.verified ? { ...result, reason: "renewed" } : result;

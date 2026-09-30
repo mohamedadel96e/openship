@@ -168,6 +168,18 @@ export interface OpenshipConfig {
   installCommand?: string;
   buildCommand?: string;
   startCommand?: string;
+  /**
+   * Commands run ONCE per deploy, after the build and before the new version is
+   * activated — for example, database migrations. A non-zero exit FAILS the
+   * deploy, so the old version keeps serving rather than a new one coming up
+   * against a schema it can't use.
+   *
+   * Each command gets its own execution context and log marker. Only effects in
+   * a database or persistent volume survive a Docker release container. Commands
+   * must be idempotent; a code rollback does not undo their data changes.
+   * Absent/[] disables the phase. Nothing is auto-injected per framework.
+   */
+  releaseCommands?: string[];
   outputDirectory?: string;
   buildImage?: string;
   productionPaths?: string[];

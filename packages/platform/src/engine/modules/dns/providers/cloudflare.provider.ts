@@ -20,6 +20,7 @@ import {
   OPENSHIP_RECORD_COMMENT,
   isOpenshipManaged,
 } from "../types";
+import { quotedDnsTxt } from "../../../lib/dns-txt";
 
 const CF_API_BASE = "https://api.cloudflare.com/client/v4";
 
@@ -184,6 +185,8 @@ function zoneCandidates(hostname: string): string[] {
 export const cloudflareDnsProvider: DnsProvider = {
   name: "cloudflare",
 
+  formatContent(type, content) { return type === "TXT" ? quotedDnsTxt(content) : content; },
+
   descriptor: {
     name: "cloudflare",
     displayName: "Cloudflare",
@@ -273,6 +276,7 @@ export const cloudflareDnsProvider: DnsProvider = {
     input: DnsRecordInput,
   ): Promise<DnsRecord> {
     const name = normalizeName(input.name);
+    const content = this.formatContent!(input.type, input.content);
     const desiredTtl = input.ttl ?? 1; // 1 = "automatic" in Cloudflare
     const ownMarker = input.comment ?? OPENSHIP_RECORD_COMMENT;
 
@@ -302,7 +306,7 @@ export const cloudflareDnsProvider: DnsProvider = {
       const comment = isOpenshipManaged(target) ? ownMarker : target.comment;
 
       const unchanged =
-        target.content === input.content &&
+        target.content === content &&
         target.proxied === proxied &&
         target.ttl === desiredTtl &&
         (input.priority == null || target.priority === input.priority) &&
@@ -317,7 +321,7 @@ export const cloudflareDnsProvider: DnsProvider = {
           body: JSON.stringify({
             type: input.type,
             name,
-            content: input.content,
+            content,
             ttl: desiredTtl,
             proxied,
             ...(input.priority != null ? { priority: input.priority } : {}),
@@ -338,7 +342,7 @@ export const cloudflareDnsProvider: DnsProvider = {
         body: JSON.stringify({
           type: input.type,
           name,
-          content: input.content,
+          content,
           ttl: desiredTtl,
           proxied: input.proxied ?? false,
           ...(input.priority != null ? { priority: input.priority } : {}),

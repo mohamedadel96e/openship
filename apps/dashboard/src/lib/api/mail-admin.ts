@@ -7,7 +7,7 @@
  * row shapes. The /emails admin tabs consume these directly.
  */
 
-import type { RelayProviderId } from "@repo/core";
+import type { RelayProviderId, MailCertificateStatus } from "@repo/core";
 import { api } from "./client";
 import { endpoints } from "./endpoints";
 import type { DnsRecords, DnsRecord, MailComponentStatus } from "./mail";
@@ -282,6 +282,12 @@ export interface ConfigureRelayPayload {
 // ─── Client ──────────────────────────────────────────────────────────────────
 
 export const mailAdminApi = {
+  certificate: {
+    get: (serverId: string) => api.get<MailCertificateStatus>(endpoints.mail.admin.certificate(serverId), { timeout: 60_000 }),
+    check: (serverId: string) => api.post<MailCertificateStatus>(`${endpoints.mail.admin.certificate(serverId)}/check`, {}, { timeout: 60_000 }),
+    renew: (serverId: string) => api.post<MailCertificateStatus>(`${endpoints.mail.admin.certificate(serverId)}/renew`, {}, { timeout: 180_000 }),
+    update: (serverId: string, autoRenew: boolean) => api.patch<MailCertificateStatus>(endpoints.mail.admin.certificate(serverId), { autoRenew }, { timeout: 60_000 }),
+  },
   domains: {
     list: (serverId: string) =>
       api.get<{ domains: AdminDomain[] }>(endpoints.mail.admin.domains(serverId)),

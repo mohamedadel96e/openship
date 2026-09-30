@@ -78,7 +78,7 @@ const HomeWelcome: React.FC = () => {
   return (
     <div className="px-6 pt-5 pb-7 sm:pt-7 sm:pb-8">
       {/* Illustration — the graph: hub ↔ repo / services / data / domain */}
-      <div className="relative mx-auto mb-3 h-36 w-72">
+      <div className="relative mx-auto mb-3 h-36 w-72 max-w-full">
         <svg className="absolute inset-0 h-full w-full" viewBox="0 0 288 132" fill="none" aria-hidden="true">
           {/* Links, behind everything. Dashed = wiring; --th-on-20 is a real step. */}
           <g stroke="var(--th-on-20)" strokeWidth="1.5" strokeDasharray="4 4" fill="none">

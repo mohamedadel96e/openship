@@ -5,5 +5,8 @@
       "handoff": "Revisa los dominios asociados a continuación. La migración configura el proxy de entrada del servidor de destino y pide confirmación si es necesario reemplazar un proxy existente.",
       "warnings": "Revisar {count} avisos de detección"
     }
+  },
+  "entry": {
+    "tab": "Importar proyecto existente"
   }
 }

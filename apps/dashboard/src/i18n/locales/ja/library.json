@@ -10,16 +10,17 @@
   },
   "page": {
     "title": "新規プロジェクト",
-    "subtitle": "リポジトリをインポートするか、URL を貼り付けるか、テンプレートから始めましょう",
+    "subtitle": "アプリをデプロイするか、自分のプロジェクトをインポートします。",
     "tabs": {
       "folder": "フォルダ",
       "github": "GitHub",
-      "url": "Git URL",
-      "template": "テンプレート"
+      "templates": "テンプレート",
+      "gitUrl": "GitのURL"
     }
   },
   "connect": {
     "connectGithub": "GitHub に接続",
+    "deployApp": "アプリをデプロイ",
     "manageInSettings": "設定で管理",
     "terminal": {
       "title": "GitHub に接続",
@@ -45,6 +46,20 @@
       "ghCliDesc": "お使いのマシンの GitHub ログインを使用します。クラウドは不要です。",
       "useGhCli": "gh CLI を使う",
       "connecting": "接続中…"
+    },
+    "installationPicker": {
+      "title": "GitHubへのアクセスを選択",
+      "description": "このワークスペースで使用する既存のAppインストールを選択してください。",
+      "sharedHint": "他のOpenship接続はそのまま維持されます。",
+      "connect": "このアカウントを使用",
+      "connected": "接続済み",
+      "installAnother": "別のGitHubアカウントにインストール",
+      "failed": "このインストールを接続できませんでした。",
+      "tryAgain": "やり直す",
+      "successTitle": "GitHubに接続しました",
+      "successDescription": "リポジトリへのアクセスが準備できました。Openshipに戻れます。",
+      "errorTitle": "GitHub接続の確認が必要です",
+      "returnToApp": "ライブラリに戻る"
     }
   },
   "folderUpload": {
@@ -124,8 +139,6 @@
     "noMatchingDesc": "別の検索語を試すか、フィルターを調整してください",
     "noReposDesc": "このアカウントにはまだリポジトリがありません",
     "privateBadge": "非公開",
-    "localOnly": "ローカルのみ",
-    "localOnlyTooltip": "Openship App が {owner} にインストールされていません。ローカルビルドのみ利用可能です。リモートデプロイを有効にするには、このオーナーに App をインストールしてください。",
     "repoCountSingular": "{count} 件のリポジトリ",
     "repoCountPlural": "{count} 件のリポジトリ",
     "matching": "\"{query}\" に一致",
@@ -159,7 +172,7 @@
     "checking": "確認中…",
     "notConnectedManage": "未接続 — 設定で管理",
     "optional": "任意",
-    "footnote": "gh CLI 経由のローカルライブラリ。リモートデプロイには短命トークンを使用します —",
+    "footnote": "リポジトリの閲覧とデプロイに使用するGitHub接続を管理します。",
     "manageGithubSettings": "設定で GitHub を管理"
   },
   "urlImport": {

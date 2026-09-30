@@ -1,6 +1,7 @@
 import { and, eq, gt, inArray, isNull, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import {
   AppError,
+  MANAGED_STORAGE_CLASS,
   NotFoundError,
   CLUSTER_DATABASE_LEASE_MS,
   clusterDatabaseRunning,
@@ -15,38 +16,15 @@ import type { Database } from "../client";
 import {
   clusterDatabase as table,
   clusterRuntime,
+  clusterStorage,
   project,
   envVar,
-  backupDestination,
 } from "../schema";
 import { isDeepStrictEqual } from "node:util";
+import { lockClusterBackupDestinations } from "./cluster-backup-destination";
 
 export type ClusterDatabaseRecord = typeof table.$inferSelect;
 const conflict = (message: string) => new AppError(message, 409, "CLUSTER_DATABASE_CONFLICT");
-type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
-async function lockDestinations(tx: Transaction, org: string, ids: Array<string | undefined>) {
-  for (const id of [...new Set(ids.filter((id): id is string => !!id))].sort()) {
-    const [destination] = await tx
-      .select()
-      .from(backupDestination)
-      .where(
-        and(
-          eq(backupDestination.id, id),
-          eq(backupDestination.organizationId, org),
-          isNull(backupDestination.deletedAt),
-        ),
-      )
-      .for("update");
-    if (
-      !destination ||
-      destination.kind !== "s3_compatible" ||
-      !destination.bucket ||
-      !destination.accessKeyIdEnc ||
-      !destination.secretAccessKeyEnc
-    )
-      throw conflict("Choose an available S3 backup destination with access credentials.");
-  }
-}
 export function createClusterDatabaseRepo(db: Database) {
   const owned = (org: string, projectId: string) =>
     and(eq(table.organizationId, org), eq(table.projectId, projectId));
@@ -88,6 +66,27 @@ export function createClusterDatabaseRepo(db: Database) {
   }
   return {
     get,
+    async findByRequest(org: string, projectId: string, requestId: string) {
+      const [row] = await db
+        .select()
+        .from(table)
+        .where(and(owned(org, projectId), eq(table.requestId, requestId)));
+      return row ?? null;
+    },
+    async hasActiveImport(backupRunId: string) {
+      const [row] = await db
+        .select({ id: table.id })
+        .from(table)
+        .where(
+          and(
+            ne(table.status, "deleted"),
+            sql`${table.restoreSource}->>'backupRunId' = ${backupRunId}`,
+            sql`NOT EXISTS (SELECT 1 FROM jsonb_array_elements(${table.progress}->'steps') AS step WHERE step->>'id' = 'restore' AND step->>'status' = 'completed')`,
+          ),
+        )
+        .limit(1);
+      return !!row;
+    },
     async list(org: string, projectId: string) {
       await expire(org);
       return db
@@ -126,6 +125,19 @@ export function createClusterDatabaseRepo(db: Database) {
           .for("update");
         if (!runtime || runtime.status !== "ready" || runtime.clusterId !== input.clusterId)
           throw conflict("The server cluster is no longer ready.");
+        if (input.config.storageClass === MANAGED_STORAGE_CLASS) {
+          const [storage] = await tx
+            .select()
+            .from(clusterStorage)
+            .where(
+              and(
+                eq(clusterStorage.runtimeId, input.runtimeId),
+                eq(clusterStorage.organizationId, input.organizationId),
+              ),
+            );
+          if (storage?.status !== "ready")
+            throw conflict("Finish enabling shared storage before placing database disks on it.");
+        }
         const [p] = await tx
           .select()
           .from(project)
@@ -133,8 +145,25 @@ export function createClusterDatabaseRepo(db: Database) {
             and(eq(project.id, input.projectId), eq(project.organizationId, input.organizationId)),
           )
           .for("update");
-        if (!p || p.deletionInProgress || p.clusterId !== input.clusterId || p.cloudWorkspaceId)
+        if (
+          !p ||
+          p.deletionInProgress ||
+          (p.clusterId && p.clusterId !== input.clusterId) ||
+          p.cloudWorkspaceId
+        )
           throw conflict("The project's cluster changed. Reload before adding a database.");
+        const [otherCluster] = await tx
+          .select({ id: table.id })
+          .from(table)
+          .where(
+            and(
+              owned(input.organizationId, input.projectId),
+              ne(table.status, "deleted"),
+              ne(table.clusterId, input.clusterId),
+            ),
+          )
+          .limit(1);
+        if (otherCluster) throw conflict("Use the same cluster as this project's other databases.");
         const [existing] = await tx
           .select()
           .from(table)
@@ -161,7 +190,7 @@ export function createClusterDatabaseRepo(db: Database) {
             ),
           );
         if (named) throw conflict("A database already uses this name in the project.");
-        await lockDestinations(tx, input.organizationId, [
+        await lockClusterBackupDestinations(tx, input.organizationId, [
           input.config.backup?.destinationId,
           input.restoreSource?.destinationId,
         ]);
@@ -178,7 +207,11 @@ export function createClusterDatabaseRepo(db: Database) {
       id: string,
       expectedSequence: number,
       action: "apply" | "retry" | "remove" | "backup",
-      options: { config?: ClusterDatabaseConfig; deleteData?: boolean } = {},
+      options: {
+        config?: ClusterDatabaseConfig;
+        deleteData?: boolean;
+        confirmRedisRebalance?: boolean;
+      } = {},
     ) {
       await expire(org);
       return db.transaction(async (tx) => {
@@ -193,17 +226,31 @@ export function createClusterDatabaseRepo(db: Database) {
         if (clusterDatabaseRunning(current.status))
           throw conflict("An operation is already running for this database.");
         if (current.status === "deleted") throw conflict("This database has been deleted.");
+        if (action === "apply" || action === "remove") {
+          const [dependent] = await tx
+            .select({ id: table.id })
+            .from(table)
+            .where(
+              and(
+                owned(org, projectId),
+                ne(table.status, "deleted"),
+                sql`${table.restoreSource}->>'databaseId' = ${current.id}`,
+                sql`NOT EXISTS (SELECT 1 FROM jsonb_array_elements(${table.progress}->'steps') AS step WHERE step->>'id' = 'restore' AND step->>'status' = 'completed')`,
+                ne(table.status, "ready"),
+              ),
+            )
+            .limit(1);
+          if (dependent)
+            throw conflict(
+              "Another database is still recovering from this database. Finish or remove that recovery before changing its source.",
+            );
+        }
         if (action === "retry" && !["failed", "interrupted"].includes(current.status))
           throw conflict("Only failed or interrupted operations can be retried.");
         if (action === "apply" && current.status !== "ready")
           throw conflict("Finish or retry database setup before changing its settings.");
-        if (
-          action === "backup" &&
-          (current.status !== "ready" ||
-            !current.config.backup ||
-            current.config.engine !== "postgres")
-        )
-          throw conflict("Configure PostgreSQL archive backups and finish database setup first.");
+        if (action === "backup" && (current.status !== "ready" || !current.config.backup))
+          throw conflict("Configure database backups and finish setup first.");
         if (action === "remove" && current.envKey)
           throw conflict("Disconnect this database from the application before removing it.");
         if (
@@ -215,9 +262,9 @@ export function createClusterDatabaseRepo(db: Database) {
           throw conflict(
             "Permanent data deletion has already started. Retry that removal to finish cleanup.",
           );
-        if (options.config) validateClusterDatabaseUpdate(current.config, options.config);
+        if (options.config) validateClusterDatabaseUpdate(current.config, options.config, options);
         if (options.config?.backup)
-          await lockDestinations(tx, org, [options.config.backup.destinationId]);
+          await lockClusterBackupDestinations(tx, org, [options.config.backup.destinationId]);
         const intent = action === "retry" ? current.intent : action;
         const [row] = await tx
           .update(table)
@@ -246,6 +293,7 @@ export function createClusterDatabaseRepo(db: Database) {
       expectedSequence: number,
       envKey: string | null,
       encryptedValue: string | null,
+      replace?: { databaseId: string; expectedSequence: number },
     ) {
       return db.transaction(async (tx) => {
         const [p] = await tx
@@ -263,6 +311,26 @@ export function createClusterDatabaseRepo(db: Database) {
           throw conflict("Database setup changed. Refresh before connecting it.");
         if (envKey && (row.status !== "ready" || row.clusterId !== p.clusterId))
           throw conflict("The database must be ready on the project's cluster before connecting.");
+        let previous: ClusterDatabaseRecord | undefined;
+        if (replace) {
+          [previous] = await tx
+            .select()
+            .from(table)
+            .where(and(owned(org, projectId), eq(table.id, replace.databaseId)))
+            .for("update");
+          if (
+            !envKey ||
+            !previous ||
+            previous.id === row.id ||
+            previous.sequence !== replace.expectedSequence ||
+            previous.envKey !== envKey ||
+            !previous.envValueEncrypted ||
+            clusterDatabaseRunning(previous.status)
+          )
+            throw conflict(
+              "The previous database connection changed. Refresh and review the switch again.",
+            );
+        }
         const scope = (key: string) =>
           and(
             eq(envVar.projectId, projectId),
@@ -273,27 +341,44 @@ export function createClusterDatabaseRepo(db: Database) {
         if (envKey) {
           const existing = await tx.select().from(envVar).where(scope(envKey)).for("update");
           if (
-            existing.some((item) => row.envKey !== envKey || item.value !== row.envValueEncrypted)
+            existing.some(
+              (item) =>
+                (row.envKey !== envKey || item.value !== row.envValueEncrypted) &&
+                item.value !== previous?.envValueEncrypted,
+            ) ||
+            (previous && existing.length !== 1)
           )
             throw conflict(
               `Environment variable ${envKey} already exists. Choose another name or remove the existing variable first.`,
             );
+        }
+        if (previous) {
+          await tx
+            .delete(envVar)
+            .where(and(scope(envKey!), eq(envVar.value, previous.envValueEncrypted!)));
+          await tx
+            .update(table)
+            .set({
+              envKey: null,
+              envValueEncrypted: null,
+              sequence: previous.sequence + 1,
+              updatedAt: new Date(),
+            })
+            .where(eq(table.id, previous.id));
         }
         if (row.envKey && row.envValueEncrypted)
           await tx
             .delete(envVar)
             .where(and(scope(row.envKey), eq(envVar.value, row.envValueEncrypted)));
         if (envKey && encryptedValue)
-          await tx
-            .insert(envVar)
-            .values({
-              id: crypto.randomUUID(),
-              projectId,
-              key: envKey,
-              value: encryptedValue,
-              environment: "production",
-              isSecret: true,
-            });
+          await tx.insert(envVar).values({
+            id: crypto.randomUUID(),
+            projectId,
+            key: envKey,
+            value: encryptedValue,
+            environment: "production",
+            isSecret: true,
+          });
         const [updated] = await tx
           .update(table)
           .set({

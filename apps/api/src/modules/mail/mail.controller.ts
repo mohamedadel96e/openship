@@ -1,3 +1,4 @@
+import { refreshMailCertificate } from "@repo/platform/engine/modules/mail/mail-certificate.service";
 /**
  * Mail setup controller - HTTP endpoints for the iRedMail setup wizard.
  *
@@ -1622,15 +1623,16 @@ export async function getHealth(c: Context) {
   }
 
   try {
-    const { components, delivery, reachability } = await sshManager.withExecutor(serverId, async (executor) => {
+    const { components, delivery, reachability, certificate } = await sshManager.withExecutor(serverId, async (executor) => {
       // Both sweeps share the engine probe (memoized per executor), so running them
       // together costs one extra exec, not a second topology detection.
-      const [components, delivery, state] = await Promise.all([
+      const [components, delivery, state, certificate] = await Promise.all([
         checkMailHealth(executor),
         // `delivery` reports its own failures as `status: "unknown"` rather than
         // throwing, so a box whose queue we can't read still renders its daemons.
         checkMailDelivery(executor),
         readState(executor),
+        refreshMailCertificate(serverId, { executor }),
       ]);
       const reachability = state?.domain
         ? await checkMailPortReachability(executor, mailHostname(state.domain), {
@@ -1641,9 +1643,9 @@ export async function getHealth(c: Context) {
             force: refreshReachability,
           })
         : null;
-      return { components, delivery, reachability };
+      return { components, delivery, reachability, certificate };
     });
-    return c.json({ serverId, components, definitions: MAIL_COMPONENTS, delivery, reachability });
+    return c.json({ serverId, components, definitions: MAIL_COMPONENTS, delivery, reachability, certificate });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Health check failed";
     // Same reason as the mail-admin funnel: this 500 is answered here, so `app.onError`

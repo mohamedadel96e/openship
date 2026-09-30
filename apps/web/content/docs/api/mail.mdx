@@ -310,6 +310,10 @@ credentials are valid, then retry.
 | The mail server's backup policy (or `null`). | `GET /api/mail/admin/:serverId/backup-policy`<br />`mail_server:read` · Self-hosted |
 | Create or update the backup policy. | `POST /api/mail/admin/:serverId/backup-policy`<br />`mail_server:admin` · Self-hosted |
 | Recent backup runs for the mail server. | `GET /api/mail/admin/:serverId/backup-runs`<br />`mail_server:read` · Self-hosted |
+| Read the mail certificate, SMTP/IMAP TLS checks and automatic renewal settings. | `GET /api/mail/admin/:serverId/certificate`<br />`mail_server:read` · Self-hosted |
+| Set `autoRenew` to enable or disable automatic mail certificate renewal. Monitoring continues when renewal is disabled. | `PATCH /api/mail/admin/:serverId/certificate`<br />`mail_server:admin` · Self-hosted |
+| Recheck the certificate on disk and served by SMTP/IMAP without issuing a certificate or sending email. | `POST /api/mail/admin/:serverId/certificate/check`<br />`mail_server:write` · Self-hosted |
+| Renew a due mail certificate through Openship Edge and reload Postfix/Dovecot, reusing a still-valid certificate and repairing its service configuration. | `POST /api/mail/admin/:serverId/certificate/renew`<br />`mail_server:admin` · Self-hosted |
 | Run an action (`start`/`stop`/`restart`/…) on one component. | `POST /api/mail/admin/:serverId/components/:key/:action`<br />`mail_server:admin` · Self-hosted |
 | Tail a component's logs. | `GET /api/mail/admin/:serverId/components/:key/logs`<br />`mail_server:read` · Self-hosted |
 | Restart every mail component. | `POST /api/mail/admin/:serverId/components/restart-all`<br />`mail_server:admin` · Self-hosted |

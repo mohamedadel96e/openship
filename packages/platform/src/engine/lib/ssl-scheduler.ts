@@ -1,8 +1,8 @@
 /**
  * SSL renewal — batch renewal of expiring certbot certificates.
  *
- * Wired to the shared JobRunner as the "ssl:renew" system job on self-hosted
- * installs (registered via the generic jobs module — see
+ * Wired to the shared JobRunner as the "ssl:renew" system job on desktop and
+ * self-hosted installs (registered via the generic jobs module — see
  * modules/jobs/job.registry.ts). Still callable directly from an admin endpoint
  * or external cron.
  *
@@ -13,7 +13,9 @@
  */
 
 import { repos } from "@repo/db";
-import { SYSTEM } from "@repo/core";
+import { SYSTEM, currentMailCertificateHealth, mailHostname } from "@repo/core";
+import { env } from "../config/env";
+import { renewMailCertificate } from "../modules/mail/mail-certificate.service";
 import {
   MAIL_DOMAIN_OWNER,
   manageDomainSsl,
@@ -40,6 +42,7 @@ export interface RenewalResult {
  * - Returns a structured result for the caller to log or return to the client
  */
 export async function renewExpiringCerts(): Promise<RenewalResult> {
+  if (env.CLOUD_MODE) return { renewed: 0, failed: 0, total: 0, details: [] };
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() + SYSTEM.DOMAINS.SSL_RENEW_BEFORE_DAYS);
 
@@ -53,10 +56,22 @@ export async function renewExpiringCerts(): Promise<RenewalResult> {
   // rows carry no `sslExpiresAt`, and findExpiringSsl compares on it — so a single
   // `updateSsl({ sslExpiresAt })` anywhere would have handed them to certbot.
   const allDomains = (await repos.domain.findExpiringSsl(cutoff)).filter(
-    (d) => !tlsIssuedElsewhere(d),
+    (d) => !tlsIssuedElsewhere(d) && d.ownerType !== MAIL_DOMAIN_OWNER,
   );
 
-  if (allDomains.length === 0) {
+  // Mail installs are canonical even when an older setup never registered a
+  // domain row. Use their cached observations to find missing/stale certificates;
+  // the shared lifecycle below still owns every ACME order and its locks.
+  const mailCandidates = (await repos.mailServer.list()).filter((mail) => {
+    if (!mail.installedAt || !mail.certificateAutoRenew) return false;
+    const health = currentMailCertificateHealth(
+      mail.certificateHealth,
+      SYSTEM.DOMAINS.SSL_RENEW_BEFORE_DAYS,
+    );
+    return !health || health.status !== "ok" || !!mail.certificateRenewalError;
+  });
+
+  if (allDomains.length === 0 && mailCandidates.length === 0) {
     return { renewed: 0, failed: 0, total: 0, details: [] };
   }
 
@@ -65,11 +80,10 @@ export async function renewExpiringCerts(): Promise<RenewalResult> {
   // Pre-fetch project → (org, project name) so the dispatcher knows
   // which org to fan out the notification to. Each org's members each
   // receive notifications via their configured channels.
-  const projectIds = [...new Set(batch.map((d) => d.projectId).filter((p): p is string => p !== null))];
-  const projectCache = new Map<
-    string,
-    { organizationId: string; projectName: string }
-  >();
+  const projectIds = [
+    ...new Set(batch.map((d) => d.projectId).filter((p): p is string => p !== null)),
+  ];
+  const projectCache = new Map<string, { organizationId: string; projectName: string }>();
   for (const pid of projectIds) {
     const project = await repos.project.findById(pid);
     if (!project) continue;
@@ -79,38 +93,20 @@ export async function renewExpiringCerts(): Promise<RenewalResult> {
     });
   }
 
-  /**
-   * The notification context for one row. A project-owned row gets it from the
-   * project; a MAIL-owned row has no project, so it resolves the org from the mail
-   * server (`resolveMailOwner`). Without this branch `ctx` was undefined for mail
-   * and the `if (ctx)` guard below silently dropped the alert — so a mail
-   * certificate whose renewal FAILED went to `sslStatus: "error"` and told nobody,
-   * which is the same silent-expiry shape this row exists to prevent.
-   */
-  const notifyContext = async (
-    d: (typeof batch)[number],
-  ): Promise<{ organizationId: string; projectName: string } | undefined> => {
-    if (d.projectId) return projectCache.get(d.projectId);
-    if (d.ownerType !== MAIL_DOMAIN_OWNER) return undefined;
-    const owner = await resolveMailOwner(d.hostname).catch(() => null);
-    return owner
-      ? { organizationId: owner.organizationId, projectName: `Mail (${d.hostname})` }
-      : undefined;
-  };
-
   const details: RenewalResult["details"] = [];
   let renewed = 0;
   let failed = 0;
 
   for (const domain of batch) {
-    const ctx = await notifyContext(domain);
+    const ctx = domain.projectId ? projectCache.get(domain.projectId) : undefined;
 
     try {
       // manageDomainSsl resolves the provider on the serving host and persists
       // the outcome (no-clobber). A non-verified result means no valid cert
-      // landed — treat as a failure so it's surfaced, not silently "renewed".
+      // landed means failure. Provision reads before issuing, so another renewal
+      // that already updated the disk does not open a duplicate ACME order.
       const result = await manageDomainSsl(domain.hostname, {
-        action: "renew",
+        action: "provision",
         projectId: domain.projectId ?? undefined,
       });
       if (!result.verified) {
@@ -153,5 +149,40 @@ export async function renewExpiringCerts(): Promise<RenewalResult> {
     }
   }
 
-  return { renewed, failed, total: allDomains.length, details };
+  for (const mail of mailCandidates.slice(0, SYSTEM.DOMAINS.SSL_RENEW_BATCH_SIZE)) {
+    const hostname = mailHostname(mail.domain);
+    try {
+      const result = await renewMailCertificate(mail.serverId, true);
+      if (!result) continue; // Disabled while queued, or a fresh cert was rediscovered.
+      renewed++;
+      details.push({ domain: hostname, status: "renewed" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Mail certificate renewal failed";
+      failed++;
+      details.push({ domain: hostname, status: "failed", error: message });
+      const owner = await resolveMailOwner(hostname).catch(() => null);
+      const row = await repos.domain.findByHostname(hostname).catch(() => null);
+      if (owner)
+        notification.emit({
+          organizationId: owner.organizationId,
+          eventType: "ssl.renewal_failed",
+          resourceType: "domain",
+          resourceId: row?.id ?? mail.serverId,
+          payload: {
+            projectName: `Mail (${hostname})`,
+            domain: hostname,
+            daysLeft: Math.ceil(
+              ((mail.certificateHealth?.certificate
+                ? new Date(mail.certificateHealth.certificate.expiresAt).getTime()
+                : 0) -
+                Date.now()) /
+                86_400_000,
+            ),
+            errorMessage: message,
+          },
+        });
+    }
+  }
+
+  return { renewed, failed, total: allDomains.length + mailCandidates.length, details };
 }

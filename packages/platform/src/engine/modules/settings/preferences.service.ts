@@ -5,6 +5,7 @@ import { audit, operationAuditContext } from "../../lib/audit-emitter";
 import { repos } from "@repo/db";
 import { randomBytes } from "node:crypto";
 import { encrypt } from "@repo/platform/engine/lib/encryption";
+import { inspectPatScope, classifyPatScope } from "../github/github.pat";
 import {
   getBuildMode,
   getDeployDefaults,
@@ -103,8 +104,8 @@ export async function updateRouteStrategy(ctx: ExecutionContext, body: Static<ty
 /**
  * Read-only view of the user's clone credentials state for the dashboard.
  * Never returns the token itself - only `hasToken` + when it was set + the
- * "use as default" flag + the saved strategy preference. The token only
- * leaves the server during clone, never via API responses.
+ * "use as default" flag + the saved strategy preference. The token itself is
+ * never returned in settings responses.
  */
 async function getCloneCredentialsState(userId: string) {
   const settings = await repos.settings.findByUser(userId).catch(() => null);
@@ -247,25 +248,39 @@ export async function updateDeployDefaults(ctx: ExecutionContext, body: Static<t
  *   { token?: string | null, asDefault?: boolean }
  *
  *   token === null  → clear the stored token (also clears asDefault).
- *   token: string   → encrypt and store. Empty string is treated as clear.
- *   asDefault       → opt-in flag. If false, the stored token won't be used
- *                     by `resolveCloneToken` (still useful as a one-off
- *                     value the user can ship per-deploy via UI).
+ *   token: string   → verify, encrypt and store. Empty string is treated as clear.
+ *   asDefault       → whether the token is used for browsing and cloning.
+ *                     A first token defaults to true; replacement preserves
+ *                     the saved preference unless the caller supplies it.
  *
  * Returns the read-only state (never the token itself).
  */
 export async function updateCloneCredentials(ctx: ExecutionContext, body: Static<typeof UserSettingsSchemas.setCloneCredentials.input>) {
 
-  const rawToken = body?.token;
+  const rawToken = typeof body?.token === "string" ? body.token.trim() : body?.token;
+  if (typeof body?.token === "string" && body.token.length > 0 && !rawToken) {
+    throw new ValidationError("Enter a GitHub token, or explicitly clear the saved token.");
+  }
   const clearing = rawToken === null || rawToken === "";
   const setting = typeof rawToken === "string" && rawToken.length > 0;
   if (!clearing && !setting && rawToken !== undefined) {
     throw new ValidationError("token must be a string, null, or omitted");
   }
 
-  const asDefault = body?.asDefault === true;
+  if (setting) {
+    let report: Awaited<ReturnType<typeof inspectPatScope>>;
+    try {
+      report = await inspectPatScope(rawToken);
+    } catch {
+      throw new ValidationError("Could not verify this GitHub token. Check that it is valid and GitHub is reachable, then try again.");
+    }
+    const verdict = classifyPatScope(report);
+    if (!verdict.ok) throw new ValidationError(verdict.reason);
+  }
 
   const existing = await repos.settings.findByUser(ctx.userId);
+  // A first token works immediately. Replacing it preserves an explicit opt-out.
+  const asDefault = body?.asDefault ?? (existing?.cloneTokenEncrypted ? existing.cloneTokenAsDefault : true);
   const updates: Partial<{
     cloneTokenEncrypted: string | null;
     cloneTokenSetAt: Date | null;

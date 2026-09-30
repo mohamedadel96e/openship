@@ -103,7 +103,7 @@
     "deletionInProgress": "Für dieses Projekt läuft bereits ein anderer Löschvorgang",
     "deletionInProgressTitle": "Löschung läuft",
     "confirmForceOrphan": "Einige Ressourcen konnten nicht vom Server entfernt werden. Das Projekt trotzdem löschen und sie später automatisch bereinigen?",
-    "teardownFailedAt": "Abbau fehlgeschlagen bei: {reasons}. Erneut versuchen oder erzwungenes Löschen, um sie zu verwaisen.",
+    "teardownFailedAt": "Die Bereinigung konnte nicht abgeschlossen werden: {reasons}. Das Projekt ist weiterhin gespeichert. Behebe das Problem und versuche das Löschen erneut.",
     "teardownFailed": "Abbau fehlgeschlagen",
     "cleanupFailedTitle": "Bereinigung fehlgeschlagen",
     "alreadyDeleted": "Projekt bereits gelöscht",

@@ -261,7 +261,7 @@
     "projects.setClusterTarget": {
       "page": "projects",
       "section": "Cluster scaling",
-      "description": "Save a ready self-hosted cluster target and stateless workload configuration. Requires fleet administration and the current project timestamp.",
+      "description": "Save a ready self-hosted cluster target, application configuration and optional shared-file mounts. Requires fleet administration and the current project timestamp.",
       "route": "PATCH /api/projects/:id/cluster"
     },
     "projects.scaleClusterWorkload": {
@@ -276,6 +276,12 @@
       "description": "List the project's operator-managed databases and saved observations. Available on self-hosted OpenShip.",
       "route": "GET /api/projects/:id/cluster/databases"
     },
+    "projects.listClusterDatabaseImports": {
+      "page": "projects",
+      "section": "Cluster databases",
+      "description": "List eligible PostgreSQL and Redis backup imports from this project. Requires project administrator access; source backups and running services are preserved.",
+      "route": "GET /api/projects/:id/cluster/databases/imports"
+    },
     "projects.getClusterDatabase": {
       "page": "projects",
       "section": "Cluster databases",
@@ -285,13 +291,13 @@
     "projects.createClusterDatabase": {
       "page": "projects",
       "section": "Cluster databases",
-      "description": "Create PostgreSQL or Redis on the project's ready server cluster with a stable request UUID. PostgreSQL can restore a completed archive into a new database. Requires fleet administration.",
+      "description": "Create PostgreSQL or Redis on a ready server cluster with a stable request UUID. Recover a database archive, import an existing project backup or create an upgraded PostgreSQL copy. Requires fleet administration; the source is preserved.",
       "route": "POST /api/projects/:id/cluster/databases"
     },
     "projects.updateClusterDatabase": {
       "page": "projects",
       "section": "Cluster databases",
-      "description": "Apply supported resource, PostgreSQL replica or backup settings with the database's current sequence. Engine changes and Redis resharding require a separate migration.",
+      "description": "Apply supported resource, replica or backup settings with the current sequence. Redis shard changes require explicit review and a verified backup; PostgreSQL major upgrades use a new database copy.",
       "route": "PATCH /api/projects/:id/cluster/databases"
     },
     "projects.retryClusterDatabase": {
@@ -303,7 +309,7 @@
     "projects.backupClusterDatabase": {
       "page": "projects",
       "section": "Cluster databases",
-      "description": "Request a PostgreSQL archive at the configured S3 destination. The operator owns backup execution; retry reuses the accepted backup request.",
+      "description": "Request a PostgreSQL or Redis archive at the configured S3 destination. Native controllers and Jobs own execution; retry reuses the accepted backup request.",
       "route": "POST /api/projects/:id/cluster/databases/backup"
     },
     "projects.removeClusterDatabase": {
@@ -315,7 +321,7 @@
     "projects.connectClusterDatabase": {
       "page": "projects",
       "section": "Cluster databases",
-      "description": "Save a private connection URL in the project environment without overwriting an existing variable. Set envKey to null to disconnect. Redeploy explicitly to apply connection changes.",
+      "description": "Save a private database URL in the project environment, or explicitly replace another managed database binding using both current sequences. Set envKey to null to disconnect. Redeploy to apply the reviewed change.",
       "route": "POST /api/projects/:id/cluster/databases/connect"
     },
     "projects.streamClusterDatabaseEvents": {
@@ -323,6 +329,60 @@
       "section": "Cluster databases",
       "description": "Subscribe to replayable database progress snapshots over SSE. Reconnection only reads saved state and never repeats a mutation.",
       "route": "GET /api/projects/:id/cluster/databases/stream"
+    },
+    "projects.listClusterVolumes": {
+      "page": "projects",
+      "section": "Shared files",
+      "description": "Read shared file volumes, independent copies, attachment health and backup status.",
+      "route": "GET /api/projects/:id/cluster/volumes"
+    },
+    "projects.listClusterVolumeBackups": {
+      "page": "projects",
+      "section": "Shared files",
+      "description": "List project file archives, including backups whose original volume was deleted.",
+      "route": "GET /api/projects/:id/cluster/volumes/backups"
+    },
+    "projects.createClusterVolume": {
+      "page": "projects",
+      "section": "Shared files",
+      "description": "Create a replicated shared volume or restore an archive into a new one using a stable request ID. Attach it through cluster configuration and deploy.",
+      "route": "POST /api/projects/:id/cluster/volumes"
+    },
+    "projects.resizeClusterVolume": {
+      "page": "projects",
+      "section": "Shared files",
+      "description": "Grow a shared volume using its current resourceVersion. Observe status until expansion completes; shrinking is unsupported.",
+      "route": "PATCH /api/projects/:id/cluster/volumes"
+    },
+    "projects.backupClusterVolume": {
+      "page": "projects",
+      "section": "Shared files",
+      "description": "Save a file-volume backup to the cluster's configured external destination using a stable request ID. Pause application writes when consistency requires it.",
+      "route": "POST /api/projects/:id/cluster/volumes/backup"
+    },
+    "projects.scheduleClusterVolumeBackups": {
+      "page": "projects",
+      "section": "Shared files",
+      "description": "Schedule hourly or daily file backups with a retained archive count, or choose manual to stop the schedule.",
+      "route": "PATCH /api/projects/:id/cluster/volumes/backups"
+    },
+    "projects.removeClusterVolumeBackup": {
+      "page": "projects",
+      "section": "Shared files",
+      "description": "Permanently delete a project file archive after confirming its exact backup name. The source volume is preserved.",
+      "route": "DELETE /api/projects/:id/cluster/volumes/backups"
+    },
+    "projects.removeClusterVolume": {
+      "page": "projects",
+      "section": "Shared files",
+      "description": "Delete an unmounted volume with resourceVersion, name and data-deletion confirmation. Disconnect and redeploy first; external archives are preserved.",
+      "route": "DELETE /api/projects/:id/cluster/volumes"
+    },
+    "projects.streamClusterVolumeEvents": {
+      "page": "projects",
+      "section": "Shared files",
+      "description": "Subscribe to current file-volume and archive snapshots over SSE without repeating mutations on reconnect.",
+      "route": "GET /api/projects/:id/cluster/volumes/stream"
     },
     "projects.getRollbackCapacity": {
       "page": "projects",
@@ -834,6 +894,30 @@
       "description": "Apply the authorized DNS plan.",
       "route": "POST /api/domains/:id/dns/apply"
     },
+    "domains.dnsChallenge": {
+      "page": "domains",
+      "section": "Operations",
+      "description": "Read the saved DNS certificate attempt, TXT record, deadline and logs.",
+      "route": "GET /api/domains/:id/dns/challenge"
+    },
+    "domains.startDnsChallenge": {
+      "page": "domains",
+      "section": "Operations",
+      "description": "Start automatic provider setup or a manual TXT challenge; reuse an active attempt. Self-hosted targets only.",
+      "route": "POST /api/domains/:id/dns/challenge"
+    },
+    "domains.checkDnsChallenge": {
+      "page": "domains",
+      "section": "Operations",
+      "description": "Check the saved attempt's TXT, complete ACME validation and install HTTPS on the serving host.",
+      "route": "POST /api/domains/:id/dns/challenge/check"
+    },
+    "domains.cancelDnsChallenge": {
+      "page": "domains",
+      "section": "Operations",
+      "description": "Cancel a manual DNS certificate attempt before installation starts; retain existing certificates.",
+      "route": "POST /api/domains/:id/dns/challenge/cancel"
+    },
     "domains.setPrimary": {
       "page": "domains",
       "section": "Operations",
@@ -1157,6 +1241,42 @@
       "section": "Cluster runtime",
       "description": "Subscribe to saved runtime progress through read-only, replayable SSE.",
       "route": "GET /api/system/compute-clusters/:id/runtime/stream"
+    },
+    "servers.getClusterStorage": {
+      "page": "servers",
+      "section": "Shared storage",
+      "description": "Read saved storage setup and capacity, or request current disk and volume health with observe=true.",
+      "route": "GET /api/system/compute-clusters/:id/storage"
+    },
+    "servers.setupClusterStorage": {
+      "page": "servers",
+      "section": "Shared storage",
+      "description": "Enable shared storage across reviewed cluster servers and empty directories. Installs prerequisites without formatting disks; a stable request ID avoids duplicate setup.",
+      "route": "POST /api/system/compute-clusters/:id/storage"
+    },
+    "servers.retryClusterStorage": {
+      "page": "servers",
+      "section": "Shared storage",
+      "description": "Explicitly resume failed or interrupted setup or removal using its current sequence.",
+      "route": "POST /api/system/compute-clusters/:id/storage/retry"
+    },
+    "servers.configureClusterStorageBackup": {
+      "page": "servers",
+      "section": "Shared storage",
+      "description": "Configure an external backup destination using the current storage sequence. An existing destination is preserved so its archives remain recoverable.",
+      "route": "PATCH /api/system/compute-clusters/:id/storage/backup"
+    },
+    "servers.removeClusterStorage": {
+      "page": "servers",
+      "section": "Shared storage",
+      "description": "Remove an empty storage installation using its latest sequence. Persistent or retained volumes block removal; external archives are preserved.",
+      "route": "DELETE /api/system/compute-clusters/:id/storage"
+    },
+    "servers.clusterStorageEvents": {
+      "page": "servers",
+      "section": "Shared storage",
+      "description": "Subscribe to saved storage setup and removal progress through replayable SSE.",
+      "route": "GET /api/system/compute-clusters/:id/storage/stream"
     },
     "servers.infrastructure": {
       "page": "servers",
@@ -1569,7 +1689,7 @@
     "apps.hostFit": {
       "page": "apps",
       "section": "Operations",
-      "description": "Check template requirements against a destination.",
+      "description": "Preview host recommendations or Cloud plan fit, including an optional draft's saved resources.",
       "route": "GET /api/apps/catalog/:id/host-fit"
     },
     "apps.removeCustom": {
@@ -1821,7 +1941,7 @@
     "github.connect": {
       "page": "github",
       "section": "Connect",
-      "description": "Start a supported GitHub connection flow.",
+      "description": "Start GitHub authorization or select an accessible App installation. Repository access is separate from Cloud sign-in.",
       "route": "POST /api/github/connect"
     },
     "github.claimInstallation": {
@@ -1839,7 +1959,7 @@
     "github.pollConnect": {
       "page": "github",
       "section": "Connect",
-      "description": "Poll an in-progress connection flow.",
+      "description": "Poll the returned state for one connection attempt, or omit state for a self-hosted device flow.",
       "route": "GET /api/github/connect/poll"
     },
     "github.setInstanceToken": {
@@ -2403,7 +2523,7 @@
     "issues.rescan": {
       "page": "issues",
       "section": "Operations",
-      "description": "Run applicable issue checkers immediately.",
+      "description": "Run applicable issue checkers, or only container/server health.",
       "route": "POST /api/issues/rescan"
     },
     "issues.rescanStatus": {
@@ -2570,9 +2690,37 @@
     }
   },
   "http": {
+    "POST /api/cloud/support": {
+      "page": "support",
+      "description": "Save a Cloud support ticket and queue acknowledgement and team email. Public intake returns only a receipt and deduplicates retries."
+    },
+    "GET /api/cloud/support/tickets": {
+      "page": "support",
+      "description": "List Cloud support tickets with status filtering and cursor pagination. Requires internal operator authority."
+    },
+    "GET /api/cloud/support/tickets/:id": {
+      "page": "support",
+      "description": "Read a Cloud ticket, its replies, and email delivery attempts. Requires internal operator authority."
+    },
+    "PATCH /api/cloud/support/tickets/:id": {
+      "page": "support",
+      "description": "Open or resolve a Cloud support ticket. Requires internal operator authority."
+    },
+    "POST /api/cloud/support/tickets/:id/replies": {
+      "page": "support",
+      "description": "Save and queue an idempotent support reply, optionally resolving the ticket in the same transaction. Requires internal operator authority."
+    },
+    "POST /api/cloud/support/tickets/:id/retry": {
+      "page": "support",
+      "description": "Retry undelivered support email while preserving active delivery leases and already accepted messages. Requires internal operator authority."
+    },
     "GET /api/auth/*": {
       "page": "auth",
       "description": "Handle browser sessions and authentication through Better Auth."
+    },
+    "GET /api/auth/callback/github": {
+      "page": "auth",
+      "description": "Complete a browser-bound Cloud repository authorization; ordinary GitHub sign-in callbacks remain handled by Better Auth."
     },
     "POST /api/auth/*": {
       "page": "auth",
@@ -2662,6 +2810,10 @@
       "page": "cloud",
       "description": "Proxy Oblien analytics for a hostname in the caller's namespace."
     },
+    "POST /api/cloud/telemetry": {
+      "page": "cloud",
+      "description": "Capture optional hosted dashboard product events with exact-origin and verified cookie identity checks."
+    },
     "POST /api/cloud/connect-authorize": {
       "page": "cloud",
       "description": "Consent page mints a one-time handoff code (cookie session checked inline)."
@@ -2712,11 +2864,11 @@
     },
     "GET /api/cloud/github/install-callback": {
       "page": "cloud",
-      "description": "GitHub install callback — atomically claim a durable user/workspace nonce after matching user-token and Openship App-JWT verification."
+      "description": "Select an existing GitHub installation with flow=select, or atomically claim the workspace-bound attempt after GitHub user-token and App-JWT verification."
     },
     "POST /api/cloud/github/install-url": {
       "page": "cloud",
-      "description": "Build the App install URL with a one-time state token."
+      "description": "Build an Openship installation-selection URL with a one-time workspace state; existing installations can reconnect without another GitHub setup callback."
     },
     "POST /api/cloud/github/installation-token": {
       "page": "cloud",
@@ -2833,6 +2985,22 @@
     "GET /api/mail/admin/:serverId/backup-runs": {
       "page": "mail",
       "description": "Recent backup runs for the mail server."
+    },
+    "GET /api/mail/admin/:serverId/certificate": {
+      "page": "mail",
+      "description": "Read the mail certificate, SMTP/IMAP TLS checks and automatic renewal settings."
+    },
+    "PATCH /api/mail/admin/:serverId/certificate": {
+      "page": "mail",
+      "description": "Set `autoRenew` to enable or disable automatic mail certificate renewal. Monitoring continues when renewal is disabled."
+    },
+    "POST /api/mail/admin/:serverId/certificate/check": {
+      "page": "mail",
+      "description": "Recheck the certificate on disk and served by SMTP/IMAP without issuing a certificate or sending email."
+    },
+    "POST /api/mail/admin/:serverId/certificate/renew": {
+      "page": "mail",
+      "description": "Renew a due mail certificate through Openship Edge and reload Postfix/Dovecot, reusing a still-valid certificate and repairing its service configuration."
     },
     "POST /api/mail/admin/:serverId/components/:key/:action": {
       "page": "mail",

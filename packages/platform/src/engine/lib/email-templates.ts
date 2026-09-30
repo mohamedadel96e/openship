@@ -10,6 +10,8 @@
 /*  Shared layout                                                      */
 /* ------------------------------------------------------------------ */
 
+import { SUPPORT_EMAIL } from "@repo/core";
+
 const BRAND = "Openship";
 
 /**
@@ -60,6 +62,31 @@ function ctaButton(url: string, label: string) {
 
 function greeting(name?: string | null) {
   return `<p style="color:#111;font-size:15px;margin:0 0 16px">Hi ${htmlEscape(name || "there")},</p>`;
+}
+
+/** Public acknowledgements contain no user-supplied text or links. */
+export function supportEmail(input: {
+  id: string;
+  kind: "receipt" | "notification" | "reply";
+  name: string;
+  email: string;
+  subject: string;
+  message: string;
+  reply?: string | null;
+}) {
+  const subject = input.kind === "receipt"
+    ? `[${input.id}] We received your support request`
+    : `[${input.id}] ${input.subject}`;
+  const text = input.kind === "receipt"
+    ? `Your support request has been saved.\n\nReference: ${input.id}\n\nThe Openship team will reply by email. If you have more details, reply to this email and keep the reference in the subject.\n\nOpenship Support\n${SUPPORT_EMAIL}`
+    : input.kind === "notification"
+      ? `New Openship support request\n\nReference: ${input.id}\nFrom: ${input.name} <${input.email}>\nSubject: ${input.subject}\n\n${input.message}`
+      : `${input.reply}\n\nReference: ${input.id}\nOpenship Support\n${SUPPORT_EMAIL}`;
+  return {
+    subject,
+    text,
+    html: layout(`<h1 style="font-size:22px;margin:0 0 20px">${input.kind === "receipt" ? "We received your request" : "Openship Support"}</h1><div style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.65;color:#374151">${htmlEscape(text)}</div>`),
+  };
 }
 
 /* ------------------------------------------------------------------ */

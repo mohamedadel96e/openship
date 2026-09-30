@@ -34,6 +34,10 @@ export type SendMailOptions = {
   subject: string;
   html: string;
   text?: string;
+  /** Validated by the caller; never used as the SMTP envelope sender. */
+  replyTo?: string;
+  /** Stable identity for durable deliveries retried after a process restart. */
+  messageId?: string;
   /**
    * Preferred transport source. Default "auto" — uses the platform
    * mailbox when provisioned, otherwise falls back to env-configured
@@ -62,6 +66,9 @@ const envTransport: Transporter | null = envSmtpConfigured
       host: env.SMTP_HOST,
       port: env.SMTP_PORT ?? 587,
       secure: (env.SMTP_PORT ?? 587) === 465,
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 30_000,
       auth: {
         user: env.SMTP_USER,
         pass: env.SMTP_PASS,
@@ -144,6 +151,9 @@ async function getPlatformTransport(options?: { rotate?: boolean }): Promise<{
   transport: Transporter;
   from: string;
 } | null> {
+  // Hosted Cloud uses its configured SMTP sender. Local mail-server records
+  // must never bring the self-hosted SSH/provisioning path into this process.
+  if (env.CLOUD_MODE) return null;
   const generation = platformTransportGeneration;
   // `@repo/db` is universal (every controller / service / repo consumer
   // already loads it eagerly at boot via `db = await createDb()`), so
@@ -489,16 +499,21 @@ export async function sendMail(opts: SendMailOptions): Promise<boolean> {
   // Try each transport in priority order; fail over to the next on a send
   // error so one broken source (e.g. wrong instance-SMTP creds) doesn't block
   // delivery when another can carry it. Throw only when every source fails.
+  const message = {
+    to: opts.to,
+    subject: opts.subject,
+    html: opts.html,
+    ...(opts.text ? { text: opts.text } : {}),
+    ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
+    ...(opts.messageId ? { messageId: opts.messageId } : {}),
+  };
   let lastErr: unknown = null;
   for (let i = 0; i < chain.length; i++) {
     const active = chain[i];
     try {
       await active.transport.sendMail({
         from: active.from,
-        to: opts.to,
-        subject: opts.subject,
-        html: opts.html,
-        ...(opts.text ? { text: opts.text } : {}),
+        ...message,
       });
       return true;
     } catch (err) {
@@ -515,10 +530,7 @@ export async function sendMail(opts: SendMailOptions): Promise<boolean> {
           try {
             await repaired.transport.sendMail({
               from: repaired.from,
-              to: opts.to,
-              subject: opts.subject,
-              html: opts.html,
-              ...(opts.text ? { text: opts.text } : {}),
+              ...message,
             });
             return true;
           } catch (retryErr) {

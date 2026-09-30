@@ -2,7 +2,7 @@
  * Oblien Mode B owns charges, grants, renewals, quotas and suspension.
  * Openship mirrors that authority. Explicit complimentary plans use Mode A.
  */
-import { AppError, safeErrorMessage, type PlanTierId, type PlanLimits } from "@repo/core";
+import { AppError, safeErrorMessage, type PlanTierId, type PlanLimits, type OblienLimits } from "@repo/core";
 import { repos } from "@repo/db";
 import type { NamespaceUsageUnits } from "@repo/adapters";
 import { env } from "../../config/env";
@@ -56,6 +56,7 @@ export interface SyncedCloudEntitlement {
   subscription: OblienSubscription;
   tier: PlanTierId;
   limits: PlanLimits;
+  resourceLimits: OblienLimits;
   grant: ResolvedPlanGrant | null;
   drift: EntitlementDrift;
 }
@@ -108,12 +109,15 @@ async function readAndMirrorEntitlement(organizationId: string, options: Entitle
         planTierId: tier, subscriptionStatus: entitlement.status, currentPeriodStart, currentPeriodEnd,
       });
     }
+    const { observeCloudSubscription } = await import("../cloud-analytics/billing");
+    await observeCloudSubscription(organizationId, { tier, subscription, grant });
     return {
       entitlement,
       subscription,
       grant,
       tier,
       limits,
+      resourceLimits,
       drift: {
         quotaMissing: entitlement.quota.limit === null && tier !== "enterprise",
         statusWas: org.subscriptionStatus, statusNow: entitlement.status, changed,

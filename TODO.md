@@ -414,23 +414,26 @@ the JS asset stage also landed; the storage section below has what's left of tho
 ### A generic release phase
 
 Commands that run ONCE per deploy, after build and before cutover, failing the
-deploy on error. `queue:work`, `schedule:run`, `migrate --force`, `optimize` and
-`storage:link` appear nowhere in the tree today, so migrations, scheduled tasks
-and queued jobs silently never run.
+deploy on error.
 
-- [ ] Add release commands to the project + `openship.json`, snapshot them onto
-      the deployment, and run them from the deploy pipeline between build and
-      activate (`apps/api/src/modules/deployments/build-pipeline.ts` — the same
-      seam `deployConfig` is assembled in).
-- [ ] Laravel's set for 13.x: `migrate --force`, `optimize` (config/events/routes/
-      views), `storage:link`, and `reload` (13's umbrella for cycling long-running
-      services — supersedes `queue:restart` for deploys, also covers Reverb and
-      Octane).
-- [ ] Not the same thing as `#206` deploy hooks: those are an inbound trigger that
-      STARTS a deploy; this runs DURING one.
-- [ ] Until this exists, a stock SQLite Laravel app still needs its migrations run
-      by hand (the service terminal can do it) — a persistent volume stops data
-      LOSS, it doesn't bootstrap a schema.
+**Implemented (v1).** Optional ordered `releaseCommands` are stored on the project,
+frozen on deployment snapshots, and run by the shared engine after the candidate build
+and before activation. Configure them in the existing build wizard, `openship.json`, or
+API/SDK. Nothing is injected per framework.
+
+Docker uses temporary containers with the candidate image, shared runtime env/mount helpers,
+and connected-service networks. Bare links persistent paths before executing against the
+staged artifact. Failure, cancellation, or timeout prevents activation. Commands run
+outside the server's port-allocation lock, under the project's execution lease. Code
+rollbacks skip them and do not undo database changes; commands must be idempotent and
+compatible with the previous app.
+
+- [x] Shared configuration through source scans, native/HTTP SDK, and dashboard.
+- [x] Runtime and pipeline behavior tests, including failure/cancellation cleanup.
+- [x] Real Docker release tests in the release-gated E2E suite.
+- [x] Unsupported runtimes and full multi-service/static deployments fail before activation.
+- [ ] Per-service release commands for Compose/monorepo deployments.
+- [ ] Worker/scheduler roles remain separate from one-off release commands.
 
 ### Multi-role stacks
 

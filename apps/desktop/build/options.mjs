@@ -10,6 +10,7 @@ export const desktopBuildOptions = ["main", "preload"].map(entry => ({
   target: "node20",
   format: "cjs",
   external: ["electron"],
+  loader: { ".css": "text", ".woff2": "dataurl" },
   logLevel: "info",
   entryPoints: [join(desktopRoot, `src/${entry}/index.ts`)],
   outfile: join(desktopRoot, `dist/${entry}/index.js`),

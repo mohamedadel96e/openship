@@ -41,6 +41,7 @@ const provider = vi.hoisted(() => ({
   listRecords: vi.fn(),
   upsertRecord: vi.fn(),
   deleteRecord: vi.fn(),
+  formatContent: vi.fn((_type: string, content: string) => content),
 }));
 
 vi.mock("@repo/platform/engine/modules/dns/registry", () => ({
@@ -90,6 +91,7 @@ const rec = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  provider.formatContent.mockImplementation((_type: string, content: string) => content);
   decrypt.mockImplementation((v: string) => String(v).replace(/^enc1:/, ""));
   provider.findZone.mockResolvedValue({ id: "zone_1", name: "example.com", status: "active" });
 });
@@ -181,6 +183,19 @@ describe("resolveDnsManager", () => {
 
 describe("planRecords", () => {
   beforeEach(() => credentialRepo.listActiveByProvider.mockResolvedValue([row()]));
+
+  it.each([["token", "update"], ['"token"', "in-sync"]])(
+    "plans Cloudflare's TXT formatting consistently for %s", async (content, action) => {
+      provider.formatContent.mockImplementation((type, value) => type === "TXT" ? `"${value}"` : value);
+      provider.listRecords.mockResolvedValue([rec({
+        type: "TXT", name: "_openship-challenge.app.example.com", content,
+      })]);
+      const plan = await planRecords("org_1", "app.example.com", [{
+        type: "TXT", name: "_openship-challenge.app.example.com", content: "token",
+      }]);
+      expect(plan.records[0]?.action).toBe(action);
+    },
+  );
 
   const plan1 = (over: Record<string, unknown> = {}) =>
     planRecords("org_1", "app.example.com", [

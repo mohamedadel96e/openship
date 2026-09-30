@@ -1,4 +1,21 @@
 {
+  "home": {
+    "label": "Openship Cloud",
+    "title": "Ready to ship?",
+    "plansAndBilling": "Plans & billing",
+    "description": "Managed builds and hosting, with room to grow.",
+    "manageDescription": "Your plan, usage, and billing in one place.",
+    "purchasesUnavailable": "New subscriptions are currently unavailable.",
+    "viewPlans": "Explore plans"
+  },
+  "welcome": {
+    "eyebrow": "You're all set",
+    "title": "Welcome to {name}",
+    "description": "Your Cloud plan is active. Let's put it to work.",
+    "dismiss": "Close welcome",
+    "openProjects": "Open projects",
+    "viewPlan": "View my plan"
+  },
   "capacity": {
     "title": "Capacity & usage",
     "subtitle": "Included capacity on your plan and how much you've used. Live figures sync from Openship Cloud.",
@@ -89,6 +106,14 @@
     "changeViaSupport": "Contact support to change or cancel your current subscription.",
     "billingUnavailable": "Purchases are not available for this account yet.",
     "replacementNotice": "Changing your plan or billing interval starts a new cycle at the full selected price after payment. There is no automatic proration."
+  },
+  "complimentary": {
+    "label": "Complimentary · No charge",
+    "untilRevoked": "Active until revoked",
+    "expiresOn": "Available until {date}",
+    "creditsRenewOn": "Credits renew on {date}",
+    "changeViaSupport": "Support manages changes to your complimentary plan.",
+    "topupsUnavailable": "Extra usage for your complimentary plan is managed by support."
   },
   "pricing": {
     "custom": "Custom",
@@ -306,9 +331,9 @@
     "creditsPerCycle": "{amount} credits / billing cycle",
     "buildTime": "Build time",
     "buildMinutes": "{amount} min / month",
-    "buildHint": "Time spent building your code. A 5-minute build uses 5 build minutes from your monthly allowance.",
-    "apps": "Running services",
-    "appsHint": "Apps, databases and workers running at the same time. Each running Compose service counts toward this limit.",
+    "buildHint": "Builds use the shared usage allowance according to their resource consumption. A separate time limit applies only when included in your saved plan.",
+    "apps": "Service slots",
+    "appsHint": "Reserved by deployed projects and queued deployments. Undeployed drafts don't use slots.",
     "machine": "CPU & memory per service",
     "machineHint": "The largest CPU and memory size available for one service. This is a limit, not a shared balance.",
     "projects": "Projects",
@@ -320,7 +345,7 @@
     "setupOnly": "Subscription required",
     "setupHint": "Choose a Cloud plan to create projects, build your code and run apps.",
     "includedTitle": "Your resources",
-    "limitsHint": "Projects, running services and monthly build time in your plan.",
+    "limitsHint": "Projects, running services and any build time limit included in your plan.",
     "balanceRule": "Apps pause when the usage allowance runs out. Add more usage to continue, or upgrade for higher resource limits.",
     "reset": "Build allowance resets {date}",
     "cpuHint": "Processing used over time. 1 vCPU running for 1 hour is 1 vCPU-hour.",
@@ -340,7 +365,12 @@
     "usageIncluded": "Shared usage allowance included",
     "usageSummary": "Builds and running apps share a usage allowance. Larger machines and longer running times use more.",
     "usageDetails": "Usage details",
-    "usagePercent": "{percent}% used"
+    "usagePercent": "{percent}% used",
+    "poolHint": "Shared across all workspaces, including stopped workspaces and pending changes.",
+    "creditUnitsHint": "Credits measure resource consumption, not minutes. CPU, memory, disk activity and transfer each have their own rate.",
+    "topupCapacityHint": "Top-ups add usage credits. Upgrade your plan for more total CPU, RAM or storage.",
+    "poolTitle": "Shared capacity",
+    "poolCapacity": "{cpu} vCPU · {ram} GB RAM · {disk} GB disk"
   },
   "onboarding": {
     "workspaceDescription": "Choose a Cloud plan to create projects, build your code and run your apps. No projects or compute are included before subscribing.",
@@ -404,5 +434,18 @@
     "currentPeriod": "Current billing period",
     "viewUsage": "View detailed usage",
     "bandwidthPerMonth": "{amount} GB / month"
+  },
+  "creditAlert": {
+    "lowTitle": "Cloud credits running low",
+    "lowDescription": "You have used {percent}% of your allowance, including purchased credits. {credits} credits remain.",
+    "graceTitle": "You are using grace credits",
+    "graceDescription": "Your paid credits are used up. {credits} grace credits remain before new workloads are blocked.",
+    "exhaustedTitle": "Cloud credits exhausted",
+    "exhaustedDescription": "New workloads are blocked until credits are added or your paid allowance renews. Open billing to review your options.",
+    "buyCredits": "Buy more credits",
+    "openBilling": "Open billing",
+    "close": "Got it",
+    "opening": "Opening billing for the organization in this alert…",
+    "wrongOrganization": "This billing link is unavailable for your account. Sign in with an account that belongs to the organization in the alert."
   }
 }

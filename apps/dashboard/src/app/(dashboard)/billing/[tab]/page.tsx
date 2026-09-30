@@ -39,7 +39,7 @@ export default async function BillingTabPage({
     case "usage":
       return <BillingUsage state={state} />;
     case "plans":
-      return <BillingPlansRoute currentPlan={state.tier as PlanTierId} subscription={state.subscription} billingEnabled={state.billing?.enabled === true} canChangeSubscription={state.capabilities?.subscriptionChange === true} />;
+      return <BillingPlansRoute currentPlan={state.tier as PlanTierId} subscription={state.subscription} complimentary={state.complimentary} billingEnabled={state.billing?.enabled === true} canChangeSubscription={state.capabilities?.subscriptionChange === true} />;
     case "topups":
       return <BillingTopups state={state} />;
     case "payment":

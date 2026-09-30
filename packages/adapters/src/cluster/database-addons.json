@@ -1,4 +1,14 @@
 {
+  "longhorn-uninstall": {
+    "url": "https://raw.githubusercontent.com/longhorn/longhorn/v1.12.1/uninstall/uninstall.yaml",
+    "sha256": "98ff61dd1878ee31ea367b38106af2bad27ab76479a785cbb41edf599fdca664",
+    "bytes": 2622
+  },
+  "longhorn": {
+    "url": "https://raw.githubusercontent.com/longhorn/longhorn/v1.12.1/deploy/longhorn.yaml",
+    "sha256": "41648963af867ac1d0c85755fb53cf61cacd57c9bb22e1942e3fb0439eeb04fd",
+    "bytes": 207054
+  },
   "postgres": {
     "url": "https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v1.30.0/cnpg-1.30.0.yaml",
     "sha256": "f8bede43fe4ee0d478c2355b204a36876b2ae4faac60f2a9452280b293da3b88",

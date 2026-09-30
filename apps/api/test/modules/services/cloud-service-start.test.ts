@@ -97,7 +97,7 @@ describe("Cloud service Start placement and recovery", () => {
     await expect(startServiceContainer(ctx(), projectId, addedId)).resolves.toMatchObject({ containerId: "cache-container" });
     expect(h.ensureWorkspace).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       projectId, organizationId, existingWorkspaceId: workspaceId,
-      resources: { cpuCores: 3, memoryMb: 5632, diskMb: 32768 },
+      resources: { cpuCores: 3, memoryMb: 5632, diskMb: 8192 },
     }));
     // The web's unapplied 128 MB edit and the disabled-but-live database must
     // not erase their existing 2 GB + 1 GB allocations from the shared host.

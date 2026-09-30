@@ -9,7 +9,14 @@ import {
   type ClusterRuntimePlan,
 } from "@repo/core";
 import type { Database } from "../client";
-import { clusterRuntime as table, clusterDatabase, computeCluster, serverCluster, project } from "../schema";
+import {
+  clusterRuntime as table,
+  clusterStorage,
+  clusterDatabase,
+  computeCluster,
+  serverCluster,
+  project,
+} from "../schema";
 
 export type ClusterRuntimeRecord = typeof table.$inferSelect;
 const conflict = (message: string) => new AppError(message, 409, "CLUSTER_RUNTIME_CONFLICT");
@@ -90,8 +97,21 @@ export function createClusterRuntimeRepo(db: Database) {
         if (current.cloudWorkspaceId)
           throw conflict("Cloud projects cannot be assigned to self-hosted clusters.");
         if (current.clusterId !== clusterId) {
-          const [database] = await tx.select({ id: clusterDatabase.id }).from(clusterDatabase).where(and(eq(clusterDatabase.projectId, projectId), ne(clusterDatabase.status, "deleted"))).limit(1);
-          if (database) throw conflict("This project still owns databases on its current cluster. Remove or migrate them before changing its target.");
+          const [database] = await tx
+            .select({ id: clusterDatabase.id })
+            .from(clusterDatabase)
+            .where(
+              and(
+                eq(clusterDatabase.projectId, projectId),
+                ne(clusterDatabase.status, "deleted"),
+                clusterId ? ne(clusterDatabase.clusterId, clusterId) : undefined,
+              ),
+            )
+            .limit(1);
+          if (database)
+            throw conflict(
+              "This project still owns databases on its current cluster. Remove or migrate them before changing its target.",
+            );
         }
         const [updated] = await tx
           .update(project)
@@ -172,8 +192,26 @@ export function createClusterRuntimeRepo(db: Database) {
           throw conflict("Only a stopped or failed operation can be retried.");
         const intent = action === "remove" ? "remove" : current.intent;
         if (intent === "remove") {
-          const [database] = await tx.select({ id: clusterDatabase.id }).from(clusterDatabase).where(and(eq(clusterDatabase.runtimeId, current.id), ne(clusterDatabase.status, "deleted"))).limit(1);
-          if (database) throw conflict("Databases or retained database disks still belong to this cluster. Remove or migrate them before disabling scaling.");
+          const [storage] = await tx
+            .select({ id: clusterStorage.id })
+            .from(clusterStorage)
+            .where(
+              and(eq(clusterStorage.runtimeId, current.id), ne(clusterStorage.status, "removed")),
+            )
+            .limit(1);
+          if (storage)
+            throw conflict("Remove managed storage and its volumes before disabling scaling.");
+          const [database] = await tx
+            .select({ id: clusterDatabase.id })
+            .from(clusterDatabase)
+            .where(
+              and(eq(clusterDatabase.runtimeId, current.id), ne(clusterDatabase.status, "deleted")),
+            )
+            .limit(1);
+          if (database)
+            throw conflict(
+              "Databases or retained database disks still belong to this cluster. Remove or migrate them before disabling scaling.",
+            );
           const [bound] = await tx
             .select({ id: project.id })
             .from(project)

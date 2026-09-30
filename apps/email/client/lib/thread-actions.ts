@@ -105,6 +105,7 @@ export async function moveThreadsTo({ threadIds, currentFolder, destination }: M
 
     return trpcClient.mail.modifyLabels.mutate({
       ids: threadIds,
+      folder: currentFolder,
       addLabels: addLabel ? [addLabel] : [],
       removeLabels: removeLabel ? [removeLabel] : [],
     });

@@ -357,8 +357,19 @@
       "notListeningHint": "Bu portta dinleyen işlem yok.",
       "notExposedHint": "Yalnızca loopback üzerinde dinliyor; uzak istemciler bağlanamaz.",
       "unknownHint": "Genel erişilebilirlik doğrulanamadı.",
-      "ports": { "smtp": "Gelen SMTP", "smtps": "SMTP gönderimi (TLS)", "submission": "SMTP gönderimi (STARTTLS)", "imaps": "IMAP erişimi (TLS)" },
-      "status": { "reachable": "Erişilebilir", "blocked": "Engelli", "not_listening": "Dinlemiyor", "not_exposed": "Dışa açık değil", "unknown": "Bilinmiyor" }
+      "ports": {
+        "smtp": "Gelen SMTP",
+        "smtps": "SMTP gönderimi (TLS)",
+        "submission": "SMTP gönderimi (STARTTLS)",
+        "imaps": "IMAP erişimi (TLS)"
+      },
+      "status": {
+        "reachable": "Erişilebilir",
+        "blocked": "Engelli",
+        "not_listening": "Dinlemiyor",
+        "not_exposed": "Dışa açık değil",
+        "unknown": "Bilinmiyor"
+      }
     },
     "delivery": {
       "title": "Giden teslim",
@@ -468,7 +479,8 @@
       "partSignatures": "{names} çalışmıyor - virüs imzaları artık güncellenmiyor, bu nedenle posta eskiyen bir imza kümesiyle taranıyor",
       "partAdvisory": "{names} çalışmıyor",
       "almostSubQueueOne": "{count} mesaj çıkmayı bekliyor - aşağıdaki Giden teslim bölümüne bakın.",
-      "almostSubQueueOther": "{count} mesaj çıkmayı bekliyor - aşağıdaki Giden teslim bölümüne bakın."
+      "almostSubQueueOther": "{count} mesaj çıkmayı bekliyor - aşağıdaki Giden teslim bölümüne bakın.",
+      "partCertificate": "Posta sertifikasının kontrol edilmesi gerekiyor"
     },
     "time": {
       "secondsAgo": "{n}sn önce",
@@ -704,5 +716,28 @@
     "loadingLogs": "Günlükler yükleniyor…",
     "noLogLines": "Bu bileşen için henüz günlük satırı yok.",
     "rowActions": "{name} için işlemler"
+  },
+  "certificate": {
+    "title": "Posta sertifikası",
+    "manage": "Sertifikayı yönet",
+    "check": "Sertifikayı kontrol et",
+    "checking": "Kontrol ediliyor…",
+    "renew": "Sertifikayı yenile",
+    "renewing": "Yenileniyor…",
+    "autoRenew": "Otomatik yenileme",
+    "autoRenewHint": "Süresi dolmadan yenile ve posta hizmetlerini yeniden yükle.",
+    "desktopHint": "Otomatik yenileme için Openship açık kalmalıdır.",
+    "jobDisabled": "Ortak SSL yenileme görevi devre dışı.",
+    "manageJob": "Yenileme görevini aç",
+    "failed": "Posta sertifikası güncellenemedi.",
+    "notChecked": "Kontrol edilmedi",
+    "expires": "Son geçerlilik: {date}",
+    "checked": "Kontrol: {time}",
+    "status": {
+      "ok": "Geçerli",
+      "warn": "Yenileme gerekli",
+      "fail": "İlgilenilmesi gerekiyor",
+      "unknown": "Doğrulanmadı"
+    }
   }
 }

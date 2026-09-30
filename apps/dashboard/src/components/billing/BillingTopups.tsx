@@ -59,7 +59,11 @@ export function BillingTopups({ state }: BillingTopupsProps) {
   const { t } = useI18n();
   if (needsCloudPlan(state)) return <BillingEmptyState kind="topups" />;
   if (state.topups?.status === "unavailable") return <div className="space-y-5">
-    <p className="rounded-2xl bg-card p-6 text-sm text-muted-foreground">{state.capabilities?.subscriptionChange ? t.billing.deployGate.paymentDescription : t.billing.plansRoute.changeViaSupport}</p>
+    <p className="rounded-2xl bg-card p-6 text-sm text-muted-foreground">
+      {state.complimentary ? t.billing.complimentary.topupsUnavailable
+        : state.capabilities?.subscriptionChange ? t.billing.deployGate.paymentDescription : t.billing.plansRoute.changeViaSupport}
+      {state.complimentary && <> <a href="mailto:support@openship.io" className="text-primary hover:underline">{t.billing.portal.supportButton}</a></>}
+    </p>
     <BillingSubscriptionControls state={state} />
   </div>;
   return <CreditPacks state={state} />;

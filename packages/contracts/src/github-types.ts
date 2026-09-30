@@ -18,7 +18,7 @@ export interface GitHubRepository {
   id: number;
   name: string;
   full_name: string;
-  owner: { login: string; id: number; avatar_url: string };
+  owner: { login: string; id: number; avatar_url: string; type?: "User" | "Organization" };
   private: boolean;
   visibility: string;
   html_url: string;
@@ -53,6 +53,7 @@ export interface GitHubInstallation {
   };
   app_id: number;
   target_type: string;
+  suspended_at?: string | null;
   permissions: Record<string, string>;
   events: string[];
 }
@@ -201,12 +202,13 @@ export interface MappedRepository {
    *              installation. Deployable for LOCAL builds only; remote
    *              builds will be refused by clone-auth.
    *   - "both" → visible to both. Same capabilities as "app".
+   *   - "token" → visible through the user's saved personal token, usable
+   *               for local and remote builds.
    *
    * Used by the dashboard repo picker to render a "Local builds only"
    * chip + install-App-on-this-owner prompt where appropriate.
-   * Undefined in SaaS mode (App is the only source).
    */
-  source?: "app" | "cli" | "both";
+  source?: "app" | "cli" | "both" | "token";
 }
 
 export interface MappedAccount {
@@ -227,7 +229,7 @@ export interface MappedAccount {
    *  - "cli" → gh CLI org membership (local-only via clone-auth.ts; the
    *            App may not be installed on this owner at all)
    */
-  source?: "app" | "cli";
+  source?: "app" | "cli" | "token";
 }
 
 export interface RepositoryDetail {
@@ -248,7 +250,7 @@ export interface RepositoryDetail {
 //
 // SINGLE SOURCE OF TRUTH. Everything that asks "is GitHub connected?" or
 // "which source should we use?" reads this shape, computed once by
-// getGitHubConnectionState(userId) in github.auth.ts.
+// the GitHubSource selected for the current execution context.
 //
 // What's NOT here on purpose:
 //   - `mode` / "saas-app" / "self-hosted" — that's `env.CLOUD_MODE` /
@@ -260,8 +262,8 @@ export interface RepositoryDetail {
 //     The new wire shape only carries USER-VISIBLE concepts (which source
 //     is connected, which one's primary).
 //
-// `primary` is the resolved priority pick that listings + cloning use.
-// `null` means no source can hand out a token at all.
+// `primary` is the browsing identity. Clones use the per-purpose credential chain.
+// `null` means no source is connected.
 
 export interface GitHubConnectionState {
   sources: {
@@ -309,14 +311,20 @@ export interface GitHubConnectionState {
       /** ISO timestamp of the last verify against GitHub. */
       checkedAt?: string;
     };
+    /** User-owned credential from Settings → Git; never an instance identity
+     *  or proof that the GitHub App has been installed. */
+    personalToken?: {
+      connected: boolean;
+      login?: string;
+      avatarUrl?: string;
+      problem?: "rejected" | "unreachable";
+    };
   };
   /**
-   * Which source listings + cloning prefer. The priority is:
-   *   1. openship-app (when connected) — safest, short-lived install tokens
-   *   2. gh-cli (when available) — local builds only
-   *   3. null — nothing connected
+   * The primary browsing identity. Clone credentials still resolve through
+   * the per-purpose token chain (including per-project overrides).
    *
    * `null` is the "show the connect prompt" signal.
    */
-  primary: "openship-app" | "gh-cli" | null;
+  primary: "openship-app" | "gh-cli" | "personal-token" | null;
 }

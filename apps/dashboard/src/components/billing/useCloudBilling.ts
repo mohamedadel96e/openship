@@ -6,6 +6,7 @@ import { useI18n } from "@/components/i18n-provider";
 import { api, getApiErrorMessage } from "@/lib/api/client";
 import { endpoints } from "@/lib/api/endpoints";
 import { randomUUID } from "@/lib/random-uuid";
+import { trackCloudEvent } from "@/lib/cloud-analytics";
 import type { ApiPlan, ApiPricingUi } from "./PricingCards";
 
 interface PlansPayload {
@@ -51,6 +52,7 @@ export function useCloudCheckout({ enabled, preserveProject = false, onCheckoutS
   async function startCheckout(planTierId: PlanTierId, interval: "monthly" | "annual") {
     if (!enabled || busy.current || planTierId === "free" || planTierId === "enterprise") return;
     busy.current = true;
+    trackCloudEvent({ event: "cloud_checkout_clicked", properties: { kind: "subscription", surface: preserveProject ? "onboarding" : "billing" } });
     // Open within the user's click, preserving unfinished project configuration.
     const checkoutTab = preserveProject ? window.open("about:blank", "_blank") : null;
     if (checkoutTab) checkoutTab.opener = null;

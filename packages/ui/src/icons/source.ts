@@ -2,6 +2,7 @@ import { outlineModern, type IconName } from "./catalog";
 import type { IconAsset } from "./types";
 
 export const LOCAL_ICON_BASE_URL = "/icons";
+export const CLOUD_ICON_BASE_URL = "https://cdn.oblien.com/static/png-icons";
 
 export interface IconTheme {
   readonly name: string;

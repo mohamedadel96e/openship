@@ -1,6 +1,6 @@
 // SSR markup only: effects don't run, so ConnectionCard stays in its skeleton
 // state — enough to assert the connect surface is (or isn't) mounted.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { I18nProvider } from "@/components/i18n-provider";
 import { PlatformProvider } from "@/context/PlatformContext";
@@ -13,6 +13,14 @@ import {
 import type { StepStatus } from "@/components/deploy/InstallStepper";
 
 type Props = React.ComponentProps<typeof CleanDeployProgressCard>;
+
+// xterm paints after mount; snapshot rendering and incremental writes have
+// their own DOM tests. This suite checks which output the progress page passes.
+vi.mock("@/components/import-project/LogSnapshotTerminal", () => ({
+  LogSnapshotTerminal: ({ logs, emptyLabel }: { logs: string; emptyLabel: string }) => (
+    <pre>{logs || emptyLabel}</pre>
+  ),
+}));
 
 const baseProps: Props = {
   appId: "grafana",
@@ -45,7 +53,7 @@ function text(html: string) {
 }
 
 describe("CleanDeployProgressCard — installing", () => {
-  it("with phases: renders the JSON-mapped stepper + foldable logs, not the legacy bar", () => {
+  it("renders the phase checklist and the deployment console with search and copy", () => {
     const html = render({
       phase: "installing",
       phases: { images: "done", services: "active" },
@@ -57,7 +65,8 @@ describe("CleanDeployProgressCard — installing", () => {
     expect(out).toContain("Preparing images");
     expect(out).toContain("Starting services");
     expect(out).toContain("backend"); // per-service sub-list
-    expect(out).toContain("Hide logs"); // logs open by default → toggle offers "Hide"
+    expect(out).toContain("hello");
+    expect(html).toContain('aria-label="Copy"');
     // The legacy CENTERED layout must be gone. Matched on its container, not on a
     // utility class: the stepper layout now has a progress bar of its own in the
     // aside, so "no bar" no longer identifies the layout at all.
@@ -331,11 +340,11 @@ describe("CleanDeployProgressCard — error", () => {
   // A settled install must not mount a console that can only ever say "waiting".
   it("mounts no log panel when the install produced no output", () => {
     const empty = render({ phase: "error", phases: {}, cancelled: true, logs: "" });
-    expect(empty).not.toContain("deploy logs");
+    expect(empty).not.toContain("Deployment Logs");
     expect(text(empty)).not.toContain("Waiting for output");
 
     const withLogs = render({ phase: "error", phases: {}, logs: "boot: ok" });
-    expect(withLogs).toContain("deploy logs");
+    expect(withLogs).toContain("Deployment Logs");
     expect(text(withLogs)).toContain("boot: ok");
   });
 

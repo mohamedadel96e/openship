@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   invalidateStatus: vi.fn(),
   showToast: vi.fn(),
   openWindow: vi.fn(),
+  pollConnect: vi.fn(),
+  claimInstallation: vi.fn(),
   platform: { selfHosted: false, deployMode: "cloud" },
 }));
 
@@ -127,6 +129,8 @@ beforeEach(() => {
     state: "test-state",
   });
   h.disconnect.mockResolvedValue({ success: true });
+  h.pollConnect.mockResolvedValue({ status: "waiting" });
+  h.claimInstallation.mockResolvedValue({ ok: true, installation: { id: 42, login: "connected-team" } });
   const status = async () => ({
     state: serverState,
     accounts: serverState.sources.openshipApp.hasInstallations ? installedAccounts : [],
@@ -178,6 +182,107 @@ async function advance(ms = 5000) {
 }
 
 describe("GitHub redirect completion", () => {
+  it("uses the App button on Cloud and keeps the personal-token alternative visible", async () => {
+    await render();
+    const button = [...container.querySelectorAll("button")].find((item) => item.textContent?.trim() === "GitHub App");
+    expect(button).toBeDefined();
+    expect(container.textContent).toContain("Access token");
+    await act(async () => button!.click());
+    expect(h.connect).toHaveBeenCalledWith("oauth");
+    expect(h.connect).not.toHaveBeenCalledWith("cli");
+  });
+
+  it("waits for this attempt even when an older installation is already connected", async () => {
+    serverState = installed;
+    h.connect.mockResolvedValue({ connected: false, flow: "redirect", completion: "attempt", state: "new-attempt", step: "install", url: "https://github.com/new-install" });
+    await start();
+    await advance();
+    expect(connectButton().disabled).toBe(true);
+    expect(h.pollConnect).toHaveBeenCalledWith("new-attempt");
+    expect(h.getStatus).not.toHaveBeenCalled();
+    expect(handle.close).not.toHaveBeenCalled();
+    h.pollConnect.mockResolvedValue({ status: "complete" });
+    await advance();
+    expect(connectButton().disabled).toBe(false);
+    expect(h.showToast).toHaveBeenCalledWith("GitHub connected", "success", "GitHub");
+  });
+
+  it("shows errors for the current attempt without consuming another popup's error", async () => {
+    h.connect.mockResolvedValue({ connected: false, flow: "redirect", completion: "attempt", state: "current-attempt", step: "install", url: "https://github.com/new-install" });
+    await start();
+    storeGitHubConnectError("Other account cancelled", undefined, "other-attempt");
+    await advance();
+    expect(h.showToast).not.toHaveBeenCalled();
+    storeGitHubConnectError("This connection was cancelled", undefined, "current-attempt");
+    await advance();
+    expect(connectButton().disabled).toBe(false);
+    expect(h.showToast).toHaveBeenCalledWith("This connection was cancelled", "error", "GitHub");
+  });
+
+  it("lets the user select an existing installation with one claim and visible focus", async () => {
+    h.connect.mockResolvedValue({
+      connected: false,
+      flow: "installations",
+      state: "selection-attempt",
+      installUrl: "https://github.com/install?state=selection-attempt",
+      installations: [
+        {
+          id: 42,
+          login: "connected-team",
+          avatarUrl: "https://avatars.githubusercontent.com/u/42?v=4",
+          type: "Organization",
+          connected: false,
+        },
+      ],
+    });
+    let complete!: (result: unknown) => void;
+    h.claimInstallation.mockImplementation(() => new Promise((resolve) => { complete = resolve; }));
+    await render();
+    await act(async () => connectButton().click());
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(document.activeElement).toBe(dialog);
+    const pick = [...dialog!.querySelectorAll("button")].find((button) => button.textContent?.includes("connected-team"))!;
+    expect(pick.querySelector("img")?.getAttribute("src")).toBe(
+      "https://avatars.githubusercontent.com/u/42?v=4",
+    );
+    await act(async () => { pick.click(); pick.click(); });
+    expect(h.claimInstallation).toHaveBeenCalledExactlyOnceWith({ state: "selection-attempt", installationId: "42" });
+    expect(pick.disabled).toBe(true);
+    serverState = installed;
+    await act(async () => complete({ ok: true, installation: { id: 42 } }));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(container.textContent).toContain("connected-team");
+    expect(h.showToast).toHaveBeenCalledWith("GitHub connected", "success", "GitHub");
+  });
+
+  it.each(["already-connected", "incomplete", "network"])("gives feedback for %s instead of silently closing the popup", async (caseName) => {
+    if (caseName === "already-connected") h.connect.mockResolvedValue({ connected: true });
+    if (caseName === "incomplete") h.connect.mockResolvedValue({ connected: false });
+    if (caseName === "network") h.connect.mockRejectedValue(new TypeError("Failed to fetch"));
+    await render();
+    await act(async () => connectButton().click());
+    expect(connectButton().disabled).toBe(false);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+    expect(h.showToast).toHaveBeenCalledWith(expect.any(String), caseName === "already-connected" ? "success" : "error", "GitHub");
+  });
+
+  it("keeps a failed installation selection usable from the keyboard", async () => {
+    h.connect.mockResolvedValue({ connected: false, flow: "installations", state: "selection-attempt", installUrl: "https://github.com/install?state=selection-attempt",
+      installations: [{ id: 42, login: "connected-team", connected: false }] });
+    h.claimInstallation.mockRejectedValueOnce(new Error("GitHub temporarily unavailable. Try again."));
+    await render();
+    await act(async () => connectButton().click());
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    const pick = [...dialog.querySelectorAll("button")].find((button) => button.textContent?.includes("connected-team"))!;
+    await act(async () => pick.click());
+    expect(dialog.querySelector('[role="alert"]')?.textContent).toContain("GitHub temporarily unavailable");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(pick.disabled).toBe(false);
+    await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
   it("starts a fresh installation from Settings and refreshes the card only after completion", async () => {
     serverState = oauthOnly;
     await render();

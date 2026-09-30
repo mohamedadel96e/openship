@@ -44,7 +44,7 @@ export { planLimitsSchema } from "./schema";
 
 /** Plan tier identifier. Mirrors `pricing.json#plans[].id`; the pricing test
  *  asserts the two never drift (a new tier is a compile error, by design). */
-export type PlanTierId = "free" | "starter" | "pro" | "team" | "enterprise";
+export type PlanTierId = "free" | "hobby" | "starter" | "pro" | "team" | "enterprise";
 
 /** Ordered plan ids, display order = catalog order. */
 export const PLAN_IDS: readonly PlanTierId[] = PRICING.plans.map((p) => p.id as PlanTierId);
@@ -150,9 +150,13 @@ export interface OblienLimits {
   max_vcpus: number | null;
   max_ram_mb: number | null;
   max_disk_gb: number | null;
+  max_total_vcpus: number | null;
+  max_total_ram_mb: number | null;
+  max_total_disk_gb: number | null;
 }
 
-/** Numeric plan limits, in customer-facing units. `null` is ALWAYS "unlimited". */
+/** Numeric application limits. null removes that separate limit; paid usage
+ * still draws from the namespace's credit allowance and shared capacity. */
 export interface PlanLimits {
   workloads: readonly WorkloadType[];
   services: boolean;
@@ -267,6 +271,10 @@ function placeholders(plan: PricingCatalogRaw["plans"][number], locale: PricingL
   const { limits } = plan;
   const svc = limits.maxResourceTier ? RESOURCE_TIER_SPECS[limits.maxResourceTier] : null;
   return {
+    credits: n(plan.billing.creditsPerCycle),
+    namespaceCpu: n(plan.billing.resourceLimits.max_total_vcpus),
+    namespaceRamGb: n(plan.billing.resourceLimits.max_total_ram_mb == null ? null : plan.billing.resourceLimits.max_total_ram_mb / 1024),
+    namespaceDiskGb: n(plan.billing.resourceLimits.max_total_disk_gb),
     buildMinutes: n(limits.buildMinutesPerMonth),
     freeSubdomains: n(limits.freeSubdomains),
     customDomains: n(limits.customDomains),

@@ -1,8 +1,10 @@
 import type { BillingState } from "./api/billing";
 
-/** An ended subscription keeps its history, but needs a new checkout to deploy. */
-export function needsCloudPlan(state: BillingState): boolean {
-  return state.tier === "free" || state.subscription === null || state.subscription?.status === "canceled";
+/** Complimentary grants provide a plan without a paid provider subscription. */
+export function needsCloudPlan(state: Pick<BillingState, "tier" | "subscription" | "complimentary">): boolean {
+  if (state.tier === "free") return true;
+  if (state.complimentary) return false;
+  return state.subscription === null || state.subscription?.status === "canceled";
 }
 
 export function hasUnlimitedCloudCredits(state: BillingState): boolean {

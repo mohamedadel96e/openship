@@ -7,15 +7,20 @@
  * (channels, subscriptions, deliveries) is enforced inside handlers.
  */
 import { Hono } from "hono";
+import {
+  NotificationDeliveryQuery,
+  CreateChannelBody,
+  UpdateChannelBody,
+  UpsertSubscriptionBody,
+  UpsertNotificationDefaultBody,
+} from "@repo/contracts";
 import { secureRouter } from "../../lib/secure-router";
 import * as ctrl from "./notifications.controller";
-import { CreateChannelBody, UpdateChannelBody, UpsertSubscriptionBody, UpsertNotificationDefaultBody } from "@repo/contracts";
 
 const r = secureRouter(new Hono(), {
   module: "notifications",
   basePath: "/api/notifications",
 });
-
 
 // ── Categories (static registry — readable by any member)
 r.get("/categories", { tag: "notifications:read", mcp: { description: "List notification categories (the registry of event types)." } }, ctrl.listCategories);
@@ -34,10 +39,10 @@ r.delete("/subscriptions/:id", { tag: "notifications:write", auditHandledByOpera
 
 // ── Org defaults (admin-controlled — admin tag)
 r.get("/defaults", { tag: "notifications:read", mcp: { description: "List org default notification settings." } }, ctrl.listDefaults);
-r.put("/defaults", { tag: "notifications:admin", body: UpsertNotificationDefaultBody, auditHandledByOperation: true }, ctrl.upsertDefault);
+r.put("/defaults", { tag: "notifications:admin", body: UpsertNotificationDefaultBody, auditHandledByOperation: true, mcp: { description: "Set a workspace default notification destination and enabled state for an event category. Existing subscriptions and delivery policy still apply." } }, ctrl.upsertDefault);
 
 // ── Deliveries (in-app inbox)
-r.get("/deliveries", { tag: "notifications:read", mcp: { description: "List notification deliveries (the in-app alert feed)." } }, ctrl.listDeliveries);
+r.get("/deliveries", { tag: "notifications:read", mcp: { description: "List notification deliveries (the in-app alert feed)." }, query: NotificationDeliveryQuery }, ctrl.listDeliveries);
 r.get("/deliveries/unseen-count", { tag: "notifications:read", mcp: { description: "Count unseen notifications." } }, ctrl.unseenCount);
 r.post("/deliveries/:id/seen", { tag: "notifications:write", auditHandledByOperation: true, mcp: { description: "Mark a notification delivery as seen." } }, ctrl.markSeen);
 

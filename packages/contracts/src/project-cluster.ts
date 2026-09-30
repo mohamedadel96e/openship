@@ -5,6 +5,19 @@ export const ClusterWorkloadConfigSchema = Type.Object(
   {
     replicas: Type.Integer({ minimum: 1, maximum: 100 }),
     imageRepository: Type.Optional(Type.String({ minLength: 3, maxLength: 255 })),
+    mounts: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            name: Type.String({ minLength: 1, maxLength: 63 }),
+            mountPath: Type.String({ minLength: 2, maxLength: 255 }),
+            readOnly: Type.Optional(Type.Boolean()),
+          },
+          { additionalProperties: false },
+        ),
+        { maxItems: 16 },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

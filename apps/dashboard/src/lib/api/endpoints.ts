@@ -410,6 +410,7 @@ export const endpoints = {
     portsCheck: "mail/ports/check",
     portsResolve: "mail/ports/resolve",
     admin: {
+      certificate: (serverId: string) => `mail/admin/${encodeURIComponent(serverId)}/certificate`,
       domains: (serverId: string) => `mail/admin/${encodeURIComponent(serverId)}/domains`,
       domain: (serverId: string, domain: string) =>
         `mail/admin/${encodeURIComponent(serverId)}/domains/${encodeURIComponent(domain)}`,

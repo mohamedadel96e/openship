@@ -15,6 +15,7 @@ import { useRouter } from "next/navigation";
 import { useI18n } from "@/components/i18n-provider";
 import { usePlatform } from "@/context/PlatformContext";
 import { projectsApi, servicesApi, type Service } from "@/lib/api";
+import type { ProjectUpdateStatus } from "@/lib/api/projects";
 import {
   invalidateProjectCachesFor,
   PROJECT_INFO_NOT_FOUND,
@@ -28,6 +29,8 @@ import {
   removeProjectEnvironment,
 } from "./project-environments";
 import { beginServicesFetch, failServicesFetch } from "./services-fetch-state";
+
+type AvailableProjectUpdate = Extract<ProjectUpdateStatus, { supported: true }>;
 
 interface ProjectDomain {
   domain: string;
@@ -242,6 +245,11 @@ interface ProjectSettingsContextType {
   // Callers must hit projectsApi.* themselves and only invoke these on
   // success. Synchronous to make that contract explicit.
   updateProjectData: (updates: Partial<BasicProjectData>) => void;
+  /** A confirmed source update that is not already deploying. */
+  availableUpdate: AvailableProjectUpdate | null;
+  updateStatus: ProjectUpdateStatus | null;
+  updateStatusLoading: boolean;
+  refreshUpdateStatus: () => Promise<void>;
 
   // Domains
   domainsData: DomainsData;
@@ -457,6 +465,74 @@ export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
     if (projectInfo?.project) setProjectData(projectInfo.project);
     if (projectInfo?.environments) setEnvironments(projectInfo.environments);
   }, [projectInfo]);
+
+  // One check for the whole project page: desktop/mobile navigation and the
+  // Deployments banner share its result. A source or deployment change must
+  // discard the old result, including while the new check is still in flight.
+  const updateKey = projectData.id === id && projectData.appTemplateId !== "openship"
+    ? JSON.stringify([
+        id,
+        projectData.activeDeploymentId,
+        projectData.latestDeploymentId,
+        projectData.latestDeploymentStatus,
+        projectData.gitOwner,
+        projectData.gitRepo,
+        projectData.gitBranch,
+        projectData.rootDirectory,
+        projectData.monorepoSharedPaths,
+        projectData.releaseSource,
+      ])
+    : null;
+  const [updateResult, setUpdateResult] = useState<{
+    key: string;
+    data: ProjectUpdateStatus | null;
+    loading: boolean;
+  } | null>(null);
+  const updateRequestRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
+  const currentUpdateKeyRef = useRef(updateKey);
+  currentUpdateKeyRef.current = updateKey;
+  const updateMountedRef = useRef(true);
+
+  useEffect(() => {
+    updateMountedRef.current = true;
+    return () => { updateMountedRef.current = false; };
+  }, []);
+
+  const refreshUpdateStatus = useCallback((): Promise<void> => {
+    if (!updateKey) return Promise.resolve();
+    // The page and newly mounted Deployments/Source tabs can ask at the same time.
+    // Share the in-flight request; later tab visits still get a fresh check.
+    if (updateRequestRef.current?.key === updateKey) return updateRequestRef.current.promise;
+    const promise = projectsApi.getCommitStatus(id)
+      .then(({ data }) => data)
+      .catch(() => null) // Best-effort hint: a failed check is not evidence of an update.
+      .then((data) => {
+        if (!updateMountedRef.current || currentUpdateKeyRef.current !== updateKey ||
+          updateRequestRef.current?.promise !== promise) return;
+        setUpdateResult({
+          key: updateKey,
+          data,
+          loading: false,
+        });
+      })
+      .finally(() => {
+        if (updateRequestRef.current?.promise === promise) updateRequestRef.current = null;
+      });
+    updateRequestRef.current = { key: updateKey, promise };
+    setUpdateResult((previous) => ({
+      key: updateKey,
+      data: previous?.key === updateKey ? previous.data : null,
+      loading: true,
+    }));
+    return promise;
+  }, [id, updateKey]);
+
+  useEffect(() => { void refreshUpdateStatus(); }, [refreshUpdateStatus]);
+
+  const updateStatus = updateResult?.key === updateKey ? updateResult.data : null;
+  const updateStatusLoading = !!updateKey && (updateResult?.key !== updateKey || updateResult.loading);
+  const availableUpdate = updateStatus?.supported && updateStatus.behind && !updateStatus.latestInProgress
+    ? updateStatus : null;
 
   const buildData = useMemo<BuildData>(
     () => ({
@@ -955,7 +1031,7 @@ export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
   const resolveTab = (tab?: string) => {
     if (tab === "general") return "overview";
     if (tab === "git") return "source";
-    if (tab === "settings" || tab === "build") return "runtime";
+    if (tab === "settings" || tab === "build" || tab === "runtime") return "advanced";
     return tab || undefined; // let default be set by tab list below
   };
 
@@ -994,15 +1070,7 @@ export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
       },
       { id: "logs", label: tl.logs, icon: "file-text" },
       { id: "backup", label: tl.backup, icon: "database-backup" },
-      {
-        id: "runtime",
-        label: tl.settings,
-        icon: "wrench",
-        sections: [
-          { id: "runtime", label: tl.runtime },
-          { id: "advanced", label: tl.advanced },
-        ],
-      },
+      { id: "advanced", label: tl.settings, icon: "wrench" },
     ];
   }, [t, projectData.deployTarget, selfHosted]);
 
@@ -1034,6 +1102,10 @@ export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
       projectData,
       setProjectData,
       updateProjectData,
+      availableUpdate,
+      updateStatus,
+      updateStatusLoading,
+      refreshUpdateStatus,
 
       domainsData,
       updateDomains,
@@ -1084,6 +1156,10 @@ export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
     }),
     [
       projectData,
+      availableUpdate,
+      updateStatus,
+      updateStatusLoading,
+      refreshUpdateStatus,
       domainsData,
       updateDomains,
       environmentData,

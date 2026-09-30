@@ -7,11 +7,13 @@ import {
   resolveCommandArgv,
   resolveWorkload,
   type ComposeAdvanced,
+  type ResourceValues,
 } from "@repo/core";
 import type { Database } from "../connection";
 import { createConfigurationSecrets, type ConfigurationEncryption } from "../configuration-secrets";
 import { deployment, envVar, project, service, serviceDeployment } from "../schema";
 import type { ComposeServiceSpec, ServicePublicEndpoint } from "../schema/service";
+import { liveBuildExecutionCondition } from "./deployment.repo";
 
 /** A public route as it arrives on the wire (port may be a string) before
  *  normalization into a {@link ServicePublicEndpoint}. */
@@ -97,12 +99,12 @@ const canonicalize = (value: unknown): unknown => {
   return value;
 };
 
-const canonicalSpec = (s: ComposeServiceSpec): string =>
-  JSON.stringify(canonicalize(toComposeSpec(s)));
+const composeValuesEqual = (a: unknown, b: unknown): boolean =>
+  JSON.stringify(canonicalize(a)) === JSON.stringify(canonicalize(b));
 
 /** Compose-field equality (ignores routing + ordering-insensitive env). */
 export const composeSpecsEqual = (a: ComposeServiceSpec, b: ComposeServiceSpec) =>
-  canonicalSpec(a) === canonicalSpec(b);
+  composeValuesEqual(toComposeSpec(a), toComposeSpec(b));
 
 /** A raw source expression was replaced before inline edits had ownership
  * metadata. It may be an old interpolation result or an intentional edit. */
@@ -186,9 +188,6 @@ function reconcileComposeEnvironment(
     }),
   };
 }
-
-const composeValuesEqual = (a: unknown, b: unknown) =>
-  JSON.stringify(canonicalize(a)) === JSON.stringify(canonicalize(b));
 
 /** Three-way merge maps by key; arrays and scalars are indivisible fields.
  * Local changes win only where they were made, including explicit deletions. */
@@ -604,6 +603,33 @@ export function normalizeRoutingFields(input: {
 
 export function createServiceRepo(db: Database, encryption: ConfigurationEncryption) {
   const codec = createConfigurationSecrets(encryption);
+
+  function writeUpdate(id: string, data: Partial<NewService>, updatedAt: Date | null = new Date()) {
+    return db
+      .update(service)
+      .set(codec.sealService({ ...data, ...(updatedAt === null ? {} : { updatedAt }) }))
+      .where(eq(service.id, id));
+  }
+
+  /** Both Compose writers compare decrypted values before sealing the patch.
+   * No-op syncs and import metadata must not mark unchanged containers dirty
+   * (#986). Every changed configuration field still requires a deployment. */
+  async function updateFromCompose(stored: Service, data: Partial<NewService>): Promise<Service> {
+    const changed = Object.entries(data).filter(
+      ([key, value]) => value !== undefined && !composeValuesEqual(stored[key as keyof Service], value),
+    );
+    if (changed.length === 0) return stored;
+
+    const patch = Object.fromEntries(changed) as Partial<NewService>;
+    const configChanged = changed.some(([key]) => key !== "importedSpec" && key !== "driftSpec");
+    // Omit the timestamp on metadata-only writes: setting the value we read
+    // could backdate a concurrent config edit. RETURNING includes those edits
+    // in the result instead of echoing a stale read over the persisted row.
+    const [updated] = await writeUpdate(stored.id, patch, configChanged ? new Date() : null).returning();
+    if (!updated) throw new Error("Service was removed during Compose synchronization");
+    return codec.openService(updated);
+  }
+
   return {
     // ── Services ───────────────────────────────────────────────────────
 
@@ -635,8 +661,10 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
       })).map(codec.openService);
     },
 
-    /** Enabled definitions reserve a service slot. Disabling a definition cannot
-     * release that slot while its active deployment still runs the container.
+    /** Draft definitions do not consume running-service slots. Once a project
+     * has an active deployment, enabled definitions reserve a slot for starts
+     * and restarts. Disabling cannot release a slot while its active deployment
+     * still runs the container. Queued deployments reserve their frozen names.
      * Compose containers share a VM, so provider workspace count cannot enforce
      * this application allowance. Exclusions support atomic enable/re-enable. */
     async countRunningForOrg(
@@ -645,87 +673,120 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
       excludingNativeProjectId?: string,
       prospective?: { projectId: string; serviceNames: readonly string[] },
     ): Promise<number> {
-      const definitions = await db
-        .select({
-          id: service.id,
-          projectId: service.projectId,
-          name: service.name,
-          reserved: sql<boolean>`(${service.enabled} = true OR EXISTS (
-            SELECT 1 FROM ${serviceDeployment}
-            WHERE ${serviceDeployment.serviceId} = ${service.id}
-              AND ${serviceDeployment.deploymentId} = ${project.activeDeploymentId}
-              AND ${serviceDeployment.containerId} IS NOT NULL
-              AND ${serviceDeployment.status} <> 'stopped'
-          ))`,
-        })
-        .from(service)
-        .innerJoin(project, eq(service.projectId, project.id))
-        .where(
-          and(
-            eq(project.organizationId, organizationId),
-            sql`${project.deletedAt} IS NULL`,
-          ),
-        );
-      const excluded = new Set(excludingServiceIds);
-      const slots = new Set(definitions.filter(row => row.reserved && !excluded.has(row.id)).map(row => row.id));
-      const byName = new Map<string, typeof definitions>();
-      const key = (projectId: string, name: string) => JSON.stringify([projectId, name]);
-      for (const row of definitions) {
-        const identity = key(row.projectId, row.name);
-        byName.set(identity, [...(byName.get(identity) ?? []), row]);
-      }
-      const reserve = (projectId: string, names: readonly string[]) => {
-        for (const name of names) {
-          const identity = key(projectId, name);
-          const saved = byName.get(identity);
-          if (saved) {
-            for (const row of saved) if (!excluded.has(row.id)) slots.add(row.id);
-          } else slots.add(`pending:${identity}`);
-        }
-      };
-      // A frozen/imported stack can be queued before sync creates its service
-      // rows. Reserve those names immediately and deduplicate them once saved.
-      const queued = await db.select({
-        projectId: deployment.projectId,
-        names: sql<unknown>`${deployment.meta}->'cloudServiceSlots'`,
-      }).from(deployment).innerJoin(project, eq(deployment.projectId, project.id)).where(and(
-        eq(project.organizationId, organizationId), sql`${project.deletedAt} IS NULL`,
-        inArray(deployment.status, ["queued", "building", "deploying", "reconciling"]),
-        sql`${deployment.meta}->'cloudServiceSlots' IS NOT NULL`,
-      ));
-      for (const row of queued) {
-        if (!Array.isArray(row.names) || row.names.some(name => typeof name !== "string" || !name))
-          throw new Error("The deployment's Cloud service reservation is invalid");
-        reserve(row.projectId, row.names);
-      }
-      if (prospective) reserve(prospective.projectId, prospective.serviceNames);
-      // A single-app deployment has no service row. Queued deployments reserve
-      // its slot under the same organization lock as service creation, while an
-      // active deployment keeps the slot until the project is paused/deleted.
-      // Count a project once during redeploy, even with two deployment records.
-      const native = await db.select({ projectId: project.id, meta: deployment.meta })
-        .from(deployment).innerJoin(project, eq(deployment.projectId, project.id))
-        .where(and(
-          eq(project.organizationId, organizationId),
-          sql`${project.deletedAt} IS NULL`,
-          excludingNativeProjectId ? sql`${project.id} <> ${excludingNativeProjectId}` : undefined,
-          sql`(
-            (${deployment.status} IN ('queued', 'building', 'deploying', 'reconciling')
-              AND ${deployment.meta}->>'cloudApplicationSlot' = 'true')
-            OR (${deployment.id} = ${project.activeDeploymentId}
-              AND ${project.disabledAt} IS NULL AND ${deployment.containerId} IS NOT NULL
-              AND (${deployment.meta}->>'cloudApplicationSlot' = 'true'
-                OR (${deployment.meta}->>'cloudApplicationSlot' IS NULL
-                  AND (${deployment.meta}->>'serviceDeploymentMode' = 'single' OR NOT EXISTS (
-                    SELECT 1 FROM ${serviceDeployment} WHERE ${serviceDeployment.deploymentId} = ${deployment.id}
-                  )))))
-          )`,
-        ));
-      const nativeProjects = new Set(native.filter(item => {
-        const snapshot = (item.meta ?? {}) as { workload?: string; hasServer?: boolean };
-        return resolveWorkload(snapshot.workload, snapshot.hasServer) !== "static";
-      }).map(item => item.projectId));
-      return slots.size + nativeProjects.size;
+      // Read one snapshot: deployment completion can otherwise land between
+      // reading definitions and queued reservations, briefly losing both.
+      return db.transaction(
+        async (tx) => {
+          const definitions = await tx
+            .select({
+              id: service.id,
+              projectId: service.projectId,
+              name: service.name,
+              reserved: sql<boolean>`(
+                (${service.enabled} = true AND ${project.activeDeploymentId} IS NOT NULL)
+                OR EXISTS (
+                  SELECT 1 FROM ${serviceDeployment}
+                  WHERE ${serviceDeployment.serviceId} = ${service.id}
+                    AND ${serviceDeployment.deploymentId} = ${project.activeDeploymentId}
+                    AND ${serviceDeployment.containerId} IS NOT NULL
+                    AND ${serviceDeployment.status} <> 'stopped'
+                )
+              )`,
+            })
+            .from(service)
+            .innerJoin(project, eq(service.projectId, project.id))
+            .where(
+              and(eq(project.organizationId, organizationId), sql`${project.deletedAt} IS NULL`),
+            );
+          const excluded = new Set(excludingServiceIds);
+          const slots = new Set(
+            definitions.filter((row) => row.reserved && !excluded.has(row.id)).map((row) => row.id),
+          );
+          const byName = new Map<string, typeof definitions>();
+          const key = (projectId: string, name: string) => JSON.stringify([projectId, name]);
+          for (const row of definitions) {
+            const identity = key(row.projectId, row.name);
+            byName.set(identity, [...(byName.get(identity) ?? []), row]);
+          }
+          const reserve = (projectId: string, names: readonly string[]) => {
+            for (const name of names) {
+              const identity = key(projectId, name);
+              const saved = byName.get(identity);
+              if (saved) {
+                for (const row of saved) if (!excluded.has(row.id)) slots.add(row.id);
+              } else slots.add(`pending:${identity}`);
+            }
+          };
+          // A frozen/imported stack can be queued before sync creates its service
+          // rows. Reserve those names immediately and deduplicate them once saved.
+          // Keep the reservation through activation/cancellation until the worker
+          // acknowledges completion, using the same lease as project teardown.
+          const pending = sql`(${deployment.status} IN ('queued', 'building', 'deploying', 'reconciling')
+            OR ${liveBuildExecutionCondition()})`;
+          const queued = await tx
+            .select({
+              projectId: deployment.projectId,
+              names: sql<unknown>`${deployment.meta}->'cloudServiceSlots'`,
+            })
+            .from(deployment)
+            .innerJoin(project, eq(deployment.projectId, project.id))
+            .where(
+              and(
+                eq(project.organizationId, organizationId),
+                sql`${project.deletedAt} IS NULL`,
+                pending,
+                sql`${deployment.meta}->'cloudServiceSlots' IS NOT NULL`,
+              ),
+            );
+          for (const row of queued) {
+            if (
+              !Array.isArray(row.names) ||
+              row.names.some((name) => typeof name !== "string" || !name)
+            )
+              throw new Error("The deployment's Cloud service reservation is invalid");
+            reserve(row.projectId, row.names);
+          }
+          if (prospective) reserve(prospective.projectId, prospective.serviceNames);
+          // A single-app deployment has no service row. Queued deployments reserve
+          // its slot under the same organization lock as service creation, while an
+          // active deployment keeps the slot until the project is paused/deleted.
+          // Count a project once during redeploy, even with two deployment records.
+          const native = await tx
+            .select({ projectId: project.id, meta: deployment.meta })
+            .from(deployment)
+            .innerJoin(project, eq(deployment.projectId, project.id))
+            .where(
+              and(
+                eq(project.organizationId, organizationId),
+                sql`${project.deletedAt} IS NULL`,
+                excludingNativeProjectId
+                  ? sql`${project.id} <> ${excludingNativeProjectId}`
+                  : undefined,
+                sql`(
+                  (${pending}
+                    AND ${deployment.meta}->>'cloudApplicationSlot' = 'true')
+                  OR (${deployment.id} = ${project.activeDeploymentId}
+                    AND ${project.disabledAt} IS NULL AND ${deployment.containerId} IS NOT NULL
+                    AND (${deployment.meta}->>'cloudApplicationSlot' = 'true'
+                      OR (${deployment.meta}->>'cloudApplicationSlot' IS NULL
+                        AND (${deployment.meta}->>'serviceDeploymentMode' = 'single' OR NOT EXISTS (
+                          SELECT 1 FROM ${serviceDeployment} WHERE ${serviceDeployment.deploymentId} = ${deployment.id}
+                        )))))
+                )`,
+              ),
+            );
+          const nativeProjects = new Set(
+            native
+              .filter((item) => {
+                const snapshot = (item.meta ?? {}) as { workload?: string; hasServer?: boolean };
+                return resolveWorkload(snapshot.workload, snapshot.hasServer) !== "static";
+              })
+              .map((item) => item.projectId),
+          );
+          return slots.size + nativeProjects.size;
+        },
+        { isolationLevel: "repeatable read", accessMode: "read only" },
+      );
     },
 
     /**
@@ -757,10 +818,68 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
     },
 
     async update(id: string, data: Partial<NewService>) {
-      await db
-        .update(service)
-        .set(codec.sealService({ ...data, updatedAt: new Date() }))
-        .where(eq(service.id, id));
+      await writeUpdate(id, data);
+    },
+
+    /** Apply a catalog's initial profiles to an unfinished app as one write set.
+     * Lock the project and services before decrypting/merging configuration so
+     * existing resource settings and concurrent edits cannot be overwritten. */
+    async seedDraftAppResourceDefaults(input: {
+      projectId: string;
+      organizationId: string;
+      appTemplateId: string;
+      profiles: readonly { name: string; resources: Readonly<ResourceValues> }[];
+    }): Promise<string[]> {
+      if (input.profiles.length === 0) return [];
+      return db.transaction(async (tx) => {
+        const [owner] = await tx
+          .select({ id: project.id })
+          .from(project)
+          .where(
+            and(
+              eq(project.id, input.projectId),
+              eq(project.organizationId, input.organizationId),
+              eq(project.appTemplateId, input.appTemplateId),
+              sql`${project.resources} IS NULL`,
+              sql`${project.activeDeploymentId} IS NULL`,
+              sql`${project.deletedAt} IS NULL`,
+              eq(project.deletionInProgress, false),
+            ),
+          )
+          .for("update");
+        if (!owner) return [];
+        const rows = await tx
+          .select()
+          .from(service)
+          .where(
+            and(
+              eq(service.projectId, owner.id),
+              inArray(
+                service.name,
+                input.profiles.map((profile) => profile.name),
+              ),
+            ),
+          )
+          .orderBy(asc(service.id))
+          .for("update");
+        const byName = new Map(rows.map((row) => [row.name, codec.openService(row)]));
+        const changed: string[] = [];
+        for (const profile of input.profiles) {
+          const row = byName.get(profile.name);
+          if (!row || row.advanced?.resources != null) continue;
+          await tx
+            .update(service)
+            .set(
+              codec.sealService({
+                advanced: { ...row.advanced, resources: { ...profile.resources } },
+                updatedAt: new Date(),
+              }),
+            )
+            .where(and(eq(service.id, row.id), eq(service.projectId, owner.id)));
+          changed.push(row.id);
+        }
+        return changed;
+      });
     },
 
     async remove(id: string) {
@@ -970,22 +1089,15 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
         if (ex) {
           // Update existing - preserve the operator's `enabled` choice AND their
           // `sortOrder` (dashboard reordering); the compose YAML carries neither.
-          // One computed patch for both the write and the echoed row, or the
-          // returned Service would disagree with what was stored.
           const patch = composeWritePatch(p, ex, composeAuthoritative);
-          await this.update(ex.id, {
-            ...patch,
-            ...routing,
-            ...(composeAuthoritative ? { importedSpec: toComposeSpec(p), driftSpec: null } : {}),
-            // enabled + sortOrder left as-is (already on ex)
-          });
-          results.push({
-            ...ex,
-            ...patch,
-            ...routing,
-            ...(composeAuthoritative ? { importedSpec: toComposeSpec(p), driftSpec: null } : {}),
-            updatedAt: new Date(),
-          } as Service);
+          results.push(
+            await updateFromCompose(ex, {
+              ...patch,
+              ...routing,
+              ...(composeAuthoritative ? { importedSpec: toComposeSpec(p), driftSpec: null } : {}),
+              // enabled + sortOrder left as-is (already on ex)
+            }),
+          );
         } else {
           const importedSpec = composeAuthoritative ? toComposeSpec(p) : undefined;
           // Create new - new compose services default to enabled.
@@ -1076,27 +1188,19 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
         const ours = toComposeSpec(ex);
 
         const merged = reconcileComposeSpec(ours, base, theirs, p);
-        if (
-          !composeSpecsEqual(ours, merged) ||
-          base === null ||
-          !composeSpecsEqual(base, theirs) ||
-          !Object.hasOwn(base, "buildArgs") ||
-          ex.driftSpec
-        ) {
-          await this.update(ex.id, {
-            ...merged,
-            ...normalizeRoutingFields({
-              exposed: ex.exposed,
-              exposedPort: ex.exposedPort,
-              domain: ex.domain,
-              customDomain: ex.customDomain,
-              domainType: ex.domainType,
-              publicEndpoints: ex.publicEndpoints,
-            }),
-            importedSpec: theirs,
-            driftSpec: null,
-          });
-        }
+        await updateFromCompose(ex, {
+          ...merged,
+          ...normalizeRoutingFields({
+            exposed: ex.exposed,
+            exposedPort: ex.exposedPort,
+            domain: ex.domain,
+            customDomain: ex.customDomain,
+            domainType: ex.domainType,
+            publicEndpoints: ex.publicEndpoints,
+          }),
+          importedSpec: theirs,
+          driftSpec: null,
+        });
       }
 
       // An env_var row is an operator edit too. Removing a service cascades to

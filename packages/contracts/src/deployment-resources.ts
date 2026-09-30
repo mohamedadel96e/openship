@@ -50,6 +50,8 @@ export interface DeploymentBuildStatus {
   status: string;
   deploymentStatus: string;
   is_active: boolean;
+  /** Terminal worker cleanup still holds the execution lease; absent on older servers. */
+  completionPending?: boolean;
   cancellationPending: boolean;
   decisionPending: boolean;
   pendingPrompt: PromptPayload | null;
@@ -110,6 +112,7 @@ export const LogEntrySchema = Type.Object({
 const BuildStatusSchema = Type.Object({
   success: Type.Boolean(), deployment_id: ResourceIdSchema, project_id: ResourceIdSchema,
   status: Type.String(), deploymentStatus: Type.String(), is_active: Type.Boolean(),
+  completionPending: Type.Optional(Type.Boolean()),
   cancellationPending: Type.Boolean(), decisionPending: Type.Boolean(),
   pendingPrompt: Type.Union([Type.Null(), Type.Object({
     promptId: Type.String(), title: Type.String(), message: Type.String(),

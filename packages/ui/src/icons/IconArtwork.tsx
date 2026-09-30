@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useId, useState, type SVGProps } from "react";
+import { forwardRef, useEffect, useId, useState, type SVGProps } from "react";
 import type { IconAsset } from "./types";
 
 interface ArtworkSource {
@@ -31,7 +31,21 @@ export const IconArtwork = forwardRef<SVGSVGElement, IconArtworkProps>(function 
   const [failedSource, setFailedSource] = useState<string>();
   const failed = failedSource === src;
   const resolved = failed && fallback ? fallback : { src, mode, bounds, inset };
-  const canFallback = !failed && fallback && fallback.src !== src;
+  const canFallback = !failed && Boolean(fallback && fallback.src !== src);
+
+  useEffect(() => {
+    if (!canFallback) return;
+    // An SSR image can fail before hydration attaches its onError handler.
+    // Probe the same URL after mounting so that failure still selects the
+    // bundled artwork. Successful requests reuse the browser's image cache.
+    const probe = new Image();
+    probe.onerror = () => setFailedSource(src);
+    probe.src = src;
+    return () => {
+      probe.onerror = null;
+    };
+  }, [src, canFallback]);
+
   const labelled = Boolean(title || props["aria-label"] || props["aria-labelledby"]);
   // PNG libraries have different amounts of transparent padding. Fit the visible
   // artwork inside the asset's inset (one unit by default). Sparse glyphs such

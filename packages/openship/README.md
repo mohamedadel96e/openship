@@ -1,12 +1,14 @@
 # Openship SDK and CLI
 
-The `openship` distribution contains native and remote SDK entries and the existing CLI. This directory assembles the upcoming SDK release; build and pack it from the workspace to test the new exports before publication.
+The `openship` distribution contains Ship SDK and the CLI. Version 0.8.0 and later includes native and remote SDK entries, TypeScript declarations, and ESM/CommonJS support on Node.js 22+.
 
-The published `openship@0.7.2` is CLI-only. To try the SDK now, run `bun run build:sdk` from the repository root, run `npm pack` in `packages/openship`, and install the resulting tarball in your Node project. After an SDK-enabled version is published, install it normally:
+Install the package in your Node project:
 
 ```sh
 npm install openship
 ```
+
+Upgrade an older CLI-only dependency with `npm install openship@latest`. The [Ship SDK guide](https://openship.io/docs/api/sdk) covers remote connections, native embedding, deployment workflows, scaling, and the shared SDK/REST reference. Contributors can build with `bun run build:sdk`, run `npm pack` in this directory, and install the printed tarball to test unpublished changes.
 
 Use a remote client with a cloud or self-hosted Openship installation:
 
@@ -29,7 +31,7 @@ The root and `openship/native` export `createShip`. Its asynchronous factory own
 
 Native host execution requires explicit policy. Directory inputs require allowed source roots. Optional trusted host administration maps external users and namespaces; ordinary scoped clients receive no operator access. The trusted identity adapter verifies each assertion, and the platform rereads membership/grants on each call. The host adapter must observe revocation.
 
-Try the included [native lifecycle example](examples/native-lifecycle.mjs) from a Node project with the locally built SDK package installed:
+Try the included [native lifecycle example](examples/native-lifecycle.mjs) from a Node project with `openship` installed:
 
 ```sh
 node node_modules/openship/examples/native-lifecycle.mjs

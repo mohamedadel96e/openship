@@ -103,7 +103,7 @@
     "deletionInProgress": "このプロジェクトでは別の削除処理がすでに実行中です",
     "deletionInProgressTitle": "削除処理中",
     "confirmForceOrphan": "一部のリソースをサーバーから削除できませんでした。それでもプロジェクトを削除し、後で自動的にクリーンアップしますか？",
-    "teardownFailedAt": "次の箇所でティアダウンに失敗しました: {reasons}。再試行するか、強制削除してリソースを孤立させてください。",
+    "teardownFailedAt": "クリーンアップを完了できませんでした：{reasons}。プロジェクトは保存されています。問題を解決してから削除を再試行してください。",
     "teardownFailed": "ティアダウンに失敗しました",
     "cleanupFailedTitle": "クリーンアップに失敗しました",
     "alreadyDeleted": "プロジェクトはすでに削除されています",

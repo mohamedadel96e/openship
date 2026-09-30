@@ -5,9 +5,9 @@ description: Check package availability, API protocol support, provider requirem
 
 ## Package availability
 
-These docs describe the SDK implemented in the repository. Published `openship@0.7.2` contains the CLI
-without SDK exports. Use the [locally built tarball](/docs/api/sdk/installation) until an SDK-enabled
-release is published. Node.js 22 or later is required.
+Ship SDK is published in **`openship` 0.8.0 and later**. Install it with `npm install openship`;
+upgrade an older CLI-only dependency with `npm install openship@latest`. Node.js 22 or later is
+required. See [installation](/docs/api/sdk/installation) for the public import paths and local builds.
 
 ## Fixed organization scopes
 
@@ -40,6 +40,7 @@ provider and account capabilities; host administration remains specific to self-
 | Area | Status |
 | --- | --- |
 | Named operations | The [reference](/docs/api) covers all current native and remote groups. Provider and permission checks still apply. |
+| Clusters and scaling | Named operations cover private networks, compute-cluster setup, application replicas, PostgreSQL/Redis databases, shared files, and their backup/recovery flows. Infrastructure management is self-hosted only; a ready runtime and the relevant storage/backup configuration are required. See [servers](/docs/api/servers#compute-clusters) and [projects](/docs/api/projects#scale-a-stateless-application-on-a-cluster). |
 | Mail and data transfer | HTTP endpoints exist; complete named native SDK groups are not available. |
 | System and account lifecycle | Remaining setup, self-app, edge/terminal, and account lifecycle coverage is incomplete. Use the documented existing surface. |
 | Native CLI | Resource commands support native mode; some commands and system actions require HTTP. See [native CLI support](/docs/cli/native#supported-commands). |

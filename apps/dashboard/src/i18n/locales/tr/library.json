@@ -1,16 +1,17 @@
 {
   "page": {
     "title": "Yeni Proje",
-    "subtitle": "Bir depoyu içe aktarın, bir URL yapıştırın veya bir şablondan başlayın",
+    "subtitle": "Bir uygulama dağıtın veya kendi projenizi içe aktarın.",
     "tabs": {
       "folder": "Klasör",
       "github": "GitHub",
-      "url": "Git URL'si",
-      "template": "Şablon"
+      "templates": "Şablonlar",
+      "gitUrl": "Git adresi"
     }
   },
   "connect": {
     "connectGithub": "GitHub'a Bağlan",
+    "deployApp": "Uygulama dağıt",
     "manageInSettings": "Ayarlarda Yönet",
     "terminal": {
       "title": "GitHub'a Bağlan",
@@ -36,6 +37,20 @@
       "ghCliDesc": "Makinenizin GitHub girişini kullanın. Bulut gerekmez.",
       "useGhCli": "gh CLI Kullan",
       "connecting": "Bağlanılıyor…"
+    },
+    "installationPicker": {
+      "title": "GitHub erişimini seçin",
+      "description": "Bu çalışma alanı için mevcut bir App kurulumunu seçin.",
+      "sharedHint": "Diğer Openship bağlantılarınız korunur.",
+      "connect": "Bu hesabı kullan",
+      "connected": "Zaten bağlı",
+      "installAnother": "Başka bir GitHub hesabına yükle",
+      "failed": "Bu kurulum bağlanamadı.",
+      "tryAgain": "Yeniden başla",
+      "successTitle": "GitHub bağlandı",
+      "successDescription": "Depolara erişim hazır. Openship’e dönebilirsiniz.",
+      "errorTitle": "GitHub bağlantısı ilgilenmenizi gerektiriyor",
+      "returnToApp": "Kütüphaneye dön"
     }
   },
   "folderUpload": {
@@ -115,8 +130,6 @@
     "noMatchingDesc": "Farklı bir arama terimi deneyin veya filtrelerinizi ayarlayın",
     "noReposDesc": "Bu hesabın henüz hiç deposu yok",
     "privateBadge": "Özel",
-    "localOnly": "Yalnızca yerel",
-    "localOnlyTooltip": "Openship Uygulaması {owner} hesabında kurulu değil. Yalnızca yerel derleme yapılabilir — uzak dağıtımları etkinleştirmek için uygulamayı bu hesaba kurun.",
     "repoCountSingular": "{count} depo",
     "repoCountPlural": "{count} depo",
     "matching": "\"{query}\" ile eşleşen",
@@ -150,7 +163,7 @@
     "checking": "Kontrol ediliyor…",
     "notConnectedManage": "Bağlı değil — Ayarlar kısmında yönetin",
     "optional": "İsteğe bağlı",
-    "footnote": "gh CLI üzerinden yerel kütüphane; uzak dağıtımlar kısa ömürlü jetonlar kullanır —",
+    "footnote": "Depoları görüntülemek ve dağıtmak için kullanılan GitHub bağlantılarını yönetin.",
     "manageGithubSettings": "GitHub'ı Ayarlar kısmında yönetin"
   },
   "urlImport": {

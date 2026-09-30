@@ -21,13 +21,18 @@ import { NetworkStreamNotice } from "./NetworkStreamNotice";
 export function ClusterRuntimePanel({
   cluster,
   canManage,
+  onReadyChange,
 }: {
   cluster: ComputeCluster;
   canManage: boolean;
+  onReadyChange?: (ready: boolean) => void;
 }) {
   const { t } = useI18n();
   const c = t.servers.runtime;
   const [runtime, setRuntime] = useState<ClusterRuntime | null>();
+  useEffect(() => {
+    onReadyChange?.(runtime?.status === "ready");
+  }, [runtime?.status, onReadyChange]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -268,7 +273,10 @@ export function ClusterRuntimePanel({
             <details className="group mt-5 text-sm">
               <summary className="flex cursor-pointer list-none items-center gap-2 text-muted-foreground">
                 {c.technicalDetails}
-                <UiIcon name="chevron-down" className="size-4 transition-transform group-open:rotate-180" />
+                <UiIcon
+                  name="chevron-down"
+                  className="size-4 transition-transform group-open:rotate-180"
+                />
               </summary>
               <div className="mt-3 space-y-3 text-muted-foreground">
                 <p>{cluster.serverIds.length >= 3 ? c.threeControls : c.oneControl}</p>

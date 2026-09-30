@@ -10,6 +10,7 @@ import { cloudResourceProxy, cloudRouteRegistry } from "./cloud-resource.control
 const r = secureRouter(new Hono(), {
   module: "cloud-saas",
   basePath: "/api/cloud",
+  mcpExcluded: "Internal Cloud relay or browser credential handoff. Use the authenticated project, domain, GitHub, analytics and Cloud status tools instead.",
 });
 
 // PUBLIC handoff endpoints — arrive from browser redirects with signed tokens

@@ -179,6 +179,9 @@ describe("deployment plan selection", () => {
   });
 
   it("uses the selected interval's live price and credits while build limits stay monthly", async () => {
+    // An older saved plan can still have a separate monthly time limit.
+    mocks.get.mockResolvedValue({ data: { locale: "en", annual: { enabled: true, monthsFree: 0 }, ui: pricingUi("en"),
+      plans: plans.map(plan => ({ ...plan, limits: { ...plan.limits, buildMinutesPerMonth: 3000 } })) } });
     await render();
     await click("Deploy");
     expect(document.body.textContent).toContain("1,234 credits / billing cycle");

@@ -146,6 +146,7 @@ export interface MailHealthResponse {
   definitions: MailComponentDef[];
   delivery: MailDeliveryHealth;
   reachability: MailPortReachability | null;
+  certificate: import("@repo/core").MailCertificateHealth | null;
 }
 
 /**
@@ -671,6 +672,7 @@ export const mailApi = {
   getHealth: (serverId: string, refreshReachability = false) =>
     api.get<MailHealthResponse>(
       `${endpoints.mail.health(serverId)}${refreshReachability ? "?refreshReachability=1" : ""}`,
+      { timeout: 60_000 },
     ),
 
   /** Standalone port 80/443 scan */

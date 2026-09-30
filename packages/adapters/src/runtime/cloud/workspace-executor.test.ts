@@ -19,6 +19,23 @@ function exitFrame(command: string[], code: number): Buffer {
 }
 
 describe("workspace command transport", () => {
+  it("releases completed commands so a long app install does not exhaust retained task slots", async () => {
+    const retained = new Set(["another-command"]);
+    let sequence = 0;
+    stream.mockImplementation(async function* (command: string[]) {
+      if (retained.size >= 50) throw new Error("max tasks reached (50)");
+      const id = `owned-${++sequence}`;
+      retained.add(id);
+      yield { event: "task_id", task_id: id };
+      yield { event: "stdout", data: exitFrame(command, 0).toString("base64") };
+      yield { event: "exit", exit_code: 0 };
+    });
+    kill.mockImplementation(async (id) => {
+      retained.delete(id);
+    });
+    for (let i = 0; i < 60; i++) await executor.exec("prepare app configuration");
+    expect(retained).toEqual(new Set(["another-command"]));
+  });
   it("streams binary stdout and distinct stderr and finishes on the exit event", async () => {
     const bytes = Buffer.from([0, 1, 255, 10, 13]);
     stream.mockImplementation(async function* (command: string[]) {
@@ -39,7 +56,7 @@ describe("workspace command transport", () => {
     expect(Buffer.concat(out)).toEqual(bytes);
     expect(Buffer.concat(err).toString()).toBe("diagnostic");
     expect(stream).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ execMode: "direct", keepLogs: false }));
-    expect(kill).not.toHaveBeenCalled();
+    expect(kill).toHaveBeenCalledExactlyOnceWith("owned-task");
   });
   it("rejects a disconnected command and kills only its own provider task", async () => {
     stream.mockImplementation(async function* () {

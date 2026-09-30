@@ -23,6 +23,7 @@ import {
 import { SettingsSection } from "./SettingsSection";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { CreateGitHubTokenLink } from "@/components/github/CreateGitHubTokenLink";
+import type { GitHubCapabilities } from "@repo/contracts";
 
 const EMPTY_STATE: GitHubConnectionState = {
   sources: { openshipApp: { connected: false }, ghCli: { available: false } },
@@ -39,25 +40,12 @@ const EMPTY_STATE: GitHubConnectionState = {
  * no cloud link). Absent (older API / failed probe) → `null`, and the UI falls back
  * to showing the methods it can prove are safe.
  */
-type MethodKind = "device" | "token" | "app" | "ssh-key" | "forwarding";
-interface Capabilities {
-  platform: "saas" | "selfhosted";
-  desktop: boolean;
-  primary: MethodKind | null;
-  methods: Array<{
-    kind: MethodKind;
-    available: boolean;
-    configured: boolean;
-    requiresCloud?: boolean;
-    unavailableReason?: string;
-  }>;
-}
+type MethodKind = GitHubCapabilities["methods"][number]["kind"];
 
 export function GitHubConnection() {
   // The Settings card owns the App-connection truth. The library context
-  // (useGitHub) is now gh-first and does NOT probe the App, so we fetch
-  // GET /github/status here — the cloud round-trip for the App badge +
-  // installations happens on THIS page only, never on a plain library browse.
+  // (useGitHub) can use a healthy local identity without probing the App, so we
+  // fetch GET /github/status here for both sources and their health.
   // Actions (connect/disconnect/connecting) still come from the shared context.
   const { connecting, connect, disconnect: ctxDisconnect, cliAction } = useGitHub();
   const { t } = useI18n();
@@ -66,7 +54,7 @@ export function GitHubConnection() {
   const [state, setState] = useState<GitHubConnectionState>(EMPTY_STATE);
   const [accounts, setAccounts] = useState<GitHubAccount[]>([]);
   const [installUrl, setInstallUrl] = useState<string | null>(null);
-  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+  const [capabilities, setCapabilities] = useState<GitHubCapabilities | null>(null);
   // Workspace-owned Apps are created, installed, edited and removed by the
   // source manager above this card. This flag prevents the legacy Openship App
   // controls from impersonating those sources (especially its OAuth-only
@@ -83,6 +71,7 @@ export function GitHubConnection() {
   // the method list drops full-width below, instead of a w-full <details> that
   // wraps the toggle onto its own line under the button.
   const [showChangeMethod, setShowChangeMethod] = useState(false);
+  const [showTokenForm, setShowTokenForm] = useState(false);
   const statusRequest = useRef(0);
 
   const loadStatus = useCallback(async (force = false) => {
@@ -97,7 +86,7 @@ export function GitHubConnection() {
       setState(res?.state ?? EMPTY_STATE);
       setAccounts(res?.accounts ?? []);
       setInstallUrl(res?.installUrl || null);
-      setCapabilities((res?.capabilities as Capabilities | undefined) ?? null);
+      setCapabilities((res?.capabilities as GitHubCapabilities | undefined) ?? null);
       setCustomSourcesConfigured(res?.customSourcesConfigured === true);
     } catch {
       if (request !== statusRequest.current) return;
@@ -175,9 +164,8 @@ export function GitHubConnection() {
   const isDesktop = capabilities?.desktop ?? deployMode === "desktop";
   const can = (kind: MethodKind) => {
     const m = capabilities?.methods.find((x) => x.kind === kind);
-    // No capabilities payload → fall back to "offer it", matching prior behaviour
-    // rather than hiding a working method behind a failed probe.
-    return m ? m.available : true;
+    // A failed probe must not offer instance credentials on the Cloud website.
+    return m ? m.available : isSelfHosted || kind === "app" || kind === "token";
   };
 
   const promptDisconnect = (source: "oauth" | "cli" | "all", label: string, body: string) => {
@@ -234,10 +222,12 @@ export function GitHubConnection() {
   // the rest behind a disclosure.
   const ghConnected = state.sources.ghCli.available;
   const ghLogin = state.sources.ghCli.login;
-  const anyConnected = appConnected || ghConnected;
-  // Which one is doing the work. `primary` is the backend's own resolution, so
-  // the badge can't disagree with what clones actually use.
+  const personalToken = state.sources.personalToken;
+  const anyConnected = appConnected || ghConnected || personalToken?.connected;
+  // The backend selects the browsing identity. Clone credentials also depend
+  // on the repository, build target and any project or server overrides.
   const activeIsGh = state.primary === "gh-cli";
+  const activeIsPersonal = state.primary === "personal-token";
   // Name the identity by how it was connected. "gh CLI" is only correct for a
   // credential probed off the host's own gh login.
   const ghMethod = state.sources.ghCli.method ?? "host-cli";
@@ -262,6 +252,31 @@ export function GitHubConnection() {
   // card used to render the connect chooser for both, so a revoked token looked
   // exactly like a fresh install while every clone using it failed.
   const ghProblem = state.sources.ghCli.problem;
+  const savedCredential = ghMethod === "token" || ghMethod === "device";
+  const tokenActions = savedCredential && can("token") ? (
+    <div className="flex flex-wrap items-center gap-3">
+      <button type="button" onClick={() => setShowTokenForm(true)} disabled={connecting}
+        className="text-xs font-medium text-foreground hover:underline disabled:opacity-50">
+        {t.settings.github.replaceToken}
+      </button>
+      <button type="button" disabled={connecting}
+        onClick={() => promptDisconnect("cli", ghMethodLabel, t.settings.github.ghCli.disconnectBody)}
+        className="text-xs font-medium text-muted-foreground hover:text-danger disabled:opacity-50">
+        {t.settings.github.clearToken}
+      </button>
+    </div>
+  ) : null;
+  const credentialProblem = ghProblem ? (
+    <CredentialProblem
+      problem={ghProblem}
+      methodLabel={ghMethodLabel}
+      checkedAt={state.sources.ghCli.checkedAt}
+      manageUrl={ghManageUrl}
+      manageLabel={ghManageLabel}
+      onRecheck={() => void loadStatus(true)}
+      actions={tokenActions}
+    />
+  ) : null;
 
   return (
     <SettingsSection
@@ -272,13 +287,24 @@ export function GitHubConnection() {
           ? t.settings.github.checkingConnection
           : anyConnected
             ? interpolate(t.settings.github.activeVia, {
-                method: activeIsGh ? ghMethodLabel : t.settings.github.methodApp,
+                method: activeIsPersonal ? t.settings.github.methodToken : activeIsGh ? ghMethodLabel : t.settings.github.methodApp,
               })
             : t.settings.github.pickMethod
       }
       iconBg="bg-foreground/5"
       iconColor="text-foreground"
     >
+      {!loading && personalToken?.problem && (
+        <div className="mb-4">
+          <CredentialProblem
+            problem={personalToken.problem}
+            methodLabel={t.settings.github.methodToken}
+            manageUrl="https://github.com/settings/tokens"
+            manageLabel={t.settings.github.manageTokensOnGithub}
+            onRecheck={() => void loadStatus(true)}
+          />
+        </div>
+      )}
       {cliAction ? (
         /* A login is in flight. It's the only actionable thing on the card, so it
            replaces the chooser entirely instead of appearing underneath it. */
@@ -287,6 +313,12 @@ export function GitHubConnection() {
           onRefresh={() => void loadStatus(true)}
           isDesktop={isDesktop}
         />
+      ) : showTokenForm ? (
+        <TokenForm
+          message={t.settings.github.tokenEditorDescription}
+          onSaved={() => { setShowTokenForm(false); void loadStatus(true); }}
+          onCancel={() => setShowTokenForm(false)}
+        />
       ) : loading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
           <UiIcon name="spinner" className="size-4 animate-spin text-muted-foreground" />
@@ -294,22 +326,33 @@ export function GitHubConnection() {
         </div>
       ) : anyConnected ? (
         <div className="space-y-4">
-          {/* The identity that is actually authorizing clones, first. */}
-          {ghConnected && (
+          {credentialProblem}
+          {/* Connected identities, with the primary browsing identity marked. */}
+          {personalToken?.connected && (
             <ActiveIdentity
-              icon={"terminal"}
-              label={ghLogin ? `@${ghLogin}` : ghMethodLabel}
-              avatarUrl={state.sources.ghCli.avatarUrl}
-              method={ghMethodLabel}
-              active={activeIsGh}
-              // Forwarding is a DESKTOP relay (api: relayConfigEligible requires
-              // isDesktop). Passing it on self-hosted told the operator to flip a
-              // toggle that can't take effect there; the accurate note for that
-              // case is the remote-credential one below.
-              forwardEnabled={isDesktop ? forwardGit : undefined}
-              remoteNeedsOwnCredential={!isDesktop}
-              onManageForward={() => router.push("/settings?tab=tokens")}
+              icon="key"
+              label={personalToken.login ? `@${personalToken.login}` : t.settings.github.methodToken}
+              avatarUrl={personalToken.avatarUrl}
+              method={t.settings.github.methodToken}
+              active={activeIsPersonal}
             />
+          )}
+          {ghConnected && (
+            <div className="space-y-2">
+              <ActiveIdentity
+                icon={"terminal"}
+                label={ghLogin ? `@${ghLogin}` : ghMethodLabel}
+                avatarUrl={state.sources.ghCli.avatarUrl}
+                method={ghMethodLabel}
+                active={activeIsGh}
+                // Forwarding is a DESKTOP relay (api: relayConfigEligible requires
+                // isDesktop). Self-hosted remote builds use their own credentials.
+                forwardEnabled={isDesktop ? forwardGit : undefined}
+                remoteNeedsOwnCredential={!isDesktop}
+                onManageForward={() => router.push("/settings?tab=git")}
+              />
+              {!ghProblem && tokenActions}
+            </div>
           )}
 
           {appConnected && !customSourcesConfigured && (
@@ -318,7 +361,7 @@ export function GitHubConnection() {
                 icon={"github"}
                 label={appLogin ? `@${appLogin}` : t.settings.github.methodApp}
                 method={t.settings.github.methodApp}
-                active={!activeIsGh}
+                active={state.primary === "openship-app"}
               />
               {/* Installations the App can actually deploy from. */}
               {hasInstallations && (
@@ -470,7 +513,7 @@ export function GitHubConnection() {
                 onConnectApp={() => connect("oauth")}
                 onConnectCloud={startCloudConnect}
                 onSsh={() => router.push("/servers")}
-                onToken={() => router.push("/settings?tab=tokens")}
+                onToken={() => setShowTokenForm(true)}
               />
             )}
           </div>
@@ -483,16 +526,7 @@ export function GitHubConnection() {
            When a credential IS stored and merely failed its check, the chooser
            alone would be a lie by omission — hence the banner above it. */
         <div className="space-y-4">
-          {ghProblem && (
-            <CredentialProblem
-              problem={ghProblem}
-              methodLabel={ghMethodLabel}
-              checkedAt={state.sources.ghCli.checkedAt}
-              manageUrl={ghManageUrl}
-              manageLabel={ghManageLabel}
-              onRecheck={() => void loadStatus(true)}
-            />
-          )}
+          {credentialProblem}
           <MethodChooser
             can={can}
             appRequiresCloud={
@@ -503,11 +537,12 @@ export function GitHubConnection() {
             showSignIn
             showApp={!customSourcesConfigured}
             primary
+            primaryMethod={capabilities?.primary ?? (isSelfHosted ? "device" : "app")}
             onSignIn={() => connect("cli")}
             onConnectApp={() => connect("oauth")}
             onConnectCloud={startCloudConnect}
             onSsh={() => router.push("/servers")}
-            onToken={() => router.push("/settings?tab=tokens")}
+            onToken={() => setShowTokenForm(true)}
           />
         </div>
       )}
@@ -532,8 +567,9 @@ function CredentialProblem(props: {
   /** Re-run the verify. The card checks on load, but "unreachable" is usually
    *  transient and re-checking beats making the operator reload the page. */
   onRecheck: () => void;
+  actions?: React.ReactNode;
 }) {
-  const { problem, methodLabel, checkedAt, manageUrl, manageLabel, onRecheck } = props;
+  const { problem, methodLabel, checkedAt, manageUrl, manageLabel, onRecheck, actions } = props;
   const { t } = useI18n();
   const rejected = problem === "rejected";
   // Locale-formatted and only as precise as it needs to be. Invalid/absent
@@ -595,6 +631,7 @@ function CredentialProblem(props: {
             </span>
           )}
         </div>
+        {actions}
       </div>
     </div>
   );
@@ -798,6 +835,7 @@ function MethodChooser(props: {
   showSignIn: boolean;
   showApp: boolean;
   primary?: boolean;
+  primaryMethod?: MethodKind | null;
   onSignIn: () => void;
   onConnectApp: () => void;
   onConnectCloud: () => void;
@@ -812,6 +850,7 @@ function MethodChooser(props: {
     showSignIn,
     showApp,
     primary,
+    primaryMethod,
     onSignIn,
     onConnectApp,
     onConnectCloud,
@@ -844,6 +883,7 @@ function MethodChooser(props: {
   // A cloud-backed App needs the cloud link first; an operator-owned local App
   // reports requiresCloud=false and goes straight to its install flow.
   const needsCloudFirst = appRequiresCloud && !cloudConnected;
+  const lead = primary && primaryMethod && can(primaryMethod) ? primaryMethod : null;
   const appRow = row(
     "app",
     "github",
@@ -855,7 +895,7 @@ function MethodChooser(props: {
   // Every row is gated on the BACKEND's verdict. A method the resolver would
   // refuse is never rendered, so the UI cannot advertise a dead path.
   const others = [
-    ...(showApp && can("app") ? [appRow] : []),
+    ...(showApp && can("app") && lead !== "app" ? [appRow] : []),
     ...(can("ssh-key")
       ? [
           row(
@@ -867,12 +907,12 @@ function MethodChooser(props: {
           ),
         ]
       : []),
-    ...(can("token")
+    ...(can("token") && lead !== "token"
       ? [row("pat", "key", t.settings.github.usePat, t.settings.github.methodTokenDesc, onToken)]
       : []),
   ];
 
-  if (!primary) {
+  if (!lead) {
     return (
       <div className="space-y-2">
         {showSignIn &&
@@ -887,15 +927,15 @@ function MethodChooser(props: {
     <div className="space-y-3.5">
       <div className="space-y-2">
         <button
-          onClick={onSignIn}
+          onClick={lead === "app" ? (needsCloudFirst ? onConnectCloud : onConnectApp) : lead === "token" ? onToken : onSignIn}
           disabled={connecting}
           className="inline-flex items-center gap-2 rounded-xl bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {connecting ? <UiIcon name="spinner" className="size-4 animate-spin" /> : <UiIcon name="github" className="size-4" />}
-          {t.settings.github.signIn}
+          {lead === "app" ? t.settings.github.methodApp : lead === "token" ? t.settings.github.usePat : t.settings.github.signIn}
         </button>
         <p className="text-xs text-muted-foreground leading-relaxed">
-          {t.settings.github.signInDesc}
+          {lead === "app" ? (needsCloudFirst ? t.settings.github.requiresCloud : t.settings.github.methodAppDesc) : lead === "token" ? t.settings.github.methodTokenDesc : t.settings.github.signInDesc}
         </p>
       </div>
       <MethodDisclosure summary={t.settings.github.otherMethods}>
@@ -906,18 +946,16 @@ function MethodChooser(props: {
 }
 
 /**
- * Paste-a-token connect. Shown when the instance has no device client id, which
- * is the case the old UI answered with "run `gh auth login` on the server" — an
- * instruction the operator often cannot follow (the api container has no `gh` and
- * cannot see the host's ~/.config/gh) and shouldn't have to.
+ * Shared token editor for first connection, explicit method selection, and
+ * replacement of a saved credential. Device-flow fallback uses it too.
  *
  * The server validates scope before storing, so an under-scoped token fails HERE,
  * on the field just typed into, rather than as a confusing clone failure inside a
  * deploy later. `gh auth login` survives as a secondary hint for bare installs
  * that do have the binary — reading its hosts.yml still works.
  */
-function TokenForm(props: { message: string; hint?: string; onSaved: () => void }) {
-  const { message, hint, onSaved } = props;
+function TokenForm(props: { message: string; hint?: string; onSaved: () => void; onCancel?: () => void }) {
+  const { message, hint, onSaved, onCancel } = props;
   const { t } = useI18n();
   const { connectWithToken } = useGitHub();
   const [token, setToken] = useState("");
@@ -948,6 +986,7 @@ function TokenForm(props: { message: string; hint?: string; onSaved: () => void 
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="password"
+          aria-label={t.settings.github.methodToken}
           value={token}
           onChange={(e) => setToken(e.target.value)}
           onKeyDown={(e) => {
@@ -966,6 +1005,10 @@ function TokenForm(props: { message: string; hint?: string; onSaved: () => void 
           {saving && <UiIcon name="spinner" className="size-4 animate-spin" />}
           {t.settings.github.tokenConnect}
         </button>
+        {onCancel && <button type="button" onClick={onCancel} disabled={saving}
+          className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
+          {t.settings.common.cancel}
+        </button>}
       </div>
       {error && <p className="text-xs text-danger leading-relaxed">{error}</p>}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground/70">

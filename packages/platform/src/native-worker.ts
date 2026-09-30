@@ -230,8 +230,10 @@ try {
         streams.set(streamId, { iterator: result.data[Symbol.asyncIterator](), abort });
         return { streamId, context: result.context };
       }
-      if (kind === "servers.managedNetworkPreparationEvents" || kind === "servers.managedNetworkOperationEvents" || kind === "servers.clusterEvents" || kind === "servers.clusterRuntimeEvents") {
-        const result = kind === "servers.clusterRuntimeEvents"
+      if (kind === "servers.managedNetworkPreparationEvents" || kind === "servers.managedNetworkOperationEvents" || kind === "servers.clusterEvents" || kind === "servers.clusterRuntimeEvents" || kind === "servers.clusterStorageEvents") {
+        const result = kind === "servers.clusterStorageEvents"
+          ? await kernel.servers.openClusterStorageEvents(context as ExecutionContext, input[0] as string, { signal: abort.signal })
+          : kind === "servers.clusterRuntimeEvents"
           ? await kernel.servers.openClusterRuntimeEvents(context as ExecutionContext, input[0] as string, { signal: abort.signal })
           : kind === "servers.clusterEvents"
           ? await kernel.servers.openClusterEvents(context as ExecutionContext, { signal: abort.signal })
@@ -264,6 +266,8 @@ try {
         ? kernel.deployments.events(context as ExecutionContext, input[0] as string, { since: input[1] as number | undefined, signal: abort.signal })
         : kind === "projects.streamClusterDatabaseEvents"
           ? kernel.projects.streamClusterDatabaseEvents(context as ExecutionContext, input[0] as string, { signal: abort.signal })
+        : kind === "projects.streamClusterVolumeEvents"
+          ? kernel.projects.streamClusterVolumeEvents(context as ExecutionContext, input[0] as string, { signal: abort.signal })
         : kind === "projects.streamRuntimeLogs"
           ? kernel.projects.streamRuntimeLogs(context as ExecutionContext, input[0] as string, input[1] as { tail?: number }, { signal: abort.signal })
         : kind === "projects.retryRoutingStream"
@@ -297,6 +301,7 @@ try {
       if (
         key !== "streamRuntimeLogs" &&
         key !== "streamClusterDatabaseEvents" &&
+        key !== "streamClusterVolumeEvents" &&
         key !== "openServerLogStream" &&
         key !== "retryRoutingStream" &&
         Object.hasOwn(kernel.projects, key)

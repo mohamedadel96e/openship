@@ -193,7 +193,7 @@
     "cardTitle": "Services existants",
     "cardDesc": "Migrez un déploiement Docker ou Compose en cours vers Openship.",
     "action": "Migrer Docker",
-    "tab": "Serveur existant",
+    "tab": "Importer un projet existant",
     "comingSoon": "La migration Docker arrive bientôt"
   },
   "view": {

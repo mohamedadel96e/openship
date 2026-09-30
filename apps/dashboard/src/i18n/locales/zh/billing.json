@@ -1,4 +1,21 @@
 {
+  "home": {
+    "label": "Openship Cloud",
+    "title": "准备好上线了吗？",
+    "plansAndBilling": "套餐与账单",
+    "description": "托管构建与部署，助力项目持续成长。",
+    "manageDescription": "在一处查看套餐、用量和账单。",
+    "purchasesUnavailable": "目前暂不支持新订阅。",
+    "viewPlans": "浏览套餐"
+  },
+  "welcome": {
+    "eyebrow": "一切就绪",
+    "title": "欢迎使用 {name}",
+    "description": "你的 Cloud 套餐已生效，开始使用吧。",
+    "dismiss": "关闭欢迎窗口",
+    "openProjects": "打开项目",
+    "viewPlan": "查看我的套餐"
+  },
   "capacity": {
     "title": "容量与用量",
     "subtitle": "您套餐包含的容量以及已用量。实时数据从 Openship Cloud 同步。",
@@ -89,6 +106,14 @@
     "replacementNotice": "更改套餐或计费周期将在付款后按所选全价开始新周期。不会自动按比例折算费用。",
     "changeViaSupport": "请联系支持以更改当前订阅。",
     "billingUnavailable": "此账户暂时无法购买。"
+  },
+  "complimentary": {
+    "label": "赠送套餐 · 免费",
+    "untilRevoked": "在撤销前持续有效",
+    "expiresOn": "可用至{date}",
+    "creditsRenewOn": "{date}重置额度",
+    "changeViaSupport": "赠送套餐的变更由客服处理。",
+    "topupsUnavailable": "赠送套餐的额外用量由客服处理。"
   },
   "pricing": {
     "custom": "定制",
@@ -306,9 +331,9 @@
     "creditsPerCycle": "每个账单周期 {amount} 积分",
     "buildTime": "构建时间",
     "buildMinutes": "每月 {amount} 分钟",
-    "buildHint": "构建代码所花的时间。一次 5 分钟的构建会消耗每月额度中的 5 分钟。",
-    "apps": "运行中的服务",
-    "appsHint": "同时运行的应用、数据库和工作进程。每个运行中的 Compose 服务都计入此上限。",
+    "buildHint": "构建根据实际资源消耗使用共享额度。仅当已保存的套餐包含单独的构建时长限制时，才会应用该限制。",
+    "apps": "服务名额",
+    "appsHint": "已部署的项目和排队中的部署会预留名额。尚未部署的草稿不占用名额。",
     "machine": "每个服务的 CPU 和内存",
     "machineHint": "单个服务可选的最大 CPU 和内存规格。这是资源上限，不是共享余额。",
     "projects": "项目",
@@ -320,7 +345,7 @@
     "setupOnly": "需要订阅",
     "setupHint": "选择 Cloud 套餐以创建项目、构建代码并运行应用。",
     "includedTitle": "你的资源",
-    "limitsHint": "套餐中的项目数、运行服务数和每月构建时间。",
+    "limitsHint": "套餐包含的项目数、运行中的服务数，以及适用的构建时长限制。",
     "balanceRule": "用量额度耗尽后，应用会暂停。追加用量以继续运行，或升级套餐以提高资源上限。",
     "reset": "构建额度将于 {date} 重置",
     "cpuHint": "随时间累计的处理资源用量。1 个 vCPU 运行 1 小时等于 1 vCPU 小时。",
@@ -340,7 +365,12 @@
     "usageIncluded": "包含共享用量额度",
     "usageSummary": "构建和运行中的应用共享用量额度。机器规格越高、运行时间越长，消耗越多。",
     "usageDetails": "用量详情",
-    "usagePercent": "已使用 {percent}%"
+    "usagePercent": "已使用 {percent}%",
+    "poolHint": "所有工作空间共享，包括已停止的空间和待完成的更改。",
+    "creditUnitsHint": "积分衡量资源消耗，而不是分钟数。CPU、内存、磁盘活动和传输各有独立费率。",
+    "topupCapacityHint": "充值增加使用积分。需要更多 CPU、内存或存储空间时，请升级套餐。",
+    "poolTitle": "共享容量",
+    "poolCapacity": "{cpu} vCPU · {ram} GB 内存 · {disk} GB 磁盘"
   },
   "onboarding": {
     "workspaceDescription": "选择 Cloud 套餐以创建项目、构建代码并运行应用。订阅前不包含项目或计算资源。",
@@ -404,5 +434,18 @@
     "currentPeriod": "当前账单周期",
     "viewUsage": "查看详细用量",
     "bandwidthPerMonth": "{amount} GB / 月"
+  },
+  "creditAlert": {
+    "lowTitle": "Cloud 额度即将用完",
+    "lowDescription": "您已使用配额的 {percent}%，其中包括购买的额度。还剩 {credits} 点额度。",
+    "graceTitle": "正在使用宽限额度",
+    "graceDescription": "您的付费额度已用完。新工作负载被阻止前，还剩 {credits} 点宽限额度。",
+    "exhaustedTitle": "Cloud 额度已用完",
+    "exhaustedDescription": "添加额度或付费配额续期前，将阻止新工作负载。请打开账单页面查看可用选项。",
+    "buyCredits": "购买更多额度",
+    "openBilling": "打开账单",
+    "close": "知道了",
+    "opening": "正在打开此提醒所属组织的账单…",
+    "wrongOrganization": "您的账户无法使用此账单链接。请使用属于提醒中组织的账户登录。"
   }
 }

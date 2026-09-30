@@ -133,6 +133,14 @@ export type RuntimeCapability =
    */
   | "isolatedExec"
   /**
+   * Runtime can run a one-off RELEASE COMMAND against a freshly-built artifact,
+   * between the build and the cutover — `runReleaseCommand`. Docker runs it in a
+   * throwaway container off the new image; Bare runs it in the staged release
+   * directory. A runtime without this capability must refuse a deployment that
+   * requires release commands.
+   */
+  | "releaseCommand"
+  /**
    * Runtime can report a container's RESTART HISTORY and health, not just a
    * point-in-time status — the readings the post-deploy stabilization watch
    * needs to tell "up" from "bouncing" (`sampleStability`). Docker implements
@@ -179,6 +187,13 @@ export interface ContainerLifecycleEvent {
 
 // ─── Interface ───────────────────────────────────────────────────────────────
 
+export interface ReleaseCommandOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /** Attach the candidate's service networks before its command can execute. */
+  beforeStart?: (containerId: string) => Promise<void>;
+}
+
 export interface RuntimeAdapter {
   /** Human-readable name of the runtime */
   readonly name: string;
@@ -223,6 +238,24 @@ export interface RuntimeAdapter {
 
   /** Start a container/process from a completed build */
   deploy(config: DeployConfig, onLog?: LogCallback): Promise<DeploymentResult>;
+
+  /**
+   * Run ONE release command against the freshly-built artifact named by
+   * `config.imageRef`, before anything is activated. Streams the command's
+   * output through `onLog` and REJECTS on a non-zero exit (or on the timeout)
+   * with that output in the message, which is what fails the deploy.
+   *
+   * Must not touch the running deployment: this is a throwaway execution
+   * context (a one-off container / the not-yet-promoted release directory), so
+   * a failure leaves the previous version untouched and still serving.
+   * Only present when `supports("releaseCommand")`.
+   */
+  runReleaseCommand?(
+    config: DeployConfig,
+    command: string,
+    onLog: LogCallback,
+    opts?: ReleaseCommandOptions,
+  ): Promise<void>;
 
   /** Stop a running container/process (preserves state) */
   stop(containerId: string): Promise<void>;
@@ -349,7 +382,7 @@ export interface RuntimeAdapter {
     /** Containers to include BEYOND the `openship.project` label match — an adopted
      *  container keeps its original labels, so the filter cannot see it. */
     extraContainerIds?: string[],
-    options?: { prunePrefix?: string; retain?: string[]; strict?: boolean },
+    options?: { prunePrefix?: string; retain?: string[]; strict?: boolean; onlyContainerIds?: string[] },
   ): Promise<void>;
 
   /**

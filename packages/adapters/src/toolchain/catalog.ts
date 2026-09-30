@@ -25,6 +25,22 @@ import type { ToolchainCheckEntry, ToolchainInstallPlan, ToolStep, ToolStepUser 
 // ─── Check recipes ───────────────────────────────────────────────────────────
 
 const CHECKS = {
+  "iscsi-tools": {
+    label: "iSCSI tools",
+    versionCommand: "iscsiadm --version",
+    parseVersion: (output: string) =>
+      output.match(/([0-9]+\.[0-9]+(?:\.[0-9]+)?)/)?.[1] ?? output.trim(),
+    missingMessage: "iSCSI tools are required for replicated volumes",
+    installable: true,
+  },
+  "nfs-client": {
+    label: "NFS client",
+    versionCommand: "mount.nfs -V",
+    parseVersion: (output: string) =>
+      output.match(/([0-9]+\.[0-9]+(?:\.[0-9]+)?)/)?.[1] ?? output.trim(),
+    missingMessage: "The NFS client is required for shared volumes",
+    installable: true,
+  },
   curl: {
     label: "curl",
     versionCommand: "curl --version",
@@ -482,6 +498,38 @@ const RECIPES: Record<InstallableTool, ToolRecipe> = {
       ),
   },
 
+  "iscsi-tools": {
+    verify: "iscsiadm --version",
+    steps: (ops) =>
+      asRoot(
+        ops.pkgInstallVariants(
+          {
+            apt: answered(["open-iscsi"]),
+            dnf: answered(["iscsi-initiator-utils"]),
+            yum: answered(["iscsi-initiator-utils"]),
+            apk: answered(["open-iscsi"]),
+            brew: refused("Replicated storage requires Linux."),
+          },
+          { installRecommends: false },
+        ),
+      ),
+  },
+  "nfs-client": {
+    verify: "mount.nfs -V",
+    steps: (ops) =>
+      asRoot(
+        ops.pkgInstallVariants(
+          {
+            apt: answered(["nfs-common"]),
+            dnf: answered(["nfs-utils"]),
+            yum: answered(["nfs-utils"]),
+            apk: answered(["nfs-utils"]),
+            brew: refused("Shared cluster storage requires Linux."),
+          },
+          { installRecommends: false },
+        ),
+      ),
+  },
   iproute2: {
     verify: "ip -Version",
     steps: (ops) =>

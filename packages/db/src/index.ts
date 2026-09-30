@@ -1,5 +1,13 @@
 // ─── Database client ─────────────────────────────────────────────────────────
-export { db, getDriver, getPgPool, closeDb, type Database, type DatabaseTransaction, type Driver } from "./client";
+export {
+  db,
+  getDriver,
+  getPgPool,
+  closeDb,
+  type Database,
+  type DatabaseTransaction,
+  type Driver,
+} from "./client";
 // The dev hot-reload contract: shutdown must free the PGlite lock inside the
 // successor's takeover grace, or every reload hard-kills the DB mid-close.
 export { DEV_LOCK_TAKEOVER_GRACE_MS, isDevWatchReload } from "./pglite-lock";
@@ -31,6 +39,7 @@ export {
   restoreSubgraph,
   restoreSubgraphInTransaction,
   assertActiveDeploymentOwnership,
+  assertDumpSchemaCompatible,
   deleteProjectSubgraph,
   dumpDatabase,
   restoreDatabase,
@@ -61,6 +70,8 @@ export {
   type CloudDockerWorkspace,
   createDeploymentRepo,
   createDomainRepo,
+  createDomainDnsChallengeRepo,
+  type DomainDnsChallenge,
   createServiceRepo,
   createServiceDeploymentRepo,
   createPersonalAccessTokenRepo,
@@ -234,4 +245,8 @@ export * from "./project-transfer";
 
 export { createComputeClusterRepo, type ComputeClusterRecord } from "./repos/compute-cluster.repo";
 export { createClusterRuntimeRepo, type ClusterRuntimeRecord } from "./repos/cluster-runtime.repo";
-export { createClusterDatabaseRepo, type ClusterDatabaseRecord } from "./repos/cluster-database.repo";
+export { createClusterStorageRepo, type ClusterStorageRecord } from "./repos/cluster-storage.repo";
+export {
+  createClusterDatabaseRepo,
+  type ClusterDatabaseRecord,
+} from "./repos/cluster-database.repo";

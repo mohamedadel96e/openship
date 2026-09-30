@@ -22,6 +22,7 @@ import { internalAuth } from "../../middleware/internal-auth";
 import { firstSignupGuard } from "../../middleware/local-bootstrap";
 import * as ctrl from "./auth.controller";
 import { handleMcpTokenRequest } from "./mcp-token.handler";
+import { REPOSITORY_OAUTH_STATE_PREFIX } from "@repo/platform/engine/modules/github/github-repository-authorization";
 
 export const authRoutes = new Hono();
 
@@ -93,6 +94,14 @@ authRoutes.get("/mcp/userinfo", async (c) => {
 });
 
 // Better Auth catch-all — must be last so the desktop overrides + signup guard win.
+// Reuse the registered GitHub callback. Repository-grant states are separate
+// from Better Auth's sign-in states and never create or transfer login links.
+authRoutes.get("/callback/github", async (c, next) => {
+  if (!env.CLOUD_MODE || !c.req.query("state")?.startsWith(REPOSITORY_OAUTH_STATE_PREFIX)) return next();
+  const { finishRepositoryAuthorization } = await import("../github/github-repository.controller");
+  return finishRepositoryAuthorization(c);
+});
+
 authRoutes.on(["GET", "POST"], "/*", async (c) => {
   const request = await normalizeMcpRedirectUri(c.req.raw, async (clientId) => {
     const [client] = await db

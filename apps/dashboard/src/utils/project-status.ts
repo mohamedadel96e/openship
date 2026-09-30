@@ -58,7 +58,7 @@ export function migrationNeedsOperator(run: ActiveMigration | null | undefined):
 }
 
 export type ProjectStatusSource = {
-  /** Required only when deriving the status badge's destination. */
+  /** Required when deriving project or status badge links. */
   id?: string | null;
   activeDeploymentId?: string | null;
   /**
@@ -332,6 +332,14 @@ export function projectStatusHint(project: ProjectStatusSource, t: Dictionary): 
     default:
       return null;
   }
+}
+
+/** Open the project, or resume setup when a catalog app is still a draft. */
+export function projectCardHref(project: ProjectStatusSource & { id: string }): string {
+  if (project.isApp && project.appTemplateId && getProjectStatus(project) === "draft") {
+    return `/apps/new/${encodeURIComponent(project.appTemplateId)}?projectId=${encodeURIComponent(project.id)}`;
+  }
+  return `/projects/${encodeURIComponent(project.id)}`;
 }
 
 /**

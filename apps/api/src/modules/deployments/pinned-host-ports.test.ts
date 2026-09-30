@@ -883,6 +883,80 @@ describe("pinnedHostPortsToAvoid", () => {
     expect(claimRepo.releaseQuarantine).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])("needs no edge for an unrouted project with no claims (foreign claims: %s)", async (foreign) => {
+    claimRepo.list.mockImplementation(async (targetKey: string) => foreign
+      ? [storedClaim(`foreign-${targetKey}`, targetKey, {
+          projectId: "project-b", serviceId: null, containerPort: 3000, port: 20010,
+        })]
+      : []);
+    const scan = vi.fn(async () => { throw new Error("no Openship edge installed"); });
+
+    await expect(convergeTargetHostPortClaims({
+      target: remoteTarget,
+      projectId: "unrouted-worker",
+      desiredPublishes: [],
+      edgeProxy: { listLoopbackUpstreamPortsStrict: scan },
+    })).resolves.toEqual({ released: 0, retained: [] });
+
+    expect(claimRepo.list).toHaveBeenCalledTimes(2);
+    expect(claimRepo.list).toHaveBeenCalledWith(remoteTarget.targetKey);
+    expect(claimRepo.list).toHaveBeenCalledWith(remoteTarget.legacyTargetKeys[0]);
+    expect(scan).not.toHaveBeenCalled();
+    expect(claimRepo.reserve).not.toHaveBeenCalled();
+    expect(claimRepo.release).not.toHaveBeenCalled();
+    expect(claimRepo.releaseQuarantine).not.toHaveBeenCalled();
+  });
+
+  it.each(["canonical", "legacy", "quarantine"])(
+    "still requires edge inventory before cleaning up %s claims with no desired publishes",
+    async (kind) => {
+      const targetKey = kind === "legacy" ? remoteTarget.legacyTargetKeys[0]! : remoteTarget.targetKey;
+      claimRepo.list.mockImplementation(async (key: string) => key === targetKey
+        ? [storedClaim("retained", targetKey, kind === "quarantine"
+            ? { projectId: "__host_port_quarantine__", serviceId: "__host_port_quarantine__", containerPort: 20010, port: 20010 }
+            : { projectId: "project-a", serviceId: null, containerPort: 3000, port: 20010 })]
+        : []);
+      const scan = vi.fn(async () => { throw new Error("edge inventory unavailable"); });
+
+      await expect(convergeTargetHostPortClaims({
+        target: remoteTarget, projectId: "project-a", desiredPublishes: [],
+        edgeProxy: { listLoopbackUpstreamPortsStrict: scan },
+      })).rejects.toThrow("edge inventory unavailable");
+      expect(scan).toHaveBeenCalledExactlyOnceWith({ refresh: true });
+      expect(claimRepo.release).not.toHaveBeenCalled();
+      expect(claimRepo.releaseQuarantine).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reclaims unused claims after a project stops publishing ports", async () => {
+    claimRepo.list.mockResolvedValue([
+      storedClaim("old", "local", { projectId: "project-a", serviceId: null, containerPort: 3000, port: 20010 }),
+      storedClaim("still-routed", "local", { projectId: "project-a", serviceId: "api", containerPort: 4000, port: 20011 }),
+    ]);
+    const scan = vi.fn(async () => new Set([20011]));
+    const result = await convergeTargetHostPortClaims({
+      target: localTarget, projectId: "project-a", desiredPublishes: [],
+      edgeProxy: { listLoopbackUpstreamPortsStrict: scan },
+    });
+    expect(result.released).toBe(1);
+    expect(result.retained.map(claim => claim.id)).toEqual(["still-routed"]);
+    expect(claimRepo.list).toHaveBeenCalledTimes(1);
+    expect(scan).toHaveBeenCalledExactlyOnceWith({ refresh: true });
+    expect(claimRepo.release).toHaveBeenCalledExactlyOnceWith({
+      targetKey: "local", projectId: "project-a", serviceId: null, containerPort: 3000, port: 20010,
+    });
+  });
+
+  it("does not treat a failed claim read as an unrouted project", async () => {
+    claimRepo.list.mockRejectedValue(new Error("claim database unavailable"));
+    await expect(convergeTargetHostPortClaims({
+      target: localTarget, projectId: "project-a", desiredPublishes: [],
+      edgeProxy: { listLoopbackUpstreamPortsStrict: async () => new Set<number>() },
+    })).rejects.toThrow("claim database unavailable");
+    expect(claimRepo.release).not.toHaveBeenCalled();
+    expect(claimRepo.releaseQuarantine).not.toHaveBeenCalled();
+  });
+
   it("releases nothing if a desired reservation disappears before the claim read-back", async () => {
     claimRepo.list.mockResolvedValue([
       storedClaim("stale-current", "local", {

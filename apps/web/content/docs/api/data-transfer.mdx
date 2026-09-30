@@ -45,8 +45,7 @@ POST /api/system/data-transfer/export
 
 <TypeTable
   type={{
-    passphrase: { type: 'string', description: 'Seal secrets (SSH keys, tokens) under this passphrase. Omit to export without secrets.' },
-    selection: { type: 'object', description: 'scope: instance or projects; projectIds for project scope; history: analytics, activity, backups, incidents, migrations. Project options include includeEnvironments, includeLinkedProjects, includeServers, includeSecrets, includeDomains, includeBackups, and includeIntegrations.' },
+    selection: { type: 'object', description: 'scope: instance or projects; projectIds for project scope; history: analytics, activity, backups, incidents, migrations. Credentials and all history are included by default. Project options include includeEnvironments, includeLinkedProjects, includeServers, includeSecrets, includeDomains, includeBackups, and includeIntegrations.' },
   }}
 />
 
@@ -57,36 +56,42 @@ POST /api/system/data-transfer/import
 <TypeTable
   type={{
     file: { type: 'object', description: 'A DataTransferFile produced by export.', required: true },
-    passphrase: { type: 'string', description: 'The passphrase used at export time, if secrets were sealed.' },
+    passphrase: { type: 'string', description: 'Only needed for older password-protected archives. New exports do not use a password.' },
     mode: { type: '"wipe" | "merge"', description: 'wipe replaces the entire instance; merge adds records. Project scope requires merge.', default: 'merge' },
     selection: { type: 'object', description: 'scope, projectIds, history, conflictPolicy (skip or overwrite), per-project projectActions, serverMappings, includeSecrets, includeDomains, includeBackups, includeIntegrations, and overwriteDependencies.' },
   }}
 />
 
 Project imports remap ownership to the active request workspace. They omit instance accounts/settings,
-reuse matching server connections, and skip existing projects by default. Overwrite updates matching
-project records while preserving destination-only records; shared dependencies are kept unless
+reuse matching server connections, and skip existing projects by default. Overwrite replaces the selected
+projects, including removing destination-only records in the selected categories and clearing credentials
+that were cleared at the source. Categories excluded from the import are retained. Shared dependencies are kept unless
 `overwriteDependencies` is explicitly enabled. Source local hosts require an explicit `serverMappings`
 entry (`local` for a project without a server row). Cloud projects require the same connected cloud
 account. A project archive cannot be used with `wipe`.
 
 Use the chunk-upload endpoints for large files. After uploading, POST `{ selection }` to the session's
-`preview` endpoint. It returns `projects`, `servers`, `availableServers`, row counts, `warnings`, and
+`preview` endpoint. It returns `projects`, `servers`, `availableServers`, row counts, `rowsRemoved`, `warnings`, and
 `blockers` without consuming the upload. POST `{ mode, passphrase, selection }` to
 `/api/system/data-transfer/import/session/:sessionId/finalize/stream` to apply. Validation is repeated
 inside the import transaction. A failed review or password attempt retains the uploaded chunks.
 
-Exports use envelope version 2; imports also accept version 1 instance files. Credentials, deployment snapshots, and inline
-Compose configuration are encrypted under the transfer password and re-encrypted for the destination.
-Volume data, source folders, and host TLS files remain on their server.
+New instance and project exports use envelope version 4 and contain **unencrypted JSON**, including
+environment values, SSH keys, tokens, deployment snapshots, and inline Compose configuration. No
+password is required; a `passphrase` supplied by an older export client is ignored. Set
+`includeSecrets: false` explicitly to omit credentials. Imports still accept versions 1–3, including
+legacy password-protected files, and encrypt restored credentials with the destination instance's key.
+New archives with tables or fields the destination cannot store are rejected before any data changes;
+update the destination instead of losing those fields. Volume data, source folders, and host TLS files
+remain on their server.
 
-Loopback server connections require explicit mapping. Backup policies that point at source-local storage
+In project imports, loopback server connections require explicit mapping. Backup policies that point at source-local storage
 or a changed backup host are disabled until the operator verifies the destination storage. Direct transfer
 supports whole-instance exports; project selections use the file review and import endpoints.
 
 <Callout title="Import limits & errors" type="error">
-The import body is capped at **500 MB** (**413 `PAYLOAD_TOO_LARGE`** above it). A wrong or missing passphrase
-or a malformed file returns **400**. Project dependency/mapping conflicts return **409
+The import body is capped at **500 MB** (**413 `PAYLOAD_TOO_LARGE`** above it). A malformed file or a wrong
+or missing password for a legacy sealed archive returns **400**. Project dependency/mapping conflicts return **409
 `PROJECT_IMPORT_REQUIRES_REVIEW`**; whole-instance merge collisions return **409 `PK_COLLISION`**. Select
 project scope and explicit overwrite options to resolve project conflicts. A concurrent migration/import
 returns **503 `BUSY`**.

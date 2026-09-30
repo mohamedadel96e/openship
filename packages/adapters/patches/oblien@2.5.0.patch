@@ -1,0 +1,128 @@
+diff --git a/dist/http.js b/dist/http.js
+--- a/dist/http.js
++++ b/dist/http.js
+@@ -81,6 +81,7 @@
+         const init = {
+             method: options.method,
+             headers: { ...this.headers, ...options.headers, 'Accept': 'text/event-stream' },
++            signal: options.signal,
+         };
+         if (options.body !== undefined) {
+             init.body = JSON.stringify(options.body);
+@@ -117,6 +118,7 @@
+             }
+         }
+         finally {
++            await reader.cancel().catch(() => { });
+             reader.releaseLock();
+         }
+     }
+diff --git a/dist/resources/logs.js b/dist/resources/logs.js
+--- a/dist/resources/logs.js
++++ b/dist/resources/logs.js
+@@ -5,11 +5,12 @@
+         this._http = _http;
+     }
+     /** Get logs. */
+-    async get(workspaceId, params = {}) {
++    async get(workspaceId, params = {}, options) {
+         return this._http.request({
+             method: 'GET',
+             path: `/workspace/${workspaceId}/logs`,
+             query: params,
++            signal: options?.signal,
+         });
+     }
+     /** Clear logs. */
+@@ -36,6 +37,7 @@
+         yield* this._http.requestSSE({
+             method: 'GET',
+             path: `/workspace/${workspaceId}/logs/stream/boot`,
++            signal: params?.signal,
+             query: params?.tail_lines ? { tail_lines: params.tail_lines } : undefined,
+         });
+     }
+@@ -44,6 +46,7 @@
+         yield* this._http.requestSSE({
+             method: 'GET',
+             path: `/workspace/${workspaceId}/logs/stream/cmd`,
++            signal: params?.signal,
+             query: params?.tail_lines ? { tail_lines: params.tail_lines } : undefined,
+         });
+     }
+diff --git a/dist/resources/logs.d.ts b/dist/resources/logs.d.ts
+--- a/dist/resources/logs.d.ts
++++ b/dist/resources/logs.d.ts
+@@ -6,7 +6,9 @@
+     private readonly _http;
+     constructor(_http: HttpClient);
+     /** Get logs. */
+-    get(workspaceId: string, params?: LogsParams): Promise<ApiResponse>;
++    get(workspaceId: string, params?: LogsParams, options?: {
++        signal?: AbortSignal;
++    }): Promise<ApiResponse>;
+     /** Clear logs. */
+     clear(workspaceId: string): Promise<ApiResponse>;
+     /** List available log files. */
+@@ -16,10 +18,12 @@
+     /** Stream boot logs (SSE). */
+     streamBoot(workspaceId: string, params?: {
+         tail_lines?: number;
++        signal?: AbortSignal;
+     }): AsyncGenerator<LogStreamEvent>;
+     /** Stream command logs (SSE). */
+     streamCmd(workspaceId: string, params?: {
+         tail_lines?: number;
++        signal?: AbortSignal;
+     }): AsyncGenerator<LogStreamEvent>;
+ }
+ //# sourceMappingURL=logs.d.ts.map
+\ No newline at end of file
+diff --git a/dist/resources/workloads.js b/dist/resources/workloads.js
+--- a/dist/resources/workloads.js
++++ b/dist/resources/workloads.js
+@@ -52,7 +52,8 @@
+     }
+     /** Get workload logs. */
+     async logs(workspaceId, workloadId, params) {
+-        return this._http.request({ method: 'GET', path: `/workspace/${workspaceId}/workloads/${workloadId}/logs`, query: params });
++        const { signal, ...query } = params ?? {};
++        return this._http.request({ method: 'GET', path: `/workspace/${workspaceId}/workloads/${workloadId}/logs`, query, signal });
+     }
+     /** Clear both stored log files without stopping the workload. */
+     async clearLogs(workspaceId, workloadId) {
+@@ -77,10 +78,11 @@
+         });
+     }
+     /** Stream workload logs (SSE). */
+-    async *logsStream(workspaceId, workloadId) {
++    async *logsStream(workspaceId, workloadId, options) {
+         yield* this._http.requestSSE({
+             method: 'GET',
+             path: `/workspace/${workspaceId}/workloads/${workloadId}/logs/stream`,
++            signal: options?.signal,
+         });
+     }
+     /** Stream stats for ALL workloads (SSE). */
+diff --git a/dist/resources/workloads.d.ts b/dist/resources/workloads.d.ts
+--- a/dist/resources/workloads.d.ts
++++ b/dist/resources/workloads.d.ts
+@@ -28,6 +28,7 @@
+     /** Get workload logs. */
+     logs(workspaceId: string, workloadId: string, params?: {
+         tail?: number;
++        signal?: AbortSignal;
+     }): Promise<ApiResponse>;
+     /** Clear both stored log files without stopping the workload. */
+     clearLogs(workspaceId: string, workloadId: string): Promise<ApiResponse>;
+@@ -38,7 +39,9 @@
+     /** Stream workload stats (SSE). */
+     statsStream(workspaceId: string, workloadId: string): AsyncGenerator<WorkloadStatsEvent>;
+     /** Stream workload logs (SSE). */
+-    logsStream(workspaceId: string, workloadId: string): AsyncGenerator<WorkloadLogEntry>;
++    logsStream(workspaceId: string, workloadId: string, options?: {
++        signal?: AbortSignal;
++    }): AsyncGenerator<WorkloadLogEntry>;
+     /** Stream stats for ALL workloads (SSE). */
+     allStatsStream(workspaceId: string): AsyncGenerator<WorkloadStatsEvent>;
+ }

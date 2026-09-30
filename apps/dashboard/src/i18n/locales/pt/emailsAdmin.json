@@ -300,8 +300,19 @@
       "notListeningHint": "Nenhum processo está escutando nesta porta.",
       "notExposedHint": "Escutando apenas em loopback; clientes remotos não podem conectar.",
       "unknownHint": "Não foi possível verificar o acesso público.",
-      "ports": { "smtp": "SMTP de entrada", "smtps": "Envio SMTP (TLS)", "submission": "Envio SMTP (STARTTLS)", "imaps": "Acesso IMAP (TLS)" },
-      "status": { "reachable": "Acessível", "blocked": "Bloqueado", "not_listening": "Sem listener", "not_exposed": "Não exposto", "unknown": "Desconhecido" }
+      "ports": {
+        "smtp": "SMTP de entrada",
+        "smtps": "Envio SMTP (TLS)",
+        "submission": "Envio SMTP (STARTTLS)",
+        "imaps": "Acesso IMAP (TLS)"
+      },
+      "status": {
+        "reachable": "Acessível",
+        "blocked": "Bloqueado",
+        "not_listening": "Sem listener",
+        "not_exposed": "Não exposto",
+        "unknown": "Desconhecido"
+      }
     },
     "delivery": {
       "title": "Envio de saída",
@@ -411,7 +422,8 @@
       "partSignatures": "{names} não está em execução - as assinaturas de vírus não são mais atualizadas, então o e-mail é verificado com um conjunto de assinaturas envelhecendo",
       "partAdvisory": "{names} não está em execução",
       "almostSubQueueOne": "{count} mensagem aguardando para sair - veja Envio de saída abaixo.",
-      "almostSubQueueOther": "{count} mensagens aguardando para sair - veja Envio de saída abaixo."
+      "almostSubQueueOther": "{count} mensagens aguardando para sair - veja Envio de saída abaixo.",
+      "partCertificate": "O certificado de e-mail requer atenção"
     },
     "time": {
       "secondsAgo": "há {n}s",
@@ -647,5 +659,28 @@
     "loadingLogs": "Carregando logs…",
     "noLogLines": "Ainda não há linhas de log para este componente.",
     "rowActions": "Ações para {name}"
+  },
+  "certificate": {
+    "title": "Certificado de e-mail",
+    "manage": "Gerenciar certificado",
+    "check": "Verificar certificado",
+    "checking": "Verificando…",
+    "renew": "Renovar certificado",
+    "renewing": "Renovando…",
+    "autoRenew": "Renovação automática",
+    "autoRenewHint": "Renovar antes de expirar e recarregar os serviços de e-mail.",
+    "desktopHint": "Mantenha o Openship aberto para renovar automaticamente.",
+    "jobDisabled": "A tarefa compartilhada de renovação SSL está desativada.",
+    "manageJob": "Abrir tarefa de renovação",
+    "failed": "Não foi possível atualizar o certificado de e-mail.",
+    "notChecked": "Não verificado",
+    "expires": "Expira em {date}",
+    "checked": "Verificado: {time}",
+    "status": {
+      "ok": "Válido",
+      "warn": "Renovação necessária",
+      "fail": "Requer atenção",
+      "unknown": "Não confirmado"
+    }
   }
 }

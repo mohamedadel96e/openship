@@ -11,7 +11,7 @@ import type {
   SourceProvider,
   VcsProvider,
 } from "@repo/core";
-import type { DeploymentPage, RollbackCapacity } from "@repo/contracts";
+import type { DeploymentPage, ProjectControlOperations, RollbackCapacity } from "@repo/contracts";
 import { endpoints } from "./endpoints";
 import type { ReleaseImageSource } from "../release-image-source";
 import {
@@ -22,6 +22,9 @@ import {
 /* ------------------------------------------------------------------ */
 /*  Projects API                                                      */
 /* ------------------------------------------------------------------ */
+
+/** Source drift computed by the engine's shared update service. */
+export type ProjectUpdateStatus = Awaited<ReturnType<ProjectControlOperations["getCommitStatus"]>>;
 
 /**
  * One thing waiting on a human. Mirrors `PendingAction` in the API's
@@ -70,6 +73,7 @@ export interface ProjectOptionsBody {
   installCommand?: string;
   buildCommand?: string;
   startCommand?: string;
+  releaseCommands?: string[] | null;
   outputDirectory?: string;
   productionPaths?: string;
   /** Persistent mounts. `null` clears the override and restores the framework's
@@ -149,6 +153,7 @@ export interface ScanProjectResponse {
   installCommand: PrepareProjectResponse["installCommand"];
   buildCommand: PrepareProjectResponse["buildCommand"];
   startCommand: PrepareProjectResponse["startCommand"];
+  releaseCommands?: PrepareProjectResponse["releaseCommands"];
   buildImage: PrepareProjectResponse["buildImage"];
   outputDirectory: PrepareProjectResponse["outputDirectory"];
   rootDirectory: PrepareProjectResponse["rootDirectory"];
@@ -315,6 +320,8 @@ export const projectsApi = {
      * does no post-start waiting. Opaque passthrough to the project column.
      */
     readiness?: OpenshipReadiness | null;
+    /** Ordered commands required before activating a single-app release. */
+    releaseCommands?: string[] | null;
   }) => api.post<any>(endpoints.projects.ensure, body),
 
   /** List local projects only */
@@ -486,28 +493,9 @@ export const projectsApi = {
   unbindObjectStorage: (id: string | number) =>
     api.delete<{ data: { removed: boolean } }>(endpoints.projects.storage(id)),
 
-  /** Source-drift status for the "project outdated" banner. `mode` discriminates:
-   *  "commit" (git HEAD vs deployed sha) or "release" (newest advertised version
-   *  vs the deployed release version). */
+  /** Source drift for a project's update indicator and deployment banner. */
   getCommitStatus: (id: string | number) =>
-    api.get<{
-      data: {
-        supported: boolean;
-        mode?: "commit" | "release";
-        behind?: boolean;
-        /** True when the latest commit/version is already building/deploying. */
-        latestInProgress?: boolean;
-        /* commit mode */
-        branch?: string;
-        latestSha?: string | null;
-        latestMessage?: string | null;
-        deployedSha?: string | null;
-        /* release mode */
-        latestVersion?: string | null;
-        currentVersion?: string | null;
-        pinned?: boolean;
-      };
-    }>(`projects/${id}/commit-status`),
+    api.get<{ data: ProjectUpdateStatus }>(`projects/${id}/commit-status`),
 
   /** Enable or disable a project */
   toggle: (id: string | number, enable: boolean) =>

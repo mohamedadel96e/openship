@@ -7,6 +7,7 @@ import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { DeploymentsContent } from "@/app/(dashboard)/deployments/components";
 import { deployApi, projectsApi, isAbortError, getApiErrorMessage } from "@/lib/api";
 import type { PendingAction } from "@/lib/api/projects";
+import { updatesApi } from "@/lib/api/updates";
 import { openTriggeredBuild } from "@/lib/deploy-nav";
 import { useModal } from "@/context/ModalContext";
 import { useCloudDeployPricing } from "@/hooks/useCloudDeployPricing";
@@ -29,6 +30,8 @@ export const Deployments = () => {
     refreshServices,
     hasMultipleServices,
     domainsData,
+    availableUpdate,
+    refreshUpdateStatus,
   } = useProjectSettings();
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -41,58 +44,7 @@ export const Deployments = () => {
   // itself via the CLI — redeploy/self-update controls would only 403, so hide them.
   const isSelfApp = projectData?.appTemplateId === "openship";
 
-  // "Project outdated" banner. Two shapes discriminated by `mode`: a commit
-  // project is behind its branch HEAD; a release/dist project has a newer
-  // version available. Fetched on-demand; conservative (only shows when we
-  // positively know the deploy is behind and nothing is already in flight).
-  const [commitStatus, setCommitStatus] = React.useState<{
-    behind: boolean;
-    mode: "commit" | "release";
-    /* commit */
-    branch?: string;
-    latestSha?: string | null;
-    latestMessage?: string | null;
-    deployedSha?: string | null;
-    /* release */
-    latestVersion?: string | null;
-    currentVersion?: string | null;
-  } | null>(null);
-
-  React.useEffect(() => {
-    if (!projectData?.id) return;
-    // The self-app updates via the CLI — no drift banner, so skip the fetch.
-    if (isSelfApp) return;
-    let cancelled = false;
-    projectsApi
-      .getCommitStatus(projectData.id)
-      .then((res) => {
-        if (cancelled) return;
-        const s = res?.data;
-        // Set when behind (and not already in flight), else CLEAR — must be
-        // able to remove a stale banner, not only add one.
-        setCommitStatus(
-          s?.supported && s.behind && !s.latestInProgress
-            ? {
-                behind: true,
-                mode: s.mode ?? "commit",
-                branch: s.branch,
-                latestSha: s.latestSha,
-                latestMessage: s.latestMessage,
-                deployedSha: s.deployedSha,
-                latestVersion: s.latestVersion,
-                currentVersion: s.currentVersion,
-              }
-            : null,
-        );
-      })
-      .catch(() => {
-        /* best-effort nudge; never block the page */
-      });
-    return () => {
-      cancelled = true;
-    };
-    // activeDeploymentId dep → refetch after a deploy advances the live release.
-  }, [projectData?.id, projectData?.activeDeploymentId, isSelfApp]);
+  React.useEffect(() => { void refreshUpdateStatus(); }, [refreshUpdateStatus]);
 
   /**
    * A deploy blocked on something the operator can clear — today a port already
@@ -137,10 +89,21 @@ export const Deployments = () => {
    * we land on the build screen for the new version.
    */
   const runRedeploy = React.useCallback(
-    async (mode: "smart" | "all" | "refresh" = "smart") => {
+    async (mode: "smart" | "all" | "refresh" | "update" = "smart") => {
       if (!projectData?.id) return;
       setIsRedeploying(true); // drive the loading state for menu paths too
       try {
+        if (mode === "update") {
+          // Image updates must force-pull the tag through the existing update
+          // operation; a normal rebuild can reuse the currently running image.
+          const res = await updatesApi.apply(projectData.id);
+          openTriggeredBuild(
+            router,
+            { data: { deployment: { id: res.data?.deployment_id } } },
+            projectData.id,
+          );
+          return;
+        }
         const body =
           mode === "all"
             ? { projectId: projectData.id, forceAll: true }
@@ -314,23 +277,23 @@ export const Deployments = () => {
 
       {/* "Project outdated" nudge — only when the deployed commit is behind the
           branch HEAD. Redeploy uses the same direct path as the button below. */}
-      {!isSelfApp && commitStatus?.behind && commitStatus.mode === "commit" && (
+      {!isSelfApp && availableUpdate?.mode === "commit" && (
         <WarningCallout
           title={t.projects.redeploy.newCommitTitle}
           description={
             <>
               <span className="font-mono text-foreground/80">
-                {commitStatus.latestSha?.slice(0, 7)}
+                {availableUpdate.latestSha?.slice(0, 7)}
               </span>
-              {commitStatus.latestMessage ? ` · ${commitStatus.latestMessage}` : ""}{" "}
+              {availableUpdate.latestMessage ? ` · ${availableUpdate.latestMessage}` : ""}{" "}
               {t.projects.redeploy.newCommitOn}{" "}
-              <span className="font-mono text-foreground/80">{commitStatus.branch}</span>
-              {commitStatus.deployedSha ? (
+              <span className="font-mono text-foreground/80">{availableUpdate.branch}</span>
+              {availableUpdate.deployedSha ? (
                 <>
                   {" "}
                   {t.projects.redeploy.newCommitDeployedOn}{" "}
                   <span className="font-mono text-foreground/80">
-                    {commitStatus.deployedSha.slice(0, 7)}
+                    {availableUpdate.deployedSha.slice(0, 7)}
                   </span>
                   .
                 </>
@@ -354,19 +317,19 @@ export const Deployments = () => {
 
       {/* Release/dist source: a newer version is available. Same direct deploy
           path — triggerDeployment re-resolves the newest version server-side. */}
-      {!isSelfApp && commitStatus?.behind && commitStatus.mode === "release" && (
+      {!isSelfApp && availableUpdate?.mode === "release" && (
         <WarningCallout
           title={t.projects.redeploy.newVersionTitle}
           description={
             <>
               {t.projects.redeploy.newVersionAvailable}{" "}
-              <span className="font-mono text-foreground/80">v{commitStatus.latestVersion}</span>
-              {commitStatus.currentVersion ? (
+              <span className="font-mono text-foreground/80">v{availableUpdate.latestVersion}</span>
+              {availableUpdate.currentVersion ? (
                 <>
                   {" "}
                   {t.projects.redeploy.newVersionDeployed}{" "}
                   <span className="font-mono text-foreground/80">
-                    v{commitStatus.currentVersion}
+                    v{availableUpdate.currentVersion}
                   </span>
                   .
                 </>
@@ -383,6 +346,24 @@ export const Deployments = () => {
               className="rounded-lg bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
             >
               {isRedeploying ? t.projects.redeploy.deploying : t.projects.redeploy.deployVersion}
+            </button>
+          }
+        />
+      )}
+
+      {!isSelfApp && availableUpdate?.mode === "image" && (
+        <WarningCallout
+          title={t.projectSettings.appSource.updateAvailable}
+          description={availableUpdate.services?.filter((service) => service.behind)
+            .map((service) => `${service.name} (${service.ref})`).join(", ")}
+          actions={
+            <button
+              type="button"
+              onClick={() => runRedeploy("update")}
+              disabled={isRedeploying}
+              className="rounded-lg bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
+            >
+              {isRedeploying ? t.projects.redeploy.deploying : t.projectSettings.appSource.update}
             </button>
           }
         />

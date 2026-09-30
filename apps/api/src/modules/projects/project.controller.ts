@@ -17,7 +17,6 @@ import { AppError, safeErrorMessage } from "@repo/core";
 import type { TEnsureProjectBody } from "@repo/contracts";
 import { parseProjectDeleteOptions } from "./project-delete-options";
 
-
 function logEnsureProjectError(userId: string, body: TEnsureProjectBody, err: unknown) {
   console.error("[PROJECT] Failed to ensure project", {
     userId,
@@ -251,44 +250,130 @@ export async function updateResources(c: Context) {
 }
 
 export async function getClusterWorkload(c: Context) {
-  const result = await getPlatformKernel().projects.getClusterWorkload(operationContext(c), param(c, "id"));
+  const result = await getPlatformKernel().projects.getClusterWorkload(
+    operationContext(c),
+    param(c, "id"),
+  );
   applyOperationContext(c, result.context);
   return c.json({ data: result.data });
 }
 export async function setClusterTarget(c: Context) {
-  const result = await getPlatformKernel().projects.setClusterTarget(operationContext(c), param(c, "id"), await c.req.json());
+  const result = await getPlatformKernel().projects.setClusterTarget(
+    operationContext(c),
+    param(c, "id"),
+    await c.req.json(),
+  );
   applyOperationContext(c, result.context);
   return c.json({ data: result.data });
 }
 export async function scaleClusterWorkload(c: Context) {
-  const result = await getPlatformKernel().projects.scaleClusterWorkload(operationContext(c), param(c, "id"), await c.req.json());
+  const result = await getPlatformKernel().projects.scaleClusterWorkload(
+    operationContext(c),
+    param(c, "id"),
+    await c.req.json(),
+  );
   applyOperationContext(c, result.context);
   return c.json({ data: result.data });
 }
 
 export async function listClusterDatabases(c: Context) {
-  const result = await getPlatformKernel().projects.listClusterDatabases(operationContext(c), param(c, "id"));
-  applyOperationContext(c, result.context); return c.json({ data: result.data });
+  const result = await getPlatformKernel().projects.listClusterDatabases(
+    operationContext(c),
+    param(c, "id"),
+  );
+  applyOperationContext(c, result.context);
+  return c.json({ data: result.data });
 }
-type DatabaseMutation = "createClusterDatabase" | "updateClusterDatabase" | "retryClusterDatabase" | "removeClusterDatabase" | "connectClusterDatabase" | "getClusterDatabase" | "backupClusterDatabase";
-export const clusterDatabaseCommand = (operation: DatabaseMutation) => async (c: Context) => {
-  const result = await getPlatformKernel().projects[operation](operationContext(c), param(c, "id"), await c.req.json());
-  applyOperationContext(c, result.context); return c.json({ data: result.data });
+export async function listClusterDatabaseImports(c: Context) {
+  const result = await getPlatformKernel().projects.listClusterDatabaseImports(
+    operationContext(c),
+    param(c, "id"),
+  );
+  applyOperationContext(c, result.context);
+  return c.json({ data: result.data });
+}
+export async function listClusterVolumes(c: Context) {
+  const result = await getPlatformKernel().projects.listClusterVolumes(
+    operationContext(c),
+    param(c, "id"),
+  );
+  applyOperationContext(c, result.context);
+  return c.json({ data: result.data });
+}
+export async function listClusterVolumeBackups(c: Context) {
+  const result = await getPlatformKernel().projects.listClusterVolumeBackups(
+    operationContext(c),
+    param(c, "id"),
+  );
+  applyOperationContext(c, result.context);
+  return c.json({ data: result.data });
+}
+type VolumeMutation =
+  | "createClusterVolume"
+  | "resizeClusterVolume"
+  | "backupClusterVolume"
+  | "removeClusterVolume"
+  | "scheduleClusterVolumeBackups"
+  | "removeClusterVolumeBackup";
+export const clusterVolumeCommand = (operation: VolumeMutation) => async (c: Context) => {
+  const result = await getPlatformKernel().projects[operation](
+    operationContext(c),
+    param(c, "id"),
+    await c.req.json(),
+  );
+  applyOperationContext(c, result.context);
+  return c.json({ data: result.data });
 };
-export async function clusterDatabaseStream(c: Context) {
-  const ctx = operationContext(c); const id = param(c, "id");
+type DatabaseMutation =
+  | "createClusterDatabase"
+  | "updateClusterDatabase"
+  | "retryClusterDatabase"
+  | "removeClusterDatabase"
+  | "connectClusterDatabase"
+  | "getClusterDatabase"
+  | "backupClusterDatabase";
+export const clusterDatabaseCommand = (operation: DatabaseMutation) => async (c: Context) => {
+  const result = await getPlatformKernel().projects[operation](
+    operationContext(c),
+    param(c, "id"),
+    await c.req.json(),
+  );
+  applyOperationContext(c, result.context);
+  return c.json({ data: result.data });
+};
+async function clusterResourceStream(c: Context, kind: "database" | "volume") {
+  const ctx = operationContext(c);
+  const id = param(c, "id");
   // Validate project access before committing SSE headers.
-  const initial = await getPlatformKernel().projects.listClusterDatabases(ctx, id);
+  const operations = getPlatformKernel().projects;
+  const initial = await operations[
+    kind === "database" ? "listClusterDatabases" : "listClusterVolumes"
+  ](ctx, id);
   applyOperationContext(c, initial.context);
   return streamSSE(c, async (stream) => {
-    const abort = new AbortController(); stream.onAbort(() => abort.abort());
+    const abort = new AbortController();
+    stream.onAbort(() => abort.abort());
     try {
-      for await (const event of getPlatformKernel().projects.streamClusterDatabaseEvents(initial.context, id, { signal: abort.signal })) await stream.writeSSE(event);
+      for await (const event of operations[
+        kind === "database" ? "streamClusterDatabaseEvents" : "streamClusterVolumeEvents"
+      ](initial.context, id, { signal: abort.signal }))
+        await stream.writeSSE(event);
     } catch (error) {
-      if (!abort.signal.aborted) await stream.writeSSE({ event: "error", data: JSON.stringify({ type: "error", error: error instanceof Error ? error.message : "Database progress disconnected" }) });
-    } finally { abort.abort(); }
+      if (!abort.signal.aborted)
+        await stream.writeSSE({
+          event: "error",
+          data: JSON.stringify({
+            type: "error",
+            error: error instanceof Error ? error.message : "Live status disconnected",
+          }),
+        });
+    } finally {
+      abort.abort();
+    }
   });
 }
+export const clusterDatabaseStream = (c: Context) => clusterResourceStream(c, "database");
+export const clusterVolumeStream = (c: Context) => clusterResourceStream(c, "volume");
 
 // ─── Clone token (per-project override) ──────────────────────────────────────
 
@@ -331,7 +416,10 @@ export async function updateCloneToken(c: Context) {
 
 /** Scan a local directory and detect framework/stack */
 export async function scanLocal(c: Context) {
-  const result = await getPlatformKernel().projects.scanLocal(operationContext(c), await c.req.json());
+  const result = await getPlatformKernel().projects.scanLocal(
+    operationContext(c),
+    await c.req.json(),
+  );
   applyOperationContext(c, result.context);
   c.header("Cache-Control", "no-store");
   return c.json(result.data);
@@ -339,7 +427,10 @@ export async function scanLocal(c: Context) {
 
 /** Import a local folder as a project */
 export async function importLocal(c: Context) {
-  const result = await getPlatformKernel().projects.importLocal(operationContext(c), await c.req.json());
+  const result = await getPlatformKernel().projects.importLocal(
+    operationContext(c),
+    await c.req.json(),
+  );
   applyOperationContext(c, result.context);
   c.set("createdResourceId", result.data.id);
   return c.json({ data: result.data }, 201);
@@ -374,24 +465,37 @@ export async function runtimeLogStream(c: Context) {
   const ctx = operationContext(c);
   const id = param(c, "id");
   const input = { tail: c.req.query("tail") ? Number(c.req.query("tail")) : undefined };
-  return streamSSE(c, async stream => {
+  return streamSSE(c, async (stream) => {
     const abort = new AbortController();
     stream.onAbort(() => abort.abort());
     try {
-      for await (const event of getPlatformKernel().projects.streamRuntimeLogs(ctx, id, input, { signal: abort.signal })) {
+      for await (const event of getPlatformKernel().projects.streamRuntimeLogs(ctx, id, input, {
+        signal: abort.signal,
+      })) {
         await stream.writeSSE(event);
       }
     } catch (error) {
       if (!abort.signal.aborted)
-        await stream.writeSSE({ event: "error", data: JSON.stringify({ error: error instanceof Error ? error.message : "Failed to stream logs" }) });
-    } finally { abort.abort(); }
+        await stream.writeSSE({
+          event: "error",
+          data: JSON.stringify({
+            error: error instanceof Error ? error.message : "Failed to stream logs",
+          }),
+        });
+    } finally {
+      abort.abort();
+    }
   });
 }
 
 // ─── Server HTTP request logs ────────────────────────────────────────────────
 
 export async function serverLogStreamToken(c: Context) {
-  const result = await getPlatformKernel().projects.getServerLogStreamToken(operationContext(c), param(c, "id"), { domain: c.req.query("domain") });
+  const result = await getPlatformKernel().projects.getServerLogStreamToken(
+    operationContext(c),
+    param(c, "id"),
+    { domain: c.req.query("domain") },
+  );
   applyOperationContext(c, result.context);
   return c.json(result.data);
 }
@@ -400,20 +504,31 @@ export async function serverLogStreamToken(c: Context) {
 export async function serverLogStream(c: Context) {
   const abort = new AbortController();
   const signal = AbortSignal.any([abort.signal, c.req.raw.signal]);
-  const result = await getPlatformKernel().projects.openServerLogStream(operationContext(c), param(c, "id"), { domain: c.req.query("domain") }, { signal });
+  const result = await getPlatformKernel().projects.openServerLogStream(
+    operationContext(c),
+    param(c, "id"),
+    { domain: c.req.query("domain") },
+    { signal },
+  );
   applyOperationContext(c, result.context);
-  return streamSSE(c, async stream => {
+  return streamSSE(c, async (stream) => {
     stream.onAbort(() => abort.abort());
     try {
       for await (const chunk of result.data) await stream.write(chunk);
-    } finally { abort.abort(); }
+    } finally {
+      abort.abort();
+    }
   });
 }
 
 export async function recentServerLogs(c: Context) {
   // Retain the HTTP query's historical clamping; native inputs are validated directly.
   const limit = Math.min(Math.max(parseInt(c.req.query("limit") || "50", 10) || 50, 1), 200);
-  const result = await getPlatformKernel().projects.recentServerLogs(operationContext(c), param(c, "id"), { domain: c.req.query("domain"), limit });
+  const result = await getPlatformKernel().projects.recentServerLogs(
+    operationContext(c),
+    param(c, "id"),
+    { domain: c.req.query("domain"), limit },
+  );
   applyOperationContext(c, result.context);
   return c.json(result.data);
 }
@@ -656,7 +771,11 @@ export async function getInfo(c: Context) {
 // ─── Connect custom domain ─────────────────────────────────────────────────────
 
 export async function connectDomain(c: Context) {
-  const result = await getPlatformKernel().projects.connectDomain(operationContext(c), param(c, "id"), await c.req.json());
+  const result = await getPlatformKernel().projects.connectDomain(
+    operationContext(c),
+    param(c, "id"),
+    await c.req.json(),
+  );
   applyOperationContext(c, result.context);
   return c.json(result.data);
 }

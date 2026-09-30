@@ -13,7 +13,7 @@
  */
 
 import { findActiveDeployment } from "@repo/platform/engine/lib/active-deployment";
-import { safeErrorMessage } from "@repo/core";
+import { normalizeTrackedDomain, safeErrorMessage } from "@repo/core";
 import { repos, type Project } from "@repo/db";
 import {
   OPENRESTY_MGMT_PORT,
@@ -35,12 +35,7 @@ export type { TunnelStreamHandle } from "./ssh-tunnel";
  * Normalize a hostname to match OpenResty's tracking key format.
  * Lua `site_logger.lua` stores counters under lowercase, no-www keys.
  */
-export function normalizeTrackedDomain(hostname: string): string {
-  return hostname
-    .trim()
-    .toLowerCase()
-    .replace(/^www\./, "");
-}
+export { normalizeTrackedDomain } from "@repo/core";
 
 // ─── Project → domain + server resolution ────────────────────────────────────
 

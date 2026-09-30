@@ -1,6 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@repo/db", () => ({ repos: {} }));
+vi.mock("@repo/db", () => ({
+  repos: {
+    deployment: {
+      findById: vi.fn(async () => ({
+        id: "dep-1",
+        projectId: "proj-1",
+        organizationId: "org-1",
+        meta: { deployTarget: "local" },
+      })),
+    },
+  },
+}));
 
 import { NginxProvider, EDGE_HOST_PATHS, type RootChecked } from "@repo/adapters";
 import { reconcileProjectRoutes } from "@repo/platform/engine/lib/route-apply.service";

@@ -35,6 +35,9 @@ let failMove = false;
 let mailboxes: Map<string, Set<number>>;
 const release = mock(() => {});
 const client = {
+  mailboxCreate: async (path: string) => {
+    if (!mailboxes.has(path)) mailboxes.set(path, new Set());
+  },
   getMailboxLock: async (mailbox: string) => {
     selected = mailbox;
     return { release };
@@ -59,6 +62,7 @@ beforeEach(() => {
   failMove = false;
   mailboxes = new Map([
     ['INBOX', new Set([42])], ['Sent', new Set([42])], ['Trash', new Set<number>()],
+    ['Junk', new Set<number>()],
   ]);
   release.mockClear();
   connection.mockClear();
@@ -97,5 +101,27 @@ describe('webmail deletion (#429)', () => {
   it('does not open a connection for an empty selection', async () => {
     await moveThreadsTo({ threadIds: [], currentFolder: 'inbox', destination: 'bin' });
     expect(connection).not.toHaveBeenCalled();
+  });
+});
+
+describe('webmail spam and archive moves (#980)', () => {
+  it('moves to Junk and back to INBOX', async () => {
+    await moveThreadsTo({ threadIds: ['uid:42'], currentFolder: 'inbox', destination: 'spam' });
+    expect([...mailboxes.get('Junk')!]).toEqual([42]);
+
+    await moveThreadsTo({ threadIds: ['uid:42'], currentFolder: 'spam', destination: 'inbox' });
+    expect([...mailboxes.get('Junk')!]).toEqual([]);
+    expect([...mailboxes.get('INBOX')!]).toEqual([42]);
+  });
+
+  it('archives into Archive, creating it when missing', async () => {
+    await moveThreadsTo({ threadIds: ['uid:42'], currentFolder: 'inbox', destination: 'archive' });
+    expect([...mailboxes.get('INBOX')!]).toEqual([]);
+    expect([...mailboxes.get('Archive')!]).toEqual([42]);
+  });
+
+  it('keeps a message in place when a user label is removed', async () => {
+    await caller.modifyLabels({ ids: ['uid:42'], removeLabels: ['Work'] });
+    expect([...mailboxes.get('INBOX')!]).toEqual([42]);
   });
 });

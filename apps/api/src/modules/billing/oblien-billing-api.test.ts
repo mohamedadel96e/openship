@@ -1,11 +1,21 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { OblienBillingApi } from "@repo/platform/engine/lib/oblien-billing-api";
+import { BillingOperationSchemas } from "@repo/contracts";
+import { Value } from "@sinclair/typebox/value";
 
 beforeEach(() => vi.spyOn(console, "warn").mockImplementation(() => {}));
 afterEach(() => vi.restoreAllMocks());
 
 const offer = { name: "Example SaaS", unitAmount: 1000, credits: 100, currency: "usd" as const };
 const metadata = { app_order: "test-order" };
+it("checkout-status input supports both provider ID formats without path or scope injection", () => {
+  const schema = BillingOperationSchemas.getCheckout.input;
+  for (const checkoutId of ["cs_test_requested", "bco_24f15202-6a3d-4b27-b7c2-c3abbc401bee"])
+    expect(Value.Check(schema, { checkoutId })).toBe(true);
+  for (const checkoutId of ["../private", "cs_a?namespace=other", "bco_invalid", "cs_a/other", "", "cs_a#fragment"])
+    expect(Value.Check(schema, { checkoutId })).toBe(false);
+  expect(Value.Check(schema, { checkoutId: "cs_valid", namespace: "other-organization" })).toBe(false);
+});
 const entitlement = { success: true, namespace: "os-one", tierId: "pro", status: "active", periodStart: null, periodEnd: null, quota: { limit: 3000, used: -50, balance: 3050 } };
 const subscription = { success: true, namespace: "os-one", subscription: {
   tierId: "pro", status: "active", billingInterval: "monthly", periodStart: "2026-09-01T00:00:00Z", periodEnd: "2026-10-01T00:00:00Z",
@@ -40,7 +50,7 @@ describe("Oblien 2.4 billing SDK and transport contract", () => {
     await expect(
       setup({
         ...catalog,
-        reseller: { contractVersion: 2, offerPolicy: true, resourceLimits: true, effectiveResourceLimits: true },
+        reseller: { contractVersion: 2, offerPolicy: true, resourceLimits: true, effectiveResourceLimits: true, aggregateResourceLimits: true },
       }).api.assertResellerSupport(),
     ).resolves.toBeUndefined();
     await expect(
@@ -54,6 +64,11 @@ describe("Oblien 2.4 billing SDK and transport contract", () => {
     await expect(setup({ success: true, plans: [], creditPacks: [],
       reseller: { contractVersion: 2, offerPolicy: true, resourceLimits: true, effectiveResourceLimits },
     }).api.assertResellerSupport()).rejects.toMatchObject({ code: "OBLIEN_BILLING_UPGRADE_REQUIRED" });
+  });
+  it.each([undefined, false])("requires aggregate enforcement before selling bounded offers (%s)", async aggregateResourceLimits => {
+    await expect(setup({ success: true, plans: [], creditPacks: [], reseller: { contractVersion: 2, offerPolicy: true,
+      resourceLimits: true, effectiveResourceLimits: true, aggregateResourceLimits } }).api.assertResellerSupport())
+      .rejects.toMatchObject({ code: "OBLIEN_BILLING_UPGRADE_REQUIRED" });
   });
   it("retains the immutable offer, policy, limits and reseller metadata on subscription reads", async () => {
     const saved = {
@@ -153,7 +168,27 @@ describe("Oblien 2.4 billing SDK and transport contract", () => {
       idempotencyKey: "checkout-123",
     };
     await api.createCheckout(input);
-    expect(fetcher).toHaveBeenCalledWith("https://api.oblien.com/billing/checkout", expect.objectContaining({ method: "POST", body: JSON.stringify(input) }));
+    expect(fetcher).toHaveBeenCalledWith("https://api.oblien.com/billing/checkout", expect.objectContaining({ method: "POST", body: JSON.stringify({ ...input, allowPromotionCodes: true }) }));
+  });
+  it("accepts the exact Oblien promotion checkout and preserves its opaque ID", async () => {
+    const checkoutId = "bco_24f15202-6a3d-4b27-b7c2-c3abbc401bee";
+    const url = `https://api.oblien.com/billing/pay#${"a".repeat(43)}`;
+    const { api } = setup({ success: true, url, checkoutId });
+    await expect(api.createCheckout({ namespace: "os-one", kind: "topup", offer, metadata,
+      successUrl: "https://app.openship.io", cancelUrl: "https://app.openship.io", idempotencyKey: "promotion-checkout" }))
+      .resolves.toMatchObject({ url, checkoutId });
+  });
+  it.each([
+    "http://api.oblien.com/billing/pay", "https://api.oblien.com.evil.example/billing/pay",
+    "https://api.oblien.com/billing/pay?return=https://evil.example", "https://api.oblien.com/other",
+    "https://api.oblien.com/billing/pay", "https://user@api.oblien.com/billing/pay",
+    "https://api.oblien.com:8443/billing/pay", "https://api.oblien.com/billing/pay/",
+  ])("rejects an invalid promotion checkout URL: %s", async (value) => {
+    const url = value + (value === "https://api.oblien.com/billing/pay" ? "#short" : `#${"a".repeat(43)}`);
+    await expect(setup({ success: true, url, checkoutId: "bco_24f15202-6a3d-4b27-b7c2-c3abbc401bee" }).api.createCheckout({
+      namespace: "os-one", kind: "topup", offer, metadata, successUrl: "https://app.openship.io",
+      cancelUrl: "https://app.openship.io", idempotencyKey: "bad-promotion-checkout" }))
+      .rejects.toMatchObject({ code: "OBLIEN_BILLING_INVALID_RESPONSE" });
   });
   it("rejects unexpected checkout hosts and malformed entitlements", async () => {
     await expect(

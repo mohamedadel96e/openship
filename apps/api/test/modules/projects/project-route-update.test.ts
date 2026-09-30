@@ -10,6 +10,8 @@ const serviceRepo = vi.hoisted(() => ({
   listByProject: vi.fn(),
 }));
 
+const deploymentRepo = vi.hoisted(() => ({ findById: vi.fn(), updateStatus: vi.fn() }));
+
 const routeState = vi.hoisted(() => ({
   listProjectRouteRows: vi.fn(),
   reapplyProjectLiveRoutes: vi.fn(),
@@ -27,6 +29,7 @@ vi.mock("@repo/db", async (importOriginal) => {
       ...actual.repos,
       project: projectRepo,
       service: serviceRepo,
+      deployment: { ...actual.repos.deployment, ...deploymentRepo },
     },
   };
 });
@@ -66,6 +69,8 @@ describe("updateProject route persistence", () => {
     projectRepo.findById.mockReset();
     projectRepo.update.mockReset();
     serviceRepo.listByProject.mockReset().mockResolvedValue([]);
+    deploymentRepo.findById.mockReset().mockResolvedValue(undefined);
+    deploymentRepo.updateStatus.mockReset().mockResolvedValue(undefined);
     routeState.listProjectRouteRows.mockReset();
     routeState.reapplyProjectLiveRoutes.mockReset();
     routeState.resolveProjectRouteState.mockReset();
@@ -116,6 +121,7 @@ describe("updateProject route persistence", () => {
     // resetting the first's token mid-check.
     expect(routeState.reapplyProjectLiveRoutes).toHaveBeenCalledWith(project, ["old.example.com"], {
       managedEdgeSyncedByCaller: true,
+      onWarning: expect.any(Function),
     });
 
     releaseRoute();
@@ -165,8 +171,8 @@ describe("updateProject route persistence", () => {
       project.organizationId,
     );
 
-    expect(routeState.reapplyProjectLiveRoutes).toHaveBeenCalledWith(project, []);
-    expect(applyProjectRouting).toHaveBeenCalledWith(project.id);
+    expect(routeState.reapplyProjectLiveRoutes).toHaveBeenCalledWith(project, [], { onWarning: expect.any(Function) });
+    expect(applyProjectRouting).toHaveBeenCalledWith(project.id, { onWarning: expect.any(Function) });
     expect(routeState.reapplyProjectLiveRoutes.mock.invocationCallOrder[0]).toBeLessThan(
       applyProjectRouting.mock.invocationCallOrder[0]!,
     );
@@ -178,10 +184,11 @@ describe("updateProject route persistence", () => {
       { routeStrategy: "container-ip" } as never,
       project.organizationId,
     );
-    await vi.waitFor(() => expect(applyProjectRouting).toHaveBeenCalledWith(project.id));
+    await vi.waitFor(() => expect(applyProjectRouting).toHaveBeenCalledWith(project.id, { onWarning: expect.any(Function) }));
 
     expect(routeState.reapplyProjectLiveRoutes).toHaveBeenCalledWith(project, ["old.example.com"], {
       managedEdgeSyncedByCaller: true,
+      onWarning: expect.any(Function),
     });
     expect(routeState.reapplyProjectLiveRoutes.mock.invocationCallOrder[0]).toBeLessThan(
       applyProjectRouting.mock.invocationCallOrder[0]!,
@@ -199,6 +206,27 @@ describe("updateProject route persistence", () => {
 
     expect(routeState.reapplyProjectLiveRoutes).not.toHaveBeenCalled();
     expect(applyProjectRouting).not.toHaveBeenCalled();
+  });
+
+  it.each(["project", "topology"])("keeps a failed Cloud %s route apply visible after a port edit", async (stage) => {
+    deploymentRepo.findById.mockResolvedValue({
+      id: "dep_123", projectId: project.id, organizationId: project.organizationId,
+      status: "ready", meta: { deployTarget: "cloud" },
+    });
+    const message = "Provider could not update the route to port 8000";
+    if (stage === "project") {
+      routeState.reapplyProjectLiveRoutes.mockRejectedValueOnce(new Error(message));
+    } else {
+      applyProjectRouting.mockImplementationOnce(async (_id, options) => options.onWarning(message));
+    }
+
+    await updateProject(project.id, {
+      publicEndpoints: [{ customDomain: "old.example.com", domainType: "custom", port: 8000 }],
+    }, project.organizationId);
+
+    expect(deploymentRepo.updateStatus).toHaveBeenCalledExactlyOnceWith("dep_123", "ready", {
+      meta: { deployTarget: "cloud", edgeUnsynced: true, deployWarning: expect.stringContaining(message) },
+    });
   });
 
   /**

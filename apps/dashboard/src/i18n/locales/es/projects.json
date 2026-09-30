@@ -103,7 +103,7 @@
     "deletionInProgress": "Ya se está ejecutando otra eliminación para este proyecto",
     "deletionInProgressTitle": "Eliminación en curso",
     "confirmForceOrphan": "Algunos recursos no se pudieron eliminar del servidor. ¿Eliminar el proyecto de todos modos y limpiarlos automáticamente más tarde?",
-    "teardownFailedAt": "El desmontaje falló en: {reasons}. Reintenta o fuerza la eliminación para dejarlos huérfanos.",
+    "teardownFailedAt": "No se pudo completar la limpieza: {reasons}. El proyecto sigue guardado. Vuelve a intentar eliminarlo después de resolver el problema.",
     "teardownFailed": "Falló el desmontaje",
     "cleanupFailedTitle": "Falló la limpieza",
     "alreadyDeleted": "El proyecto ya fue eliminado",

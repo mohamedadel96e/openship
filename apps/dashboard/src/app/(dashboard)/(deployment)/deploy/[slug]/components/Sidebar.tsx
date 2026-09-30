@@ -223,11 +223,11 @@ const Sidebar: React.FC = () => {
   }, [startDeployment, router]);
 
   const continueDeploy = useCallback(async (overrides?: { buildStrategy?: BuildStrategy }) => {
-    // Pre-deploy DNS gate (self-hosted custom domain): surface the records to add
+    // Pre-deploy DNS gate (custom domains): surface the records to add
     // BEFORE the deploy so DNS is pointed when the first-deploy SSL attempt runs.
     // A failed attempt just marks the domain Action Required — never blocks the
     // deploy. Informational-blocking: Deploy proceeds, Cancel aborts.
-    let dnsTargets = selfHosted ? deploymentDnsTargets(config) : [];
+    let dnsTargets = deploymentDnsTargets(config);
     if (dnsTargets.length > 0) {
       if (config.projectId) {
         const projectInfo = await projectsApi.getInfo(config.projectId).catch(() => null);
@@ -249,12 +249,14 @@ const Sidebar: React.FC = () => {
             onCancel={() => hideModal(modalId)}
           />
         ),
+        width: "100%",
         maxWidth: "560px",
+        showCloseButton: false,
       });
       return;
     }
     await doDeploy(overrides);
-  }, [doDeploy, selfHosted, config, showModal, hideModal]);
+  }, [doDeploy, config, showModal, hideModal]);
 
   const handleDeploy = useCallback(async () => {
     // TODO: temporary desktop gate (useLocalDeployGate). Desktop mode controls
@@ -378,7 +380,7 @@ const Sidebar: React.FC = () => {
     await continueDeploy(buildStrategyOverride ? { buildStrategy: buildStrategyOverride } : undefined);
   }, [baseDomain, canConnectCloud, cloneGate.preference, config.buildStrategy, config.deployTarget, config.owner, config.projectId, config.serverId, config.publicEndpoints, config.services, continueDeploy, hideModal, isServices, localDeployGate, requireCloud, selfHosted, showModal, showToast, updateConfig, t]);
 
-  // Edit mode (opened from the project Runtime page with ?mode=config): the
+  // Edit mode (opened from project Settings with ?mode=config): the
   // finish button SAVES the config to the project and returns — no deploy, no
   // deploy gates (cloud/clone/domain checks are deploy concerns). Deploying is
   // the separate "Redeploy" action on the project page.
@@ -390,11 +392,10 @@ const Sidebar: React.FC = () => {
     try {
       const projectId = await startDeployment({ saveConfigOnly: true });
       if (projectId) {
-        // Bust the cached project info so the Runtime tab shows the just-saved
-        // config (it's served from infoCache and would otherwise be stale), then
-        // return to the Runtime tab the user edited from — not the default tab.
+        // Refresh the cached project info before returning to Settings so it
+        // shows the saved configuration.
         invalidateProjectCaches(projectId);
-        router.push(`/projects/${projectId}/runtime`);
+        router.push(`/projects/${projectId}/advanced`);
       }
     } finally {
       setIsSaving(false);

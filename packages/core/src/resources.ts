@@ -183,7 +183,7 @@ export function validateAgainstCapacity(
  * be a refusal based on a guess.
  *
  * A MINIMUM, not a limit: it never sizes a container (that's `ResourceValues`),
- * it only decides whether this app has any business being installed here.
+ * it supplies advisory guidance for the operator's chosen machine.
  */
 export interface AppMinResources {
   /** Total RAM the app needs, in MB. */
@@ -207,7 +207,7 @@ export interface ResourceFit {
 
 /**
  * A "16 GB" machine reports ~15.6 GB: firmware and the kernel take their cut
- * before Docker ever sees MemTotal, so an app declaring 16384 MB would be refused
+ * before Docker ever sees MemTotal, so an app declaring 16384 MB would warn
  * on exactly the box it was written for. Allow a tenth under the declared figure —
  * far too small to let a 4 GB box pass a 16 GB requirement, big enough that the
  * declared number can be the round one an operator recognises.
@@ -249,7 +249,7 @@ export function hasMinResources(min?: AppMinResources | null): boolean {
   return !!min && ((min.memoryMb ?? 0) > 0 || (min.cpuCores ?? 0) > 0);
 }
 
-/** The shortfall as one English sentence — the API's refusal message. The
+/** The shortfall as one English sentence — the API's advisory message. The
  *  dashboard builds its own from the same numbers, translated. */
 export function describeResourceFit(fit: ResourceFit): string | null {
   if (fit.ok) return null;

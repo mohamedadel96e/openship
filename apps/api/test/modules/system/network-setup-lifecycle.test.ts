@@ -7,17 +7,22 @@ const h = vi.hoisted(() => ({
   clusters: vi.fn(),
   runtimes: vi.fn(),
   databases: vi.fn(),
+  storage: vi.fn(),
+  interruptStorage: vi.fn(),
+  interruptDatabase: vi.fn(),
   interruptRuntime: vi.fn(),
   interruptPreparation: vi.fn(),
   interruptOperation: vi.fn(),
   interruptVerification: vi.fn(),
   notify: vi.fn(),
+  notifyDatabase: vi.fn(),
   defer: vi.fn(),
 }));
 vi.mock("@repo/db", () => ({
   getDriver: () => h.driver,
   repos: {
-    clusterDatabase: { recoverInterrupted: h.databases, interrupt: vi.fn() },
+    clusterStorage: { recoverInterrupted: h.storage, interrupt: h.interruptStorage },
+    clusterDatabase: { recoverInterrupted: h.databases, interrupt: h.interruptDatabase },
     clusterRuntime: { recoverInterrupted: h.runtimes, interrupt: h.interruptRuntime },
     networkPreparation: { recoverInterrupted: h.preparations, interrupt: h.interruptPreparation },
     serverCluster: {
@@ -31,6 +36,9 @@ vi.mock("@repo/platform/engine/lib/startup/index", () => ({ registerStartupHook:
 vi.mock("@repo/platform/engine/lib/background-work", () => ({ deferBackgroundWork: h.defer }));
 vi.mock("@repo/platform/engine/modules/system/network-setup-bus", () => ({
   notifyNetworkSetup: h.notify,
+}));
+vi.mock("@repo/platform/engine/modules/projects/cluster-database.events", () => ({
+  notifyClusterDatabase: h.notifyDatabase,
 }));
 
 import {
@@ -61,6 +69,7 @@ beforeEach(() => {
   h.clusters.mockResolvedValue({ operations: [], verifications: [] });
   h.runtimes.mockResolvedValue([]);
   h.databases.mockResolvedValue([]);
+  h.storage.mockResolvedValue([]);
   h.defer.mockResolvedValue(undefined);
 });
 
@@ -80,24 +89,34 @@ describe("network setup controller lifecycle", () => {
       expect(h.clusters).toHaveBeenCalledWith(driver === "pglite");
       expect(h.runtimes).toHaveBeenCalledWith(driver === "pglite");
       expect(h.databases).toHaveBeenCalledWith(driver === "pglite");
+      expect(h.storage).toHaveBeenCalledWith(driver === "pglite");
       expect(h.defer).not.toHaveBeenCalled();
     },
   );
   it("publishes recovered progress after persistence without scheduling host work", async () => {
-    h.preparations.mockImplementation(async () => {
+    h.storage.mockImplementation(async () => {
       expect(h.notify).not.toHaveBeenCalled();
-      return [{ id: "prep-a", organizationId: "org-a" }];
+      return [{ clusterId: "pool-a", organizationId: "org-a" }];
     });
+    h.databases.mockImplementation(async () => {
+      expect(h.notifyDatabase).not.toHaveBeenCalled();
+      return [{ projectId: "project-a", organizationId: "org-a" }];
+    });
+    h.runtimes.mockResolvedValue([{ clusterId: "pool-b", organizationId: "org-b" }]);
+    h.preparations.mockResolvedValue([{ id: "prep-a", organizationId: "org-a" }]);
     h.clusters.mockResolvedValue({
       operations: [{ id: "operation-b", organizationId: "org-b" }],
       verifications: [{ organizationId: "org-c" }],
     });
     await recoverNetworkSetups(true);
     expect(h.notify.mock.calls).toEqual([
+      ["org-a", "storage", "pool-a"],
+      ["org-b", "runtime", "pool-b"],
       ["org-a", "preparation", "prep-a"],
       ["org-b", "operation", "operation-b"],
       ["org-c", "overview"],
     ]);
+    expect(h.notifyDatabase).toHaveBeenCalledExactlyOnceWith("org-a", "project-a");
     expect(h.defer).not.toHaveBeenCalled();
   });
   it("owns queued work immediately so shutdown cannot miss it", async () => {
@@ -195,11 +214,13 @@ describe("network setup controller lifecycle", () => {
     expect(signal!.aborted).toBe(true);
     await finished.promise;
   });
-  it("persists interruption for exactly the preparation, runtime, operation and check owned by this process", async () => {
+  it("persists interruption for every setup, database and check owned by this process", async () => {
     h.interruptPreparation.mockResolvedValue([{ id: worker.id }]);
     h.interruptOperation.mockResolvedValue([{ id: "operation-a" }]);
     h.interruptVerification.mockResolvedValue([{ id: "check-a" }]);
     h.interruptRuntime.mockResolvedValue([{ id: "runtime-a" }]);
+    h.interruptStorage.mockResolvedValue([{ id: "storage-a" }]);
+    h.interruptDatabase.mockResolvedValue([{ id: "database-a" }]);
     const work = vi.fn();
     await deferNetworkSetupWork(worker, work);
     await deferNetworkSetupWork(
@@ -217,6 +238,26 @@ describe("network setup controller lifecycle", () => {
         id: "runtime-a",
         clusterId: "pool-a",
         generation: 2,
+      },
+      work,
+    );
+    await deferNetworkSetupWork(
+      {
+        kind: "storage",
+        organizationId: "org-a",
+        id: "storage-a",
+        clusterId: "pool-a",
+        generation: 5,
+      },
+      work,
+    );
+    await deferNetworkSetupWork(
+      {
+        kind: "database",
+        organizationId: "org-a",
+        id: "database-a",
+        projectId: "project-a",
+        generation: 6,
       },
       work,
     );
@@ -240,12 +281,24 @@ describe("network setup controller lifecycle", () => {
       2,
       expect.stringContaining("OpenShip stopped"),
     );
+    expect(h.interruptStorage).toHaveBeenCalledWith(
+      "storage-a",
+      5,
+      expect.stringContaining("OpenShip stopped"),
+    );
+    expect(h.interruptDatabase).toHaveBeenCalledWith(
+      "database-a",
+      6,
+      expect.stringContaining("OpenShip stopped"),
+    );
     expect(h.notify.mock.calls).toEqual([
       ["org-a", "preparation", "prep-a"],
       ["org-a", "operation", "operation-a"],
       ["org-a", "overview"],
       ["org-a", "runtime", "pool-a"],
+      ["org-a", "storage", "pool-a"],
     ]);
+    expect(h.notifyDatabase).toHaveBeenCalledExactlyOnceWith("org-a", "project-a");
     expect(work).not.toHaveBeenCalled();
   });
 });

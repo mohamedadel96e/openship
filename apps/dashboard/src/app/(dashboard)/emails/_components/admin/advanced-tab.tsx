@@ -33,6 +33,7 @@ import { useModal } from "@/context/ModalContext";
 import { useToast } from "@/context/ToastContext";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { FormModalContent } from "./_shared/form-modal-content";
+import { MailCertificateCard } from "./certificate-card";
 
 interface AdvancedTabProps {
   status: MailSetupStatus;
@@ -122,6 +123,7 @@ export function AdvancedTab({ status, serverId, onChanged, onForgotten }: Advanc
 
   return (
     <div className="space-y-8">
+      <MailCertificateCard key={serverId} serverId={serverId} />
       {/* Protocol settings */}
       {status.credentials && (
         <section className="space-y-4">

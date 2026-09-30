@@ -106,7 +106,7 @@ import {
 } from "../../lib/public-endpoints";
 import { resolveBuildResources, resolveCloudServiceResources, resolveRuntimeResources } from "../../lib/resources";
 import { assertFreeEndpointsAllowed } from "../../lib/free-domain-guard";
-import { assertCloudDeploymentLimits, assertCloudRuntimeLimits, assertPlanAllowsServices, assertRunningServiceQuota } from "../../lib/plan-guard";
+import { assertCloudDeploymentLimits, assertCloudRuntimeLimits, assertPlanAllowsServices, assertRunningServiceQuota, assertServiceDefinitionQuota } from "../../lib/plan-guard";
 import { env } from "../../config/env";
 import { createProvisionLock } from "../../lib/provision-lock";
 import {
@@ -688,7 +688,7 @@ export async function createService(
   await validateServiceAlias(projectId, "", advanced, project.internalAlias);
 
   const insert = async () => {
-    await assertRunningServiceQuota(ctx.organizationId, data.enabled === false ? 0 : 1);
+    await assertServiceDefinitionQuota(ctx.organizationId, projectId, data.enabled === false ? 0 : 1);
     return repos.service.create({
       projectId,
       name,
@@ -970,7 +970,7 @@ export async function updateService(
   if (env.CLOUD_MODE && patch.enabled === true) {
     await createProvisionLock(`cloud:service-quota:${ctx.organizationId}`).run(async () => {
       await assertPlanAllowsServices(ctx.organizationId);
-      await assertRunningServiceQuota(ctx.organizationId, 1, [serviceId]);
+      await assertServiceDefinitionQuota(ctx.organizationId, projectId, 1, [serviceId]);
       await repos.service.update(serviceId, patch);
     });
   } else {
@@ -2188,7 +2188,6 @@ async function provisionServiceContainer(
       existingWorkspaceId: snapshot.cloudDockerWorkspace.workspaceId,
       resources: cloudDockerResources({
         resources: projectResources,
-        buildResources: resolveBuildResources((project.buildResources ?? snapshot.buildResources) as Record<string, unknown> | null, { isCloud: true }),
         services: services.map(sibling => {
           const row = rows.get(sibling.id);
           const allocated = row?.allocatedResources?.containerId === row?.containerId ? row?.allocatedResources : null;

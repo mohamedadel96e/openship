@@ -18,17 +18,19 @@
  */
 
 import { Hono } from "hono";
-import { secureRouter } from "../../lib/secure-router";
-import { cloudProjectProxy } from "../../lib/cloud/project-router";
-import * as ctrl from "./service.controller";
-import { AgentExecBody } from "@repo/contracts";
 import {
+  ServiceResourceSchemas,
+  RuntimeLogsInputSchema,
+  AgentExecBody,
   CreateServiceBody,
   SetServiceEnvVarsBody,
   MergeServiceEnvVarsBody,
   SyncServicesBody,
   UpdateServiceBody,
 } from "@repo/contracts";
+import { secureRouter } from "../../lib/secure-router";
+import { cloudProjectProxy } from "../../lib/cloud/project-router";
+import * as ctrl from "./service.controller";
 
 const r = secureRouter(new Hono(), {
   module: "services",
@@ -54,7 +56,8 @@ r.post(
     tag: "project:service:write", auditHandledByOperation: true,
     collection: true,
     body: CreateServiceBody,
-    mcp: { description: "Add a service to a project." },
+     mcp: { description: "Add a service to a project.",
+   },
   },
   cloudProjectProxy,
   ctrl.create,
@@ -90,7 +93,7 @@ r.post(
   // Write-gated on purpose. POST keeps key names out of URLs and proxy logs.
   // No mcp block: revealing secrets stays a dashboard action, off automation.
   "/:serviceId/env-reveal",
-  { tag: "project:service:write", auditHandledByOperation: true },
+  { tag: "project:service:write", auditHandledByOperation: true, mcpExcluded: "Explicit dashboard secret reveal. MCP reads masked effective environment and saves named overrides without retrieving plaintext." },
   cloudProjectProxy,
   ctrl.revealEnv,
 );
@@ -98,20 +101,21 @@ r.get(
   "/:serviceId/volume-sizes",
   {
     tag: "project:service:read",
-    mcp: { description: "Measure the on-disk size (du) of each of a service's volumes." },
+     mcp: { description: "Measure the on-disk size (du) of each of a service's volumes.",
+   },
   },
   cloudProjectProxy,
   ctrl.volumeSizes,
 );
 r.get(
   "/:serviceId/logs",
-  { tag: "project:service:read", mcp: { description: "Fetch a service's runtime logs (non-streaming)." } },
+  { tag: "project:service:read", mcp: { description: "Fetch a service's runtime logs (non-streaming)." }, query: RuntimeLogsInputSchema },
   cloudProjectProxy,
   ctrl.runtimeLogs,
 );
 r.get(
   "/:serviceId/logs/stream",
-  { tag: "project:service:read" },
+  { tag: "project:service:read", mcpExcluded: "SSE transport for live progress. Use the resource’s JSON status/log tools over MCP, or an authenticated HTTP client for streaming." },
   cloudProjectProxy,
   ctrl.runtimeLogStream,
 );
@@ -150,7 +154,7 @@ r.patch(
 );
 r.delete(
   "/:serviceId",
-  { tag: "project:service:admin", auditHandledByOperation: true },
+  { tag: "project:service:admin", auditHandledByOperation: true, mcp: { description: "Delete this service from its project and clean up its owned runtime. Review persistent volumes and dependent services before removing it." } },
   cloudProjectProxy,
   ctrl.remove,
 );
@@ -175,14 +179,13 @@ r.post("/:serviceId/stop", { tag: "project:service:write", auditHandledByOperati
 /* `restart` is a BOUNCE, not a config apply — a container's environment is fixed
  * when it is created. With pending env changes it answers 409 SERVICE_CONFIG_STALE
  * naming the drifted keys instead of silently re-running the old config (GH-615);
- * `?force=true` bounces anyway. Declaring a `body`/`query` schema here would be
- * wrong twice over: `RouteSpec` has no `query` field, and a `body` schema makes
- * secureRouter mount tbValidator("json"), which 400s the CLI's bodyless POST
- * (its api-client always sets Content-Type: application/json). */
-r.post("/:serviceId/restart", { tag: "project:service:write", auditHandledByOperation: true, mcp: { description: "Restart (bounce) this service's container. Answers 409 SERVICE_CONFIG_STALE when saved env is pending. Use POST /api/projects/:id/services/:serviceId/apply-env to apply it, or ?force=true to bounce with the old env." } }, cloudProjectProxy, ctrl.restartContainer);
+ * `?force=true` bounces anyway. The query schema advertises the shared operation input without adding a JSON
+ * body validator, so the CLI's bodyless POST remains valid. */
+r.post("/:serviceId/restart", { tag: "project:service:write", auditHandledByOperation: true, mcp: { description: "Restart (bounce) this service's container. Answers 409 SERVICE_CONFIG_STALE when saved env is pending. Use POST /api/projects/:id/services/:serviceId/apply-env to apply it, or ?force=true to bounce with the old env." }, query: ServiceResourceSchemas.restart.input }, cloudProjectProxy, ctrl.restartContainer);
 r.post("/:serviceId/apply-env", {
   tag: "project:service:write", auditHandledByOperation: true, rateLimit: "write-authed",
-  mcp: { description: "Apply saved runtime environment to this service using its current image and runtime configuration. Gracefully replaces its container without a build or deployment session. Returns after the replacement starts; preserves the previous configuration on failure." },
+   mcp: { description: "Apply saved runtime environment to this service using its current image and runtime configuration. Gracefully replaces its container without a build or deployment session. Returns after the replacement starts; preserves the previous configuration on failure.",
+ },
 }, cloudProjectProxy, ctrl.applyEnvironment);
 
 /* ─── Service environment variables ─────────────────────────────────────── */
@@ -194,6 +197,7 @@ r.get(
       description:
         "Read the effective saved environment for a service, including Compose and shared project values. Optionally compare it with its deployed container. Secrets are masked.",
     },
+    query: ServiceResourceSchemas.getEnvironment.input,
   },
   cloudProjectProxy,
   ctrl.getEnvironment,
@@ -214,7 +218,7 @@ r.patch(
 );
 r.get(
   "/:serviceId/env",
-  { tag: "project:service:read", mcp: { description: "List a service's environment variables." } },
+  { tag: "project:service:read", mcp: { description: "List a service's environment variables." }, query: ServiceResourceSchemas.listEnvVars.input },
   cloudProjectProxy,
   ctrl.listEnvVars,
 );
@@ -223,7 +227,8 @@ r.put(
   {
     tag: "project:service:write", auditHandledByOperation: true,
     body: SetServiceEnvVarsBody,
-    mcp: { description: "Replace a service's environment variables." },
+     mcp: { description: "Replace a service's environment variables.",
+   },
   },
   cloudProjectProxy,
   ctrl.setEnvVars,

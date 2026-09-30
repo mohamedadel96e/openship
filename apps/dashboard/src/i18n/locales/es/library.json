@@ -10,16 +10,17 @@
   },
   "page": {
     "title": "Nuevo proyecto",
-    "subtitle": "Importa un repositorio, pega una URL o parte de una plantilla",
+    "subtitle": "Despliega una aplicación o importa tu propio proyecto.",
     "tabs": {
       "folder": "Carpeta",
       "github": "GitHub",
-      "url": "URL de Git",
-      "template": "Plantilla"
+      "templates": "Plantillas",
+      "gitUrl": "URL de Git"
     }
   },
   "connect": {
     "connectGithub": "Conectar GitHub",
+    "deployApp": "Desplegar aplicación",
     "manageInSettings": "Gestionar en Ajustes",
     "terminal": {
       "title": "Conectar GitHub",
@@ -45,6 +46,20 @@
       "ghCliDesc": "Usa el inicio de sesión de GitHub de tu equipo. No hace falta la nube.",
       "useGhCli": "Usar la CLI de gh",
       "connecting": "Conectando…"
+    },
+    "installationPicker": {
+      "title": "Elige el acceso a GitHub",
+      "description": "Selecciona una instalación existente de la App para este espacio de trabajo.",
+      "sharedHint": "Tus otras conexiones de Openship se conservan.",
+      "connect": "Usar esta cuenta",
+      "connected": "Ya conectada",
+      "installAnother": "Instalar en otra cuenta de GitHub",
+      "failed": "No se pudo conectar esta instalación.",
+      "tryAgain": "Volver a empezar",
+      "successTitle": "GitHub conectado",
+      "successDescription": "El acceso a los repositorios está listo. Puedes volver a Openship.",
+      "errorTitle": "La conexión con GitHub necesita atención",
+      "returnToApp": "Volver a la biblioteca"
     }
   },
   "folderUpload": {
@@ -124,8 +139,6 @@
     "noMatchingDesc": "Prueba con otro término de búsqueda o ajusta tus filtros",
     "noReposDesc": "Esta cuenta todavía no tiene ningún repositorio",
     "privateBadge": "Privado",
-    "localOnly": "Solo local",
-    "localOnlyTooltip": "La Openship App no está instalada en {owner}. Solo compilaciones locales: instala la App en este propietario para habilitar despliegues remotos.",
     "repoCountSingular": "{count} repositorio",
     "repoCountPlural": "{count} repositorios",
     "matching": "que coinciden con \"{query}\"",
@@ -159,7 +172,7 @@
     "checking": "Comprobando…",
     "notConnectedManage": "No conectado — gestiona en Ajustes",
     "optional": "Opcional",
-    "footnote": "Biblioteca local mediante la CLI de gh; los despliegues remotos usan tokens de corta duración —",
+    "footnote": "Gestiona las conexiones de GitHub para explorar y desplegar repositorios.",
     "manageGithubSettings": "gestionar GitHub en Ajustes"
   },
   "urlImport": {

@@ -28,7 +28,7 @@ const CATEGORY_ORDER = ["backend", "database", "cms", "analytics", "automation",
 /** Not installable right now: coming-soon OR needs a newer Openship. */
 const isLocked = (a: AppCatalogEntry) => !!a.comingSoon || !!a.requiresUpdate;
 
-export function AppCatalog() {
+export function AppCatalog({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useI18n();
   const router = useRouter();
   const { showToast } = useToast();
@@ -116,17 +116,34 @@ export function AppCatalog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, catalog, searchParams]);
 
+  const hasFilters = !loading && catalog.length > 0;
+  const searchField = (
+    <div className={`relative w-full max-w-md ${embedded ? "min-w-40 flex-1" : ""}`}>
+      <UiIcon name="search" className="pointer-events-none absolute start-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        aria-label={ap.catalogSearchPlaceholder}
+        placeholder={ap.catalogSearchPlaceholder}
+        className="w-full ps-10 pe-4 py-2.5 bg-card border border-border/50 rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/20 transition-all"
+      />
+    </div>
+  );
+
   return (
     <div className="@container/app-catalog">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-medium text-foreground/80" style={{ letterSpacing: "-0.2px" }}>
-            {ap.catalogTitle}
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground/70">{ap.catalogDescription}</p>
-        </div>
+      <div className={`flex justify-between ${embedded ? "flex-wrap items-center gap-3" : "items-start gap-4"}`}>
+        {embedded ? hasFilters && searchField : (
+          <div>
+            <h1 className="text-2xl font-medium text-foreground/80" style={{ letterSpacing: "-0.2px" }}>
+              {ap.catalogTitle}
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground/70">{ap.catalogDescription}</p>
+          </div>
+        )}
         {/* Add-custom button + the 3-dots menu (guide / support). */}
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="ms-auto flex shrink-0 items-center gap-2">
           <button
             type="button"
             onClick={() => setAddOpen(true)}
@@ -155,30 +172,22 @@ export function AppCatalog() {
       </div>
 
       {/* Search + category tabs — the catalog at a glance. */}
-      {!loading && catalog.length > 0 && (
-        <div className="mt-6 space-y-4">
-          <div className="relative max-w-md">
-            <UiIcon name="search" className="pointer-events-none absolute start-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={ap.catalogSearchPlaceholder}
-              className="w-full ps-10 pe-4 py-2.5 bg-card border border-border/50 rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/20 transition-all"
-            />
-          </div>
-          <div className="flex flex-wrap gap-1.5">
+      {hasFilters && (
+        <div className={embedded ? "mt-4" : "mt-6 space-y-4"}>
+          {!embedded && searchField}
+          <div className="flex flex-wrap items-center gap-1">
             {categories.map((c) => {
               const on = category === c;
               return (
                 <button
                   key={c}
                   type="button"
+                  aria-pressed={on}
                   onClick={() => setCategory(c)}
-                  className={`rounded-lg border px-3 py-1.5 text-[13px] font-medium capitalize transition-colors ${
+                  className={`inline-flex items-center rounded-lg px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
                     on
-                      ? "border-primary/40 bg-primary/[0.06] text-foreground"
-                      : "border-border/60 text-muted-foreground hover:bg-muted/40"
+                      ? "bg-foreground text-background"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
                   }`}
                 >
                   {catLabel(c)}

@@ -59,6 +59,7 @@ export function TopologyResourceIcon({
   className?: string;
 }) {
   if (resource.service) return <ServiceIcon service={resource.service} className={className} />;
+  if (resource.volume) return <UiIcon name="hard-drive" className={className} />;
   if (resource.database || (resource.clusterPod && resource.tone !== "service")) {
     return <ResourceIcon kind={resource.tone} className={className} />;
   }
@@ -75,10 +76,7 @@ export function TopologyResourceIcon({
 
 export function TopologyStatus({ state }: { state: TopologyState }) {
   return (
-    <span
-      className="topology-status text-[11px] font-medium"
-      data-state={state}
-    >
+    <span className="topology-status text-[11px] font-medium" data-state={state}>
       {stateLabels[state]}
     </span>
   );
@@ -88,9 +86,14 @@ const Resource = memo(function Resource({ data }: NodeProps<ResourceFlowNode>) {
   const { resource, onOpen } = data;
   const isService = resource.kind === "service";
   const canInspectInstance =
-    (isService && !!resource.container?.containerId && !resource.pending) || !!resource.replicaStatus || !!resource.database?.observation?.pods.length;
+    (isService && !!resource.container?.containerId && !resource.pending) ||
+    !!resource.replicaStatus ||
+    !!resource.database?.observation?.pods.length;
   const applicationRelease =
-    resource.kind === "application" && !resource.replicaStatus && resource.state !== "disabled" && resource.version;
+    resource.kind === "application" &&
+    !resource.replicaStatus &&
+    resource.state !== "disabled" &&
+    resource.version;
   return (
     <article
       className="topology-node scale-resource-tone w-[250px] rounded-2xl text-start"
@@ -329,7 +332,8 @@ function Canvas({
       onKeyDown={(event) => {
         if (inert || event.defaultPrevented || (event.key !== "Enter" && event.key !== " ")) return;
         const target = event.target;
-        if (!(target instanceof Element) || !target.matches(".react-flow__node, .react-flow__edge")) return;
+        if (!(target instanceof Element) || !target.matches(".react-flow__node, .react-flow__edge"))
+          return;
         const id = target.getAttribute("data-id");
         if (!id) return;
         event.preventDefault();

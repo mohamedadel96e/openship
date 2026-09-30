@@ -39,6 +39,7 @@ export const ProjectSidebar = () => {
     tabs,
     access,
     domainsData,
+    availableUpdate,
     selectedDomain,
     setSelectedDomain,
     setPendingDomainAction,
@@ -228,6 +229,14 @@ export const ProjectSidebar = () => {
               >
                 <UiIcon name={Icon} className="size-5 shrink-0" />
                 {tab.label}
+                {tab.id === "deployments" && availableUpdate && (
+                  <span
+                    role="img"
+                    className="ms-auto size-1.5 shrink-0 rounded-full bg-warning-solid"
+                    aria-label={t.projectSettings.appSource.updateAvailable}
+                    title={t.projectSettings.appSource.updateAvailable}
+                  />
+                )}
                 {tab.id === "domains" && domainsAttention && (
                   <span
                     className="ms-auto size-1.5 rounded-full bg-warning-solid"
@@ -245,8 +254,9 @@ export const ProjectSidebar = () => {
 
 /** Mobile horizontal scroll tabs - rendered above content in left column */
 export const ProjectMobileTabs = () => {
-  const { projectData, projectNotFound, activeTabGroup, tabs, domainsData } = useProjectSettings();
+  const { projectData, projectNotFound, activeTabGroup, tabs, domainsData, availableUpdate } = useProjectSettings();
   const handleTabChange = useProjectTabNavigation();
+  const { t } = useI18n();
   const domainsAttention = domainsNeedAttention(projectData, domainsData);
 
   if (!projectData.id || projectNotFound) {
@@ -273,6 +283,14 @@ export const ProjectMobileTabs = () => {
             >
               <UiIcon name={Icon} className="size-4 shrink-0" />
               {tab.label}
+              {tab.id === "deployments" && availableUpdate && (
+                <span
+                  role="img"
+                  className="size-1.5 shrink-0 rounded-full bg-warning-solid"
+                  aria-label={t.projectSettings.appSource.updateAvailable}
+                  title={t.projectSettings.appSource.updateAvailable}
+                />
+              )}
               {tab.id === "domains" && domainsAttention && (
                 <span
                   className="size-1.5 rounded-full bg-warning-solid"

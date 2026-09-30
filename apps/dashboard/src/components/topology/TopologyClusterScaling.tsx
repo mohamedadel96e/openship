@@ -50,8 +50,8 @@ export function TopologyClusterScaling(props: Props) {
         </h3>
         <p className="text-xs leading-relaxed text-muted-foreground">
           To use a replicated database, add PostgreSQL or Redis from an application's cluster
-          topology, then migrate the data. This existing database stays on its current server;
-          its CPU and memory can be adjusted below.
+          topology, then migrate the data. This existing database stays on its current server; its
+          CPU and memory can be adjusted below.
         </p>
       </section>
     );
@@ -190,8 +190,9 @@ function ClusterScaling({ project, disabled, resources, onDeploy, onClusterState
           ...(clusterId
             ? {
                 config: {
+                  ...(clusterId === view.clusterId ? view.config : {}),
                   replicas: count,
-                  ...(repository.trim() ? { imageRepository: repository.trim() } : {}),
+                  imageRepository: repository.trim() || undefined,
                 },
               }
             : {}),
@@ -250,7 +251,8 @@ function ClusterScaling({ project, disabled, resources, onDeploy, onClusterState
             <div className="space-y-3 rounded-xl bg-muted/40 p-3">
               <div className="flex items-center justify-between gap-2 text-sm">
                 <span className="flex items-center gap-2">
-                  <UiIcon name={HealthIcon}
+                  <UiIcon
+                    name={HealthIcon}
                     className={`size-4 ${allReady ? "text-success" : view.status.desired ? "text-warning" : "text-muted-foreground"}`}
                   />
                   Ready instances
@@ -265,7 +267,10 @@ function ClusterScaling({ project, disabled, resources, onDeploy, onClusterState
               <ul className="space-y-2">
                 {observed.map(({ pod, name, server, state }) => (
                   <li key={pod.name} className="flex items-start gap-2 text-xs">
-                    <UiIcon name="server" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                    <UiIcon
+                      name="server"
+                      className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+                    />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">
                         {name} · {server}

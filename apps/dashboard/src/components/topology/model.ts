@@ -1,4 +1,10 @@
-import { isServicesFramework, resolveWorkload, type ClusterWorkloadStatus } from "@repo/core";
+import {
+  isServicesFramework,
+  resolveWorkload,
+  type ClusterWorkloadStatus,
+  type ClusterWorkloadConfig,
+  type ClusterVolume,
+} from "@repo/core";
 import type { Service, ServiceContainer } from "@/lib/api/services";
 import type { ProjectConnection } from "@/lib/api/connections";
 import type { ClusterDatabase } from "@repo/contracts";
@@ -18,6 +24,7 @@ export interface TopologyProject {
   enabled?: boolean | null;
   deployTarget?: "cloud" | "server" | "local" | "cluster";
   clusterId?: string | null;
+  clusterConfig?: ClusterWorkloadConfig | null;
   serverName?: string | null;
   serverId?: string | null;
   isApp?: boolean;
@@ -49,7 +56,8 @@ export interface TopologyResource {
     | "linked"
     | "instance"
     | "traffic"
-    | "database";
+    | "database"
+    | "volume";
   name: string;
   description: string;
   tone: TopologyTone;
@@ -65,6 +73,7 @@ export interface TopologyResource {
   replicaStatus?: ClusterWorkloadStatus;
   clusterPod?: ClusterWorkloadStatus["pods"][number];
   database?: ClusterDatabase;
+  volume?: ClusterVolume;
   ownerName?: string;
   pending?: boolean;
   isNew?: boolean;
@@ -76,8 +85,9 @@ export interface TopologyRelation {
   target: string;
   kind: "route" | "dependency" | "binding";
   /** A runtime service route is not an editable public domain. */
-  scope?: "instances" | "database";
+  scope?: "instances" | "database" | "storage";
   databaseId?: string;
+  volumeName?: string;
   label: string;
   description: string;
   serviceId?: string;
@@ -96,6 +106,48 @@ export const applicationNodeId = (projectId: string) => `application:${projectId
 export const serviceNodeId = (serviceId: string) => `service:${serviceId}`;
 export const environmentNodeId = (projectId: string) => `environment:${projectId}`;
 export const databaseNodeId = (id: string) => `database:${id}`;
+export const volumeNodeId = (name: string) => `volume:${name}`;
+
+export function addClusterVolumes(
+  graph: ProjectTopologyGraph,
+  project: TopologyProject,
+  volumes: readonly ClusterVolume[],
+): ProjectTopologyGraph {
+  const nodes = [...graph.nodes];
+  const edges = [...graph.edges];
+  for (const volume of volumes) {
+    nodes.push({
+      id: volumeNodeId(volume.name),
+      kind: "volume",
+      name: volume.name,
+      description: `Shared files · ${volume.sizeGiB} GiB`,
+      projectId: project.id,
+      tone: "service",
+      volume,
+      state:
+        volume.robustness === "faulted" || volume.phase === "Lost"
+          ? "failed"
+          : volume.phase === "Deleting"
+            ? "stopped"
+            : volume.phase !== "Bound" || volume.robustness !== "healthy"
+              ? "starting"
+              : "running",
+    });
+    const mount = project.clusterConfig?.mounts?.find((mount) => mount.name === volume.name);
+    if (mount && nodes.some((node) => node.id === applicationNodeId(project.id)))
+      edges.push({
+        id: `volume-connection:${volume.name}`,
+        source: applicationNodeId(project.id),
+        target: volumeNodeId(volume.name),
+        kind: "binding",
+        scope: "storage",
+        volumeName: volume.name,
+        label: mount.mountPath,
+        description: `${mount.readOnly ? "Read-only files" : "Shared files"} at ${mount.mountPath}. Deploy the application after changing this connection.`,
+      });
+  }
+  return { nodes, edges };
+}
 
 export function addClusterDatabases(
   graph: ProjectTopologyGraph,

@@ -300,8 +300,19 @@
       "notListeningHint": "لا توجد عملية تستمع على هذا المنفذ.",
       "notExposedHint": "يستمع على loopback فقط، لذلك لا يمكن للعملاء البعيدين الاتصال.",
       "unknownHint": "تعذر التحقق من إمكانية الوصول العامة.",
-      "ports": { "smtp": "SMTP الوارد", "smtps": "إرسال SMTP (TLS)", "submission": "إرسال SMTP (STARTTLS)", "imaps": "بريد IMAP (TLS)" },
-      "status": { "reachable": "متاح", "blocked": "محظور", "not_listening": "لا يستمع", "not_exposed": "غير مكشوف", "unknown": "غير معروف" }
+      "ports": {
+        "smtp": "SMTP الوارد",
+        "smtps": "إرسال SMTP (TLS)",
+        "submission": "إرسال SMTP (STARTTLS)",
+        "imaps": "بريد IMAP (TLS)"
+      },
+      "status": {
+        "reachable": "متاح",
+        "blocked": "محظور",
+        "not_listening": "لا يستمع",
+        "not_exposed": "غير مكشوف",
+        "unknown": "غير معروف"
+      }
     },
     "delivery": {
       "title": "التسليم الصادر",
@@ -411,7 +422,8 @@
       "partSignatures": "{names} غير قيد التشغيل - لم تعد بصمات الفيروسات تُحدَّث، لذا يُفحص البريد بمجموعة بصمات تتقادم",
       "partAdvisory": "{names} غير قيد التشغيل",
       "almostSubQueueOne": "{count} رسالة تنتظر الخروج - راجع التسليم الصادر أدناه.",
-      "almostSubQueueOther": "{count} رسالة تنتظر الخروج - راجع التسليم الصادر أدناه."
+      "almostSubQueueOther": "{count} رسالة تنتظر الخروج - راجع التسليم الصادر أدناه.",
+      "partCertificate": "شهادة البريد تحتاج إلى مراجعة"
     },
     "time": {
       "secondsAgo": "منذ {n} ث",
@@ -647,5 +659,28 @@
     "loadingLogs": "جارٍ تحميل السجلات…",
     "noLogLines": "لا توجد أسطر سجل لهذا المكوّن بعد.",
     "rowActions": "إجراءات {name}"
+  },
+  "certificate": {
+    "title": "شهادة خادم البريد",
+    "manage": "إدارة الشهادة",
+    "check": "فحص الشهادة",
+    "checking": "جارٍ الفحص…",
+    "renew": "تجديد الشهادة",
+    "renewing": "جارٍ التجديد…",
+    "autoRenew": "التجديد التلقائي",
+    "autoRenewHint": "تجديد الشهادة قبل انتهائها وإعادة تحميل خدمات البريد.",
+    "desktopHint": "أبقِ Openship قيد التشغيل للتجديد تلقائيًا.",
+    "jobDisabled": "مهمة تجديد شهادات SSL المشتركة معطّلة.",
+    "manageJob": "فتح مهمة التجديد",
+    "failed": "تعذّر تحديث شهادة البريد.",
+    "notChecked": "لم تُفحص بعد",
+    "expires": "تنتهي في {date}",
+    "checked": "آخر فحص: {time}",
+    "status": {
+      "ok": "صالحة",
+      "warn": "حان التجديد",
+      "fail": "تحتاج إلى مراجعة",
+      "unknown": "غير مؤكدة"
+    }
   }
 }

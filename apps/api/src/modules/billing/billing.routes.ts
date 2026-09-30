@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { CreateSubscriptionBody, CreateTopupBody } from "@repo/contracts";
+import { BillingOperationSchemas, CreateSubscriptionBody, CreateTopupBody } from "@repo/contracts";
 import { authMiddleware } from "../../middleware";
 import { secureRouter } from "../../lib/secure-router";
 import * as billingController from "./billing.controller";
@@ -56,41 +56,41 @@ r.use("/allowances", authMiddleware);
 // The retired Stripe webhook always returns 410 and performs no mutation.
 
 /* ---------- Dashboard state snapshot ---------- */
-r.get("/state", { tag: "billing:read", authorizationHandledByOperation: true }, billingController.getState);
+r.get("/state", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "Read the workspace’s Cloud billing state, current plan, balance and limits. Self-hosted instances need a connected Cloud account for this data." } }, billingController.getState);
 r.get(
   "/checkout",
-  { tag: "billing:read", authorizationHandledByOperation: true },
+  { tag: "billing:read", authorizationHandledByOperation: true, mcpExcluded: "Browser checkout configuration; use the billing reads to inspect a plan and complete purchases in Settings → Billing." },
   billingController.getCheckout,
 );
 
 /* ---------- Raw metered usage (Oblien usageUnits proxy) ---------- */
 // Powers the dashboard usage chart. Reads only — no Stripe / Oblien
 // mutation, just a passthrough to namespaces.usageUnits.
-r.get("/usage", { tag: "billing:read", authorizationHandledByOperation: true }, billingController.getUsage);
-r.get("/resources", { tag: "billing:read", authorizationHandledByOperation: true }, billingController.getResources);
+r.get("/usage", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "Read metered Cloud usage over the requested date range, grouped by hour or day. This is billing data, not live workload metrics." }, query: BillingOperationSchemas.getUsage.input }, billingController.getUsage);
+r.get("/resources", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "List Cloud resources contributing to this workspace’s bill and usage." } }, billingController.getResources);
 
 /* ---------- Allowance detail ---------- */
 // WHICH resources are consuming a quota, not just how many. The capacity meters
 // give a number; this gives the list a user can act on (each free subdomain with
 // the project holding it), which nothing else in the product exposes org-wide.
-r.get("/allowances", { tag: "billing:read", authorizationHandledByOperation: true }, billingController.listAllowanceDetail);
+r.get("/allowances", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "List resources consuming workspace allowances, including the projects holding managed domains." } }, billingController.listAllowanceDetail);
 
 /* ---------- Subscription ---------- */
 // GET returns the per-org subscription slice (tier + status + period).
 // POST requests an Oblien hosted checkout; provider entitlements confirm access.
-r.get("/subscription", { tag: "billing:read", authorizationHandledByOperation: true }, billingController.getSubscription);
-r.post("/subscription", { body: CreateSubscriptionBody, tag: "billing:write", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal" }, billingController.createSubscription);
+r.get("/subscription", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "Read the workspace’s current subscription tier, state and billing period." } }, billingController.getSubscription);
+r.post("/subscription", { body: CreateSubscriptionBody, tag: "billing:write", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal", mcpExcluded: "Starts a paid browser checkout. Purchases and payment authorization are completed in Settings → Billing." }, billingController.createSubscription);
 
 /* ---------- Cancellation ---------- */
 // Oblien keeps paid access until period end; both renewal actions are repeatable.
-r.post("/cancel", { tag: "billing:admin", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal" }, billingController.cancelSubscription);
-r.post("/resume", { tag: "billing:admin", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal" }, billingController.resumeSubscription);
+r.post("/cancel", { tag: "billing:admin", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal", mcpExcluded: "Paid subscription renewal is managed by the account owner in Settings → Billing; MCP exposes the resulting subscription state." }, billingController.cancelSubscription);
+r.post("/resume", { tag: "billing:admin", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal", mcpExcluded: "Paid subscription renewal is managed by the account owner in Settings → Billing; MCP exposes the resulting subscription state." }, billingController.resumeSubscription);
 
 /* ---------- One-shot top-ups ---------- */
-r.get("/topup-packs", { tag: "billing:read", authorizationHandledByOperation: true }, billingController.listTopupPacks);
+r.get("/topup-packs", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "List available Cloud credit packs and prices. Reading this does not buy credits." } }, billingController.listTopupPacks);
 r.post(
   "/topup",
-  { body: CreateTopupBody, tag: "billing:write", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal" },
+  { body: CreateTopupBody, tag: "billing:write", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal", mcpExcluded: "Starts a paid browser checkout. Buy credits in Settings → Billing; MCP can list pack prices and current balance." },
   billingController.createTopup,
 );
 
@@ -98,7 +98,7 @@ r.post(
 // The portal can cancel renewal, so it requires billing:admin too.
 r.post(
   "/portal",
-  { tag: "billing:admin", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal" },
+  { tag: "billing:admin", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal", mcpExcluded: "Creates an account billing-portal session. Open Settings → Billing to manage payment details." },
   billingController.createPortal,
 );
 

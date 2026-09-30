@@ -11,7 +11,7 @@ import { ResourceLabel as MetricLabel, ResourceMeter, ResourceRing } from "./Res
 
 export type { BillingState };
 
-/** Projects, services and build time are the product. Credits remain accounting details. */
+/** Show provider capacity separately from metered consumption credits. */
 export function BillingCapacity({ state }: { state: BillingState }) {
   const { t, locale } = useI18n();
   const copy = t.billing.resourcesGuide;
@@ -22,10 +22,17 @@ export function BillingCapacity({ state }: { state: BillingState }) {
   const number = (value: number) => formatBillingNumber(value, locale);
   const spec = state.maxServiceMachine === undefined
     ? (limits.maxResourceTier ? RESOURCE_TIER_SPECS[limits.maxResourceTier] : null) : state.maxServiceMachine;
+  const poolHint = copy.poolHint;
+  const buildMeter = cap?.buildMinutes ?? { used: state.buildTimeMinutes, max: limits.buildMinutesPerMonth };
   const rows = [
+    ...(cap?.workspaces ? [{ label: t.billing.capacity.workspaces, hint: poolHint, meter: cap.workspaces, Icon: "cloud" as const }] : []),
+    ...(cap?.vcpus ? [{ label: t.billing.header.vcpus, hint: poolHint, meter: cap.vcpus, Icon: "cpu" as const }] : []),
+    ...(cap?.ramMb ? [{ label: t.billing.header.ram, hint: poolHint, meter: { used: cap.ramMb.used === null ? null : cap.ramMb.used / 1024, max: cap.ramMb.max === null ? null : cap.ramMb.max / 1024 }, unit: "GB", Icon: "memory" as const }] : []),
+    ...(cap?.diskGb ? [{ label: t.billing.header.diskCap, hint: poolHint, meter: cap.diskGb, unit: "GB", Icon: "cloud" as const }] : []),
     { label: copy.projects, hint: copy.projectsHint, meter: cap?.projects ?? { used: null, max: limits.maxProjects }, Icon: "folder-open" as const },
     { label: copy.apps, hint: copy.appsHint, meter: cap?.services ?? { used: null, max: limits.runningServices }, Icon: "layers" as const },
-    { label: copy.buildTime, hint: copy.buildHint, meter: cap?.buildMinutes ?? { used: state.buildTimeMinutes, max: limits.buildMinutesPerMonth }, unit: t.billing.header.min, Icon: "clock" as const },
+    { label: copy.buildTime, hint: copy.buildHint, meter: buildMeter, unit: t.billing.header.min, Icon: "clock" as const,
+      footnote: buildMeter.max === null ? t.billing.resourceOverview.measuredUsage : undefined },
     { label: t.billing.capacity.routes, hint: copy.routesHint, meter: cap?.routes ?? { used: null, max: limits.freeSubdomains }, Icon: "globe" as const },
   ];
   const percent = cloudUsagePercent(state);
@@ -59,7 +66,7 @@ export function BillingCapacity({ state }: { state: BillingState }) {
           <span className="inline-flex items-center gap-2"><UiIcon name="memory" className="size-4 text-muted-foreground" aria-hidden="true" /><bdi>{spec ? formatMemoryMb(spec.memoryMb) : limits.maxResourceTier === null ? copy.unlimited : "—"}</bdi></span>
         </div>
       </div>
-      {resetAt && Number.isFinite(resetAt.getTime()) && <p className="mt-3 text-xs text-muted-foreground">{interpolate(copy.reset, {
+      {limits.buildMinutesPerMonth !== null && resetAt && Number.isFinite(resetAt.getTime()) && <p className="mt-3 text-xs text-muted-foreground">{interpolate(copy.reset, {
         date: resetAt.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" }),
       })}</p>}
       <div className="mt-6 border-t border-border/40 pt-5">
@@ -83,6 +90,8 @@ export function BillingCapacity({ state }: { state: BillingState }) {
             <p className="font-medium tabular-nums text-foreground">{unlimited ? copy.unlimited : `${formatMilliCredits(state.balance.quotaRemaining, locale)} ${t.billing.overview.creditsLeft}`}</p>
             <p className="mt-1 tabular-nums">{t.billing.overview.usedThisPeriod}: {formatMilliCredits(state.balance.quotaUsed, locale)}{state.balance.quotaLimit != null && <> {interpolate(t.billing.capacity.of, { max: formatMilliCredits(state.balance.quotaLimit, locale) })}</>}</p>
             <p className="mt-2">{copy.creditsHint}</p>
+            <p className="mt-2">{copy.creditUnitsHint}</p>
+            <p className="mt-2">{copy.topupCapacityHint}</p>
             <p className="mt-2">{copy.balanceRule}</p>
           </div>
         </details>

@@ -76,32 +76,25 @@ const plan = (id: string, monthly: number | null): ApiPlan =>
     support: "email",
   }) as unknown as ApiPlan;
 
-describe("plans grid width", () => {
-  it("uses exactly as many columns as there are cards", () => {
-    // Pinned at `xl:grid-cols-5` while the catalog happened to publish five cards;
-    // dropping the $0 tier left five tracks for four cards and a column of dead
-    // space on the right.
-    const four = render(
-      <PricingCards
-        plans={[plan("starter", 1000), plan("pro", 3900), plan("team", 9900), plan("enterprise", null)]}
-        ui={ui}
-      />,
-    );
-    expect(four).toContain("xl:grid-cols-4");
-    expect(four).not.toContain("xl:grid-cols-5");
+describe("custom plan presentation", () => {
+  it("keeps the catalog's sales action and current-plan state without promising preset allowances", () => {
+    const custom = {
+      ...plan("enterprise", null),
+      name: "Enterprise",
+      description: "Limits tailored to your team.",
+      contactSales: "https://sales.example.test/contact",
+      limits: PLANS.enterprise.limits,
+    };
+    const offer = render(<PricingCards plans={[custom]} ui={ui} />);
+    expect(text(offer)).toContain(custom.description);
+    expect(text(offer)).toContain(ui.custom);
+    expect(offer).toContain(`href="${custom.contactSales}"`);
+    expect(text(offer)).toContain(ui.ctaContact);
+    expect(text(offer)).not.toContain("No set limit");
+    expect(text(offer)).not.toContain("Choose Enterprise");
 
-    const five = render(
-      <PricingCards
-        plans={[
-          plan("free", 0),
-          plan("starter", 1000),
-          plan("pro", 3900),
-          plan("team", 9900),
-          plan("enterprise", null),
-        ]}
-        ui={ui}
-      />,
-    );
-    expect(five).toContain("xl:grid-cols-5");
+    const current = render(<PricingCards plans={[custom]} ui={ui} currentPlan="enterprise" />);
+    expect(text(current)).toContain("Current plan");
+    expect(current).not.toContain(`href="${custom.contactSales}"`);
   });
 });

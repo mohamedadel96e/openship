@@ -22,9 +22,8 @@ const r = secureRouter(new Hono(), {
   localOnly: true,
 });
 
-
 // Ticket endpoint - normal HTTP auth.
-r.post("/ticket", { tag: "terminal:write" }, issueTicket);
+r.post("/ticket", { tag: "terminal:write", mcpExcluded: "Single-use browser WebSocket terminal ticket. Use the exec tool for bounded commands over MCP." }, issueTicket);
 
 // WebSocket upgrade - auth is inside the upgrade factory (ticket via
 // Sec-WebSocket-Protocol, with session-cookie fallback). A normal HTTP

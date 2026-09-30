@@ -33,6 +33,10 @@ vi.mock("@repo/platform/engine/lib/startup/self-server", () => ({
   findLocalServer: () => h.findLocalServer(),
 }));
 
+vi.mock("@repo/platform/engine/lib/platform-config", () => ({
+  platform: () => ({ target: "selfhosted" }),
+}));
+
 import { resolveProjectServer } from "./ensure-edge.controller";
 
 const project = {

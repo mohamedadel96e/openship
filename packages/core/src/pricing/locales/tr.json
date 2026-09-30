@@ -19,6 +19,10 @@
     "enterprise": {
       "name": "Enterprise",
       "tagline": "Özel limitler, size ayrılmış altyapı ve SLA."
+    },
+    "hobby": {
+      "name": "Hobby",
+      "tagline": "Hafif geliştirme ve ara sıra kullanılan uygulamalar için sınırlı kullanım kredisi."
     }
   },
   "features": {
@@ -49,7 +53,11 @@
     "selfHostedUnlimited": "Sınırsız dağıtım, proje, sunucu ve alan adı",
     "selfHostedServices": "Tüm yönetilen servisler — Postgres, Redis, posta",
     "selfHostedClients": "CLI, web ve masaüstü — tek backend",
-    "selfHostedFreeSubdomains": "Cloud'a bağlandığınızda {freeSubdomains} ücretsiz {freeDomainSuffix} alt alan adı"
+    "selfHostedFreeSubdomains": "Cloud'a bağlandığınızda {freeSubdomains} ücretsiz {freeDomainSuffix} alt alan adı",
+    "usageCredits": "Ayda {credits} kullanım kredisi",
+    "namespaceCapacity": "Toplam: {namespaceCpu} vCPU, {namespaceRamGb} GB RAM, {namespaceDiskGb} GB disk",
+    "finiteUsage": "Kesintisiz barındırma ek kredi yüklemesi gerektirebilir.",
+    "oneRunningService": "1 çalışan uygulama, veritabanı veya worker"
   },
   "selfHosted": {
     "name": "Kendi sunucunuzda",
@@ -61,7 +69,12 @@
   "creditPacks": {
     "pack_5k": "{credits} kredi",
     "pack_25k": "{credits} kredi",
-    "pack_100k": "{credits} kredi"
+    "pack_100k": "{credits} kredi",
+    "pack_500": "{credits} kredi",
+    "pack_2k": "{credits} kredi",
+    "pack_400": "{credits} kredi",
+    "pack_1700": "{credits} kredi",
+    "pack_4500": "{credits} kredi"
   },
   "ui": {
     "perMonth": "/ay",

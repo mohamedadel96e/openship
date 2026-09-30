@@ -32,9 +32,19 @@ export type PolicyId =
   | "read-authed"
   | "write-authed"
   | "webhook-ingress"
-  | "billing-portal";
+  | "billing-portal"
+  | "support-contact";
 
 export const POLICIES: Record<PolicyId, RateLimitPolicy> = {
+  // Intake has no account requirement. The route checks this policy directly
+  // using a hashed contact identity, alongside the ordinary per-IP limit.
+  "support-contact": {
+    id: "support-contact",
+    limit: 5,
+    windowMs: 15 * MINUTE_MS,
+    subject: "user",
+    description: "New Cloud support tickets per hashed contact address, across API replicas.",
+  },
   /** Pre-auth flood ceiling on the whole `/api` tree (see middleware/
    *  rate-limiter.ts `floodGuard`). Its ONLY job is bounding abusive per-IP
    *  volume before authMiddleware runs its session DB lookup — a distinct

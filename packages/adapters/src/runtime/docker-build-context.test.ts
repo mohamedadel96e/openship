@@ -130,6 +130,17 @@ describe("prepareSourceTree — .dockerignore pruning", () => {
 
     expect(files).toEqual([".dockerignore", "Dockerfile", "package.json"]);
   });
+
+  it("keeps directories re-included by dir-only negations (#974)", async () => {
+    // Regression: the pruner tested directories with their bare path, so the
+    // dir-only re-include `!app/` never re-matched and `app/` was rm -rf'd.
+    const files = await contextFor("*\n!package.json\n!app/\n!app/**\n");
+
+    expect(files).toContain("app/build/page.tsx");
+    expect(files).toContain("package.json");
+    expect(files).not.toContain("build/artifact.txt");
+    expect(files).not.toContain("node_modules/left-pad/index.js");
+  });
 });
 
 describe("createDockerBuildContext", () => {

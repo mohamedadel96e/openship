@@ -13,9 +13,16 @@ export async function catalogEntry(c: Context) {
   return c.json({ data: result.template, draft: result.draft });
 }
 export async function hostFit(c: Context) {
-  return c.json({ data: await operationData(c, getPlatformKernel().apps.hostFit(operationContext(c), param(c, "id"), {
-    deployTarget: c.req.query("deployTarget") || undefined, serverId: c.req.query("serverId") || undefined,
-  })) });
+  return c.json({
+    data: await operationData(
+      c,
+      getPlatformKernel().apps.hostFit(operationContext(c), param(c, "id"), {
+        deployTarget: c.req.query("deployTarget") || undefined,
+        serverId: c.req.query("serverId") || undefined,
+        projectId: c.req.query("projectId") || undefined,
+      }),
+    ),
+  });
 }
 export async function addCustom(c: Context) {
   const body = await c.req.json().catch(() => null);

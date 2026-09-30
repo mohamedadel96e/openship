@@ -44,7 +44,11 @@ export function RelationPreview({
   );
 }
 
-function Detail({ label, value, copyable = false }: {
+function Detail({
+  label,
+  value,
+  copyable = false,
+}: {
   label: string;
   value: string | undefined | null;
   copyable?: boolean;
@@ -66,7 +70,9 @@ function Detail({ label, value, copyable = false }: {
     <div className="min-w-0 space-y-1">
       <dt className="text-[11px] text-muted-foreground">{label}</dt>
       <dd className="flex min-w-0 items-center gap-2 text-xs text-foreground">
-        <span className="min-w-0 flex-1 truncate" title={value}>{value}</span>
+        <span className="min-w-0 flex-1 truncate" title={value}>
+          {value}
+        </span>
         {copyable && (
           <Button
             type="button"
@@ -185,7 +191,11 @@ export function TopologyInspector({
     <aside className="topology-inspector flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-4 py-3">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted/50 text-muted-foreground">
-          {resource ? <TopologyResourceIcon resource={resource} /> : <UiIcon name="unplug" className="size-4" />}
+          {resource ? (
+            <TopologyResourceIcon resource={resource} />
+          ) : (
+            <UiIcon name="unplug" className="size-4" />
+          )}
         </span>
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-semibold">{resource?.name || "Connection"}</h2>
@@ -239,7 +249,11 @@ export function TopologyInspector({
               />
               {relation.connection && (
                 <>
-                  <Detail label="Environment variable" value={relation.connection.envKey} copyable />
+                  <Detail
+                    label="Environment variable"
+                    value={relation.connection.envKey}
+                    copyable
+                  />
                   <Detail
                     label="Network"
                     value={relation.connection.mode === "internal" ? "Private" : "Public"}
@@ -273,7 +287,13 @@ export function TopologyInspector({
                 onClick={() => onRemoveRelation(relation)}
               >
                 <UiIcon name="unplug" />
-                {relation.pending ? "Removal staged" : relation.databaseId ? "Manage database connection" : "Remove connection"}
+                {relation.pending
+                  ? "Removal staged"
+                  : relation.databaseId
+                    ? "Manage database connection"
+                    : relation.volumeName
+                      ? "Manage shared folder"
+                      : "Remove connection"}
               </Button>
             )}
             {relation.kind === "dependency" && relation.serviceId && (
@@ -493,7 +513,10 @@ export function TopologyInspector({
                     onClick={() => onSelectRelation(edge.id)}
                   >
                     <span className="truncate">{edge.label}</span>
-                    <UiIcon name="arrow-up-right" className="size-3.5 shrink-0 text-muted-foreground" />
+                    <UiIcon
+                      name="arrow-up-right"
+                      className="size-3.5 shrink-0 text-muted-foreground"
+                    />
                   </button>
                 ))}
               </section>

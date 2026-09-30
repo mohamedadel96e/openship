@@ -14,7 +14,7 @@ import { Toggle } from "@/components/project-settings/ServerSideSwitch";
 import { Button } from "@/components/ui/button";
 
 /**
- * GitHub clone credentials - user-global PAT for cloning private repos.
+ * User-global GitHub PAT for browsing and cloning private repositories.
  *
  * This is the second tier in the clone resolver chain (after per-project
  * tokens) and the recommended escape hatch when the user doesn't want to
@@ -73,25 +73,10 @@ export function CloneCredentials() {
       showToast(t.settings.cloneCredentials.toast.pasteFirst, "error", t.settings.common.toast.cloneCredentials);
       return;
     }
-    // Light validation - accept classic ghp_, fine-grained github_pat_, or
-    // long opaque tokens (gh CLI / device-flow). We don't reject anything;
-    // just warn if the prefix looks off so paste typos don't silently fail.
-    const looksLikeGitHubToken =
-      /^ghp_/.test(trimmed) || /^github_pat_/.test(trimmed) || trimmed.length >= 40;
-    if (!looksLikeGitHubToken) {
-      showToast(
-        t.settings.cloneCredentials.toast.notLikeToken,
-        "error",
-        t.settings.common.toast.cloneCredentials,
-      );
-    }
     setSaving(true);
     try {
       const next = await settingsApi.updateCloneCredentials({
         token: trimmed,
-        // Default to using-as-default if user is setting one explicitly.
-        // They can toggle off afterward.
-        asDefault: state?.asDefault ?? true,
       });
       setState(next.cloneToken);
       setTokenInput("");

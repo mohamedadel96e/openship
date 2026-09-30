@@ -76,7 +76,7 @@ export type PermissionTag = string; // keep wide; the parser validates structura
  * Resource → URL param-name convention. The middleware reads the id from
  * `c.req.param(paramName)`. Overridable per route.
  */
-const DEFAULT_ID_PARAMS: Record<string, string> = {
+export const DEFAULT_ID_PARAMS: Readonly<Record<string, string>> = {
   project: "id",
   deployment: "id",
   domain: "id",
@@ -127,7 +127,7 @@ export { ORG_SINGLETON_RESOURCES };
  * controller is still responsible for performing org-wide reasoning
  * safely (no implicit cross-tenant access).
  */
-const CONDITIONAL_SINGLETON_RESOURCES = new Set<string>([
+export const CONDITIONAL_SINGLETON_RESOURCES: ReadonlySet<string> = new Set([
   "domain",
   "mail_server",
 ]);
@@ -267,13 +267,8 @@ export type RateLimitPolicyId = PolicyId;
 export interface McpRouteMeta {
   /** Agent-facing tool description. */
   description: string;
-  /**
-   * @deprecated Declare the body schema ONCE via the top-level `spec.body`
-   * field instead — secureRouter auto-wires `tbValidator` from it AND the MCP
-   * layer reads it as the tool's body params, so there is a single source. This
-   * field is kept only as a fallback for the (now migrated) legacy call sites.
-   */
-  body?: TSchema;
+  /** Override the inferred hint for actions such as destructive migration cutover. */
+  destructive?: boolean;
 }
 
 export interface PermissionSpec {
@@ -389,6 +384,14 @@ export interface PermissionSpec {
   localOnly?: boolean;
   /** Opt this route into the MCP tool surface. See {@link McpRouteMeta}. */
   mcp?: McpRouteMeta;
+  /** Why this HTTP endpoint is intentionally not an MCP tool (checked by docs:check). */
+  mcpExcluded?: string;
+  /**
+   * Decoded query parameters advertised to MCP clients. Reuse the operation's
+   * input schema; the HTTP adapter still parses strings and the shared operation
+   * validates them. This is not a second HTTP query validator.
+   */
+  query?: TSchema;
   /**
    * TypeBox schema for the JSON request body. Declared ONCE here and consumed
    * in two places — no duplication:
@@ -396,9 +399,11 @@ export interface PermissionSpec {
    *      handlers (so every body-carrying route validates by construction).
    *   2. The MCP layer emits it verbatim as the tool's `body` params (TypeBox
    *      *is* JSON Schema, so there's no second contract to keep in sync).
-   * Prefer this over the deprecated `mcp.body`.
    */
   body?: TSchema;
+  /** The shared operation validates this same schema. Keeps its optional-input
+   * semantics (including an empty JSON body) and MCP metadata in one contract. */
+  bodyValidatedByOperation?: boolean;
 }
 
 export interface PublicSpec {
@@ -448,8 +453,8 @@ export function isPublicSpec(spec: RouteSpec): spec is PublicSpec {
  * tell-tale `github '*' not found`.
  *
  * Deliberately limited to read/list. Write/admin GitHub routes (create or
- * delete repo, disconnect, instance-token) keep the org-wide check on
- * `{github,"*"}`, and MCP exposes no GitHub mutations.
+ * delete repo, disconnect, instance-token) use their existing route or shared
+ * operation authority; this helper does not authorize them.
  *
  * Be precise about what that org-wide check buys, because it is easy to misread as
  * a defense it is not: it is strict only for a RESTRICTED principal (a scoped

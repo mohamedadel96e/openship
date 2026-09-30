@@ -7,6 +7,7 @@ vi.mock("@repo/platform/engine/modules/domains/domain.service", () => ({
   verifyPendingDomains,
 }));
 
+import * as platformConfig from "@repo/platform/engine/lib/platform-config";
 import { SYSTEM_JOB_BY_KEY } from "@repo/platform/engine/modules/jobs/job.registry";
 
 describe("domains:verify-pending system job", () => {
@@ -41,4 +42,18 @@ describe("domains:verify-pending system job", () => {
       sslRetrying: 1,
     });
   });
+});
+
+
+it("schedules shared SSL renewal on desktop and self-hosted, never cloud", () => {
+  const spy = vi.spyOn(platformConfig, "platform");
+  const job = SYSTEM_JOB_BY_KEY.get("ssl:renew")!;
+  try {
+    for (const target of ["desktop", "selfhosted", "cloud"] as const) {
+      spy.mockReturnValue({ target } as never);
+      expect(job.available?.()).toBe(target !== "cloud");
+    }
+  } finally {
+    spy.mockRestore();
+  }
 });

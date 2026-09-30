@@ -3,6 +3,7 @@
 import { Icon as UiIcon } from "@repo/ui/icons";
 
 import React from "react";
+import { BRAND_LINKS } from "@repo/core";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { useI18n } from "@/components/i18n-provider";
 import { ResourceNotFound } from "@/components/resource-not-found";
@@ -57,7 +58,7 @@ export const ProjectNotFound: React.FC = () => {
           <p className="mb-2 text-xs text-muted-foreground">{nf.needHelp}</p>
           <div className="flex justify-center gap-2 text-xs">
             <a
-              href="https://docs.oblien.com"
+              href={BRAND_LINKS.docs}
               target="_blank"
               rel="noopener noreferrer"
               className="font-semibold text-foreground transition-colors hover:text-primary"
@@ -66,7 +67,9 @@ export const ProjectNotFound: React.FC = () => {
             </a>
             <span className="text-muted-foreground/70">·</span>
             <a
-              href="mailto:support@oblien.com"
+              href={BRAND_LINKS.support}
+              target="_blank"
+              rel="noopener noreferrer"
               className="font-semibold text-foreground transition-colors hover:text-primary"
             >
               {nf.support}

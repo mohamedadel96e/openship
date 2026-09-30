@@ -15,6 +15,35 @@ describe("resolveProjectInfo", () => {
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
+  it("keeps a Vite app's local-dev Compose separate unless explicitly selected (#959)", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "openship-app-with-compose-"));
+    tempDirs.push(tempDir);
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({
+      name: "app", scripts: { build: "vite build" }, devDependencies: { vite: "^6.0.0" },
+    }));
+    await writeFile(join(tempDir, "vite.config.ts"), "export default {};\n");
+    await writeFile(join(tempDir, "docker-compose.yml"), [
+      "services:",
+      "  postgres:",
+      "    image: postgres:16-alpine",
+      "    environment:",
+      "      POSTGRES_PASSWORD: local-dev-only",
+    ].join("\n"));
+
+    const app = await resolveProjectInfo({ source: "local", path: tempDir });
+    expect(app.stack).toBe("vite");
+    expect(app.projectType).toBe("app");
+    expect(app.services).toBeUndefined();
+
+    const compose = await resolveProjectInfo({
+      source: "local", path: tempDir, composePath: "docker-compose.yml",
+    });
+    expect(compose.projectType).toBe("services");
+    expect(compose.services).toEqual([
+      expect.objectContaining({ name: "postgres", image: "postgres:16-alpine" }),
+    ]);
+  });
+
   it("reports a required Compose variable as a value to collect, not a load failure", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "openship-prepare-"));
     tempDirs.push(tempDir);

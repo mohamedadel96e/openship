@@ -7,7 +7,7 @@ import Link from "next/link";
 import { type Project } from "@/constants/mock";
 import { AppLogo } from "@/components/AppLogo";
 import { getFrameworkConfig } from "@/components/import-project/Frameworks";
-import { getProjectStatus, projectDisplayDomain } from "@/utils/project-status";
+import { projectCardHref, projectDisplayDomain } from "@/utils/project-status";
 import { ProjectStatusBadge } from "@/components/shared/ProjectStatusBadge";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { timeAgo } from "@/lib/time";
@@ -32,7 +32,6 @@ const ProjectGridCard: React.FC<{
   updateAvailable?: boolean;
 }> = ({ project, preferAppLogo, updateAvailable }) => {
   const { t } = useI18n();
-  const status = getProjectStatus(project);
   const fw = getFrameworkConfig(project.framework);
   const favicon = useImageFallback(project.favicon);
 
@@ -43,10 +42,7 @@ const ProjectGridCard: React.FC<{
     project.hasMultipleServices === true || Number(project.serviceCount ?? 0) > 1;
   const hosting = getHostingLabel(project.deployTarget, project.serverName, t);
   const appTemplateId = (project as { appTemplateId?: string }).appTemplateId;
-  const isDraftApp = !!project.isApp && status === "draft" && !!appTemplateId;
-  const clickTarget = isDraftApp
-    ? `/apps/new/${appTemplateId}?projectId=${project.id}`
-    : `/projects/${project.id}`;
+  const clickTarget = projectCardHref(project);
 
   return (
     <div className="group relative flex flex-col gap-3.5 rounded-2xl bg-card p-4 transition-colors hover:bg-muted/40">

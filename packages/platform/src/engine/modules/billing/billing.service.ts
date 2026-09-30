@@ -15,6 +15,7 @@ import { syncOblienEntitlement, withCloudBillingLock } from "./billing-oblien-qu
 import { listLiveSubscriptions } from "./billing.repository";
 import { canTopUpCloudSubscription, presentCloudSubscription } from "./billing-subscription";
 import { fromOblienCredits } from "./billing-credit-units";
+import { cloudAnalytics } from "../cloud-analytics";
 
 export function assertBillingEnabled(): void {
   if (!env.BILLING_ENABLED) {
@@ -89,6 +90,7 @@ export async function createCheckoutSession(
       ),
     });
     // A checkout redirect is not proof of payment. Webhooks/polling mirror access.
+    await cloudAnalytics.checkoutStarted(ctx, { checkoutId: result.checkoutId, kind: "subscription", amount: offer.unitAmount, plan: planTierId, interval });
     return { checkoutUrl: result.url };
   });
 }
@@ -110,8 +112,9 @@ export async function createTopupCheckoutSession(ctx: RequestContext, packId: st
     },
     successUrl: `${runtimeTarget.dashboard}/billing/overview?topup=success&session_id={CHECKOUT_SESSION_ID}`,
     cancelUrl: `${runtimeTarget.dashboard}/billing/overview?topup=cancelled`,
-    idempotencyKey: checkoutKey(ctx.organizationId, `topup:${packId}`, requestKey),
+    idempotencyKey: checkoutKey(ctx.organizationId, `topup:${offer.reference}`, requestKey),
   });
+  await cloudAnalytics.checkoutStarted(ctx, { checkoutId: result.checkoutId, kind: "topup", amount: offer.unitAmount });
   return { checkoutUrl: result.url };
 }
 
@@ -129,6 +132,7 @@ export async function listActiveCreditPacks() {
 export async function getCheckoutStatus(orgId: string, checkoutId: string) {
   const namespace = await ensureNamespace(orgId);
   const { checkout } = await getOblienBillingApi().getCheckout(namespace, checkoutId);
+  await cloudAnalytics.checkoutObserved(orgId, checkout);
   const { namespaceCreditsGranted, ...state } = checkout;
   return { ...state, creditsGranted: fromOblienCredits(namespaceCreditsGranted) };
 }

@@ -14,7 +14,7 @@ import {
 } from "@repo/adapters";
 import { incrementalBackupStorage, backupArtifactObjects } from "@repo/core";
 import { getFreePort } from "@repo/core/ports";
-import { repos, type BackupRun } from "@repo/db";
+import { db, repos, type BackupRun } from "@repo/db";
 import type { BackupRun as RunSnapshot, BackupRestore as RestoreSnapshot } from "@repo/contracts";
 import { OpenshipClient } from "@repo/sdk/client";
 import { env } from "@repo/platform/engine/config/index";
@@ -362,7 +362,9 @@ describeDockerE2E("backup lifecycle through the public controls", () => {
       const accepted = await client.backups.run(policyId);
       const snapshots: RunSnapshot[] = [];
       const events: string[] = [];
-      for await (const frame of client.backups.streamRun(accepted.runId, { signal: AbortSignal.timeout(120_000) })) {
+      for await (const frame of client.backups.streamRun(accepted.runId, {
+        signal: AbortSignal.timeout(120_000),
+      })) {
         const event = JSON.parse(frame.data);
         events.push(event.type);
         if (event.type === "snapshot") snapshots.push(event.run);
@@ -370,7 +372,9 @@ describeDockerE2E("backup lifecycle through the public controls", () => {
       const saved = await client.backups.getRun(accepted.runId);
       expect(events.at(-1)).toBe("complete");
       expect(snapshots.at(-1)).toMatchObject({
-        status: "succeeded", finishedAt: saved.finishedAt, bytesTransferred: saved.bytesTransferred,
+        status: "succeeded",
+        finishedAt: saved.finishedAt,
+        bytesTransferred: saved.bytesTransferred,
       });
       expect(saved.finishedAt).toBeTruthy();
       expect(saved.bytesTransferred).toBeGreaterThan(0);
@@ -380,13 +384,17 @@ describeDockerE2E("backup lifecycle through the public controls", () => {
       const restores: RestoreSnapshot[] = [];
       let applied = false;
       let completed = false;
-      for await (const frame of client.backups.streamRestore(prepared.restoreId, { signal: AbortSignal.timeout(120_000) })) {
+      for await (const frame of client.backups.streamRestore(prepared.restoreId, {
+        signal: AbortSignal.timeout(120_000),
+      })) {
         const event = JSON.parse(frame.data);
         if (event.type === "snapshot") {
           restores.push(event.restore);
           if (event.restore.status === "prepared" && !applied) {
             applied = true;
-            await client.backups.applyRestore(prepared.restoreId, { confirmationToken: prepared.confirmationToken });
+            await client.backups.applyRestore(prepared.restoreId, {
+              confirmationToken: prepared.confirmationToken,
+            });
           }
         }
         if (event.type === "complete") completed = true;
@@ -395,7 +403,9 @@ describeDockerE2E("backup lifecycle through the public controls", () => {
       expect(applied).toBe(true);
       expect(completed).toBe(true);
       expect(restores.at(-1)).toMatchObject({
-        status: "succeeded", finishedAt: restored.finishedAt, bytesRestored: restored.bytesRestored,
+        status: "succeeded",
+        finishedAt: restored.finishedAt,
+        bytesRestored: restored.bytesRestored,
       });
       expect(restored.finishedAt).toBeTruthy();
       expect(await exec(sourceContainer, "cat /data/value.txt")).toBe("original");
@@ -513,9 +523,27 @@ describeDockerE2E("backup lifecycle through the public controls", () => {
       .toBeTruthy();
     await client.backups.updatePolicy(policyId, { cronExpression: null });
     await waitForBackup(scheduled!.id);
-    const count = (await client.backups.listRuns(projectId)).length;
+    // Retention prunes the public history after a successful capture. Inspect
+    // admitted cron rows, including pruned rows, so removals cannot hide a new
+    // scheduled run or look like a schedule failure.
+    const scheduledRunIds = async () =>
+      (
+        await db.query.backupRun.findMany({
+          columns: { id: true },
+          where: (row, { and, eq }) =>
+            and(
+              eq(row.organizationId, organizationId),
+              eq(row.policyId, policyId),
+              eq(row.triggeredBy, "cron"),
+            ),
+        })
+      )
+        .map((row) => row.id)
+        .sort();
+    const admitted = await scheduledRunIds();
+    expect(admitted).toContain(scheduled!.id);
     await delay(2_500);
-    expect((await client.backups.listRuns(projectId)).length).toBe(count);
+    expect(await scheduledRunIds()).toEqual(admitted);
     await client.backups.updatePolicy(policyId, {
       payloadConfig: { sourceIds: [volumes[0], "missing-volume"] },
       preHook: "touch /data/backup.lock",
@@ -590,8 +618,8 @@ describeDockerE2E("backup lifecycle through the public controls", () => {
     const duplicate = backupOrchestrator.execute(accepted.runId);
     try {
       const active = await client.backups.listRuns(projectId, { active: true });
-      expect(active.some(row => row.id === accepted.runId)).toBe(true);
-      expect(active.some(row => row.id === first.id)).toBe(false);
+      expect(active.some((row) => row.id === accepted.runId)).toBe(true);
+      expect(active.some((row) => row.id === first.id)).toBe(false);
       await delay(100);
       expect(pruned).toBe(false);
     } finally {
@@ -599,8 +627,16 @@ describeDockerE2E("backup lifecycle through the public controls", () => {
     }
     const captured = await waitForBackup(accepted.runId);
     await Promise.all([pruning, duplicate]);
-    expect((await client.backups.listRuns(projectId, { active: true })).some(row => row.id === captured.id)).toBe(false);
-    expect((await client.backups.listRuns(projectId, { active: false })).some(row => row.id === captured.id)).toBe(true);
+    expect(
+      (await client.backups.listRuns(projectId, { active: true })).some(
+        (row) => row.id === captured.id,
+      ),
+    ).toBe(false);
+    expect(
+      (await client.backups.listRuns(projectId, { active: false })).some(
+        (row) => row.id === captured.id,
+      ),
+    ).toBe(true);
     expect(await exec(sourceContainer, "cat /data/capture.executions")).toBe("x");
     expect((await repos.backupRun.findById(first.id))?.deletedAt).not.toBeNull();
     const hash = await exec(sourceContainer, "sha256sum /data/blob.bin");
@@ -637,12 +673,15 @@ describeDockerE2E("backup lifecycle through the public controls", () => {
     const paged: string[] = [];
     let before: string | undefined;
     do {
-      const page = await client.backups.listRuns(projectId, { limit: 2, ...(before && { before }) });
-      paged.push(...page.map(row => row.id));
+      const page = await client.backups.listRuns(projectId, {
+        limit: 2,
+        ...(before && { before }),
+      });
+      paged.push(...page.map((row) => row.id));
       before = page.length === 2 ? page.at(-1)!.id : undefined;
       expect(paged.length).toBeLessThanOrEqual(history.length);
     } while (before);
-    expect(paged).toEqual(history.map(row => row.id));
+    expect(paged).toEqual(history.map((row) => row.id));
     await expect(
       client.backups.run(defaults.id, { serviceId: "foreign-service" }),
     ).rejects.toMatchObject({ status: 400 });

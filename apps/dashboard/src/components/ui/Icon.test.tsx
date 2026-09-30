@@ -4,7 +4,7 @@ import { act, createRef } from "react";
 import { createRoot, hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Icon, IconArtwork, IconProvider, iconAssetUrl, outlineModern, type IconTheme } from "@repo/ui/icons";
+import { CLOUD_ICON_BASE_URL, Icon, IconArtwork, IconProvider, iconAssetUrl, outlineModern, type IconTheme } from "@repo/ui/icons";
 
 let host: HTMLDivElement;
 let root: Root | undefined;
@@ -20,6 +20,7 @@ afterEach(() => {
   root = undefined;
   host.remove();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function render(element: React.ReactNode) {
@@ -133,6 +134,44 @@ describe("shared icon rendering", () => {
 describe("icon configuration and recovery", () => {
   const theme: IconTheme = { name: "custom", icons: { server: { file: "custom server.png", mode: "color" } } };
 
+  it("recovers a CDN image that failed before hydration attached its error handler", async () => {
+    const probes: HTMLImageElement[] = [];
+    vi.stubGlobal(
+      "Image",
+      class {
+        constructor() {
+          const probe = document.createElement("img");
+          probes.push(probe);
+          return probe;
+        }
+      },
+    );
+    const element = (
+      <IconProvider baseUrl="https://icons.example.test">
+        <Icon name="google" />
+      </IconProvider>
+    );
+    host.innerHTML = renderToString(element);
+    // This error is lost: the server markup has no React handler yet.
+    failImage();
+    const recoverableError = vi.fn();
+    await act(async () => {
+      root = hydrateRoot(host, element, { onRecoverableError: recoverableError });
+    });
+    expect(imageSource()).toBe(iconAssetUrl(outlineModern.google, "https://icons.example.test"));
+    expect(probes).toHaveLength(1);
+    expect(probes[0].src).toBe(imageSource());
+    act(() => {
+      probes[0].dispatchEvent(new Event("error"));
+    });
+    expect(imageSource()).toBe(iconAssetUrl(outlineModern.google));
+    expect(host.querySelector("mask")).toBeNull();
+    expect(probes[0].onerror).toBeNull();
+    failImage();
+    expect(probes).toHaveLength(1);
+    expect(recoverableError).not.toHaveBeenCalled();
+  });
+
   it("inherits the parent asset host while overriding only the selected artwork", () => {
     render(<IconProvider baseUrl="https://icons.example.test/artwork/"><IconProvider theme={theme}><Icon name="server" /><Icon name="search" /></IconProvider></IconProvider>);
     const icons = host.querySelectorAll("svg");
@@ -151,6 +190,45 @@ describe("icon configuration and recovery", () => {
     failImage();
     expect(imageSource()).toBe(iconAssetUrl(outlineModern.server));
     expect(host.querySelectorAll("image")).toHaveLength(1);
+  });
+
+  it("inherits an explicitly configured fallback host through nested providers without retrying errors", () => {
+    render(
+      <IconProvider baseUrl={CLOUD_ICON_BASE_URL} fallbackBaseUrl={CLOUD_ICON_BASE_URL}>
+        <IconProvider theme={theme}>
+          <Icon name="server" />
+        </IconProvider>
+      </IconProvider>,
+    );
+    expect(imageSource()).toBe(`${CLOUD_ICON_BASE_URL}/custom%20server.png`);
+    failImage();
+    expect(imageSource()).toBe(iconAssetUrl(outlineModern.server, CLOUD_ICON_BASE_URL));
+    expect(host.querySelector("mask")).not.toBeNull();
+    failImage();
+    expect(imageSource()).toBe(iconAssetUrl(outlineModern.server, CLOUD_ICON_BASE_URL));
+    expect(host.querySelectorAll("image")).toHaveLength(1);
+  });
+
+  it("recovers a failed Cloud icon from bundled artwork after hydration without retrying errors", async () => {
+    const elements = (
+      <IconProvider baseUrl={CLOUD_ICON_BASE_URL}>
+        <Icon name="arrow-right" />
+      </IconProvider>
+    );
+    host.innerHTML = renderToString(elements);
+    const expected = `${CLOUD_ICON_BASE_URL}/arrow%20-%20right-18-1663766896.png`;
+    expect(imageSource()).toBe(expected);
+    const recoverableError = vi.fn();
+    await act(async () => {
+      root = hydrateRoot(host, elements, { onRecoverableError: recoverableError });
+    });
+    expect(imageSource()).toBe(expected);
+    failImage();
+    expect(imageSource()).toBe(iconAssetUrl(outlineModern["arrow-right"]));
+    failImage();
+    expect(imageSource()).toBe(iconAssetUrl(outlineModern["arrow-right"]));
+    expect(host.querySelectorAll("image")).toHaveLength(1);
+    expect(recoverableError).not.toHaveBeenCalled();
   });
 
   it("tries the new asset host after a source change, including after a previous failure", () => {

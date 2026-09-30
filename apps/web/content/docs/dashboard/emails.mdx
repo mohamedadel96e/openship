@@ -279,6 +279,21 @@ each run; successful runs offer **Restore** (in place) and **Migrate** (onto ano
 
 ### Advanced
 
+**Mail certificate** shows expiry and the certificate served by SMTP (465/587) and IMAP (993).
+**Check certificate** refreshes those observations. **Renew certificate** uses the existing Openship
+edge to obtain a certificate when due, reloads Postfix and Dovecot, and checks the served certificates.
+A certificate that is still valid is reused, so repeated clicks do not create extra ACME orders.
+
+**Automatic renewal** is enabled by default for each mail server. It uses the shared **SSL certificate
+renewal** job; disabling the mail toggle leaves certificate monitoring active. Expiry, failed renewal,
+and services still serving an old certificate appear in **Health** and global **Monitoring**.
+The checks share a five-minute cache; Monitoring's re-scan refreshes them immediately.
+
+The Openship control plane must remain running for scheduled renewal. In Desktop, keep Openship open;
+for unattended operation, run a self-hosted control plane. When adopting a legacy mail host, Openship
+retires a host Certbot timer only if it manages this mail certificate alone. A timer that also manages
+other certificates is left unchanged and reported for migration.
+
 The power-user surface, top to bottom:
 
 - **Protocol settings** — the host/port/encryption pairs for **Incoming · IMAP** (SSL/TLS) and **Outgoing ·

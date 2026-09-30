@@ -18,6 +18,7 @@ export const oblienCatalogSchema = z.object({
       offerPolicy: z.boolean(),
       resourceLimits: z.boolean(),
       effectiveResourceLimits: z.boolean().optional(),
+      aggregateResourceLimits: z.boolean().optional(),
     })
     .optional(),
   plans: z.array(
@@ -47,6 +48,14 @@ export const oblienCatalogSchema = z.object({
   ),
 });
 
+export const oblienQuotaAlertSchema = z.object({
+  state: z.enum(["ok", "low", "grace", "depleted", "unlimited", "disabled"]),
+  thresholds: z.array(amount.positive().max(100)), threshold: amount.nullable(),
+  percent: amount.nullable(), used: amount, limit: allowance,
+  remaining: amount.nullable(), balance: amount.nullable(), overdraft: amount.nonnegative(), blocking: z.boolean(),
+});
+export type OblienQuotaAlert = z.infer<typeof oblienQuotaAlertSchema>;
+
 export const oblienEntitlementSchema = z.object({
   success: z.literal(true), namespace,
   tierId: z.string().nullable(),
@@ -59,6 +68,7 @@ export const oblienEntitlementSchema = z.object({
     balance: amount.nullable(),
     overdraft: amount.nonnegative().optional(),
     suspendThreshold: allowance.optional(),
+    alert: oblienQuotaAlertSchema.optional(),
   }),
 });
 
@@ -67,6 +77,9 @@ export const oblienOfferResourceLimitsSchema = z.object({
   max_vcpus: allowance,
   max_ram_mb: allowance,
   max_disk_gb: allowance,
+  max_total_vcpus: allowance.optional(),
+  max_total_ram_mb: allowance.optional(),
+  max_total_disk_gb: allowance.optional(),
 });
 export const oblienOfferSchema = z.object({
   reference: z.string().min(1).max(100).optional(),
@@ -286,10 +299,10 @@ export class OblienBillingApi {
       reseller.contractVersion < 2 ||
       !reseller.offerPolicy ||
       !reseller.resourceLimits ||
-      !reseller.effectiveResourceLimits
+      !reseller.effectiveResourceLimits || !reseller.aggregateResourceLimits
     ) {
       throw new AppError(
-        "The billing provider needs the namespace capacity policy update before Cloud checkout can be enabled.",
+        "The billing provider must enforce total namespace capacity before Cloud checkout can be enabled. Contact Openship support.",
         503,
         "OBLIEN_BILLING_UPGRADE_REQUIRED",
       );
@@ -372,9 +385,22 @@ export class OblienBillingApi {
   }
 
   async createCheckout(input: OblienCheckout) {
-    const result = await this.validate(this.billing.checkout(input), checkoutSchema);
-    this.validateHostedUrl(result.url, "checkout.stripe.com");
+    // Oblien validates admin-issued codes against the authenticated reseller
+    // and this saved namespace offer before creating the Stripe session.
+    const request = { ...input, allowPromotionCodes: true };
+    const result = await this.validate(this.billing.checkout(request), checkoutSchema);
+    this.validateCheckoutUrl(result.url);
     return result;
+  }
+
+  private validateCheckoutUrl(value: string): void {
+    const url = new URL(value);
+    if (url.hostname === "api.oblien.com") {
+      this.validateHostedUrl(value, "api.oblien.com");
+      if (url.pathname === "/billing/pay" && !url.search && /^#[A-Za-z0-9_-]{43}$/.test(url.hash)) return;
+      throw new AppError("Cloud billing returned an invalid hosted URL", 502, "OBLIEN_BILLING_INVALID_RESPONSE");
+    }
+    this.validateHostedUrl(value, "checkout.stripe.com");
   }
 
   private validateHostedUrl(value: string, hostname: string): void {

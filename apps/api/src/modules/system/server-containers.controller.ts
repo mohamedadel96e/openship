@@ -28,7 +28,9 @@ export async function listApplyingContainers(c: Context) {
   return c.json(await operationData(c, operations().applyingContainers(operationContext(c))));
 }
 export async function applyAllContainers(c: Context) {
-  return c.json(await operationData(c, operations().applyAllContainers(operationContext(c), await c.req.json().catch(() => ({})))));
+  const text = await c.req.text();
+  const input = text.trim() ? JSON.parse(text) : {};
+  return c.json(await operationData(c, operations().applyAllContainers(operationContext(c), input)));
 }
 export async function scanServerContainers(c: Context) {
   return c.json(await operationData(c, operations().scanContainers(operationContext(c), param(c, "id"))));

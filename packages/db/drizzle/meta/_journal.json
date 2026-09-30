@@ -1035,7 +1035,63 @@
       "idx": 147,
       "version": "7",
       "when": 1790331638893,
-      "tag": "0147_checked_git_provider",
+      "tag": "0147_project_release_commands",
+      "breakpoints": true
+    },
+    {
+      "idx": 148,
+      "version": "7",
+      "when": 1790331638894,
+      "tag": "0148_cluster_storage",
+      "breakpoints": true
+    },
+    {
+      "idx": 149,
+      "version": "7",
+      "when": 1790436000000,
+      "tag": "0149_mail_certificate",
+      "breakpoints": true
+    },
+    {
+      "idx": 150,
+      "version": "7",
+      "when": 1790436000001,
+      "tag": "0150_domain_dns_challenges",
+      "breakpoints": true
+    },
+    {
+      "idx": 151,
+      "version": "7",
+      "when": 1790436000002,
+      "tag": "0151_cloud_analytics",
+      "breakpoints": true
+    },
+    {
+      "idx": 152,
+      "version": "7",
+      "when": 1790436000003,
+      "tag": "0152_cloud_support",
+      "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1790605200000,
+      "tag": "0153_durable_credit_alerts",
+      "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "7",
+      "when": 1790670000000,
+      "tag": "0154_github_repository_authorization",
+      "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1790670000001,
+      "tag": "0155_checked_git_provider",
       "breakpoints": true
     }
   ]

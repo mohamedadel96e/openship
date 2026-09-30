@@ -38,7 +38,7 @@ function baseConfig(overrides: Partial<MultiServiceDeployConfig> = {}): MultiSer
 function recordingDaemon() {
   const creates: Array<Record<string, any>> = [];
   const docker = {
-    getContainer: () => ({ remove: async () => undefined }),
+    getContainer: () => ({ stop: async () => undefined, remove: async () => undefined }),
     createContainer: async (args: Record<string, any>) => {
       creates.push(args);
       return {

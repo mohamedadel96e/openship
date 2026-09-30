@@ -47,7 +47,7 @@ export default function MailWizardPage() {
   const m = w.mail;
   const { showToast } = useToast();
   const { connected: cloudConnected, requireCloud } = useCloud();
-  const { baseDomain } = usePlatform();
+  const { baseDomain, selfHosted } = usePlatform();
 
   const [phase, setPhase] = useState<Phase>("choose");
   const [preset, setPreset] = useState<MailProviderId>("custom");
@@ -393,7 +393,9 @@ export default function MailWizardPage() {
             <div className="space-y-4 lg:sticky lg:top-6">
               <div className="rounded-2xl border border-border/50 bg-card p-5">
                 <h3 className="text-sm font-semibold text-foreground">{w.destinationTitle}</h3>
-                <p className="mt-0.5 text-xs text-muted-foreground">{w.destinationHint}</p>
+                {selfHosted && (
+                  <p className="mt-0.5 text-xs text-muted-foreground">{w.destinationHint}</p>
+                )}
                 <div className="mt-4">
                   <AppDestinationPicker value={destination} onChange={setDestination} />
                 </div>

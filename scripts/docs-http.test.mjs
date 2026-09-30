@@ -137,3 +137,13 @@ test("the real network inventory includes both generations with their permission
   }
   assert.equal(find("GET", "/.well-known/oauth-protected-resource/api/mcp").length, 1);
 });
+
+test("Cloud product telemetry does not shadow the authenticated traffic analytics relay", () => {
+  const routes = httpSurface();
+  const relay = routes.filter((route) => route.method === "POST" && route.path === "/api/cloud/analytics");
+  assert.equal(relay.length, 1, "the existing Cloud analytics relay must have exactly one handler");
+  assert.equal(relay[0].access, "cloud:write");
+  const telemetry = routes.filter((route) => route.method === "POST" && route.path === "/api/cloud/telemetry");
+  assert.equal(telemetry.length, 1);
+  assert.equal(telemetry[0].access, "Handler authentication");
+});

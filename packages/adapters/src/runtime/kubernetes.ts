@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
-import { listNamespaceResources, kubernetesProjectNamespace, projectNamespaceManifest } from "../cluster/namespace";
+import {
+  listNamespaceResources,
+  kubernetesProjectNamespace,
+  projectNamespaceManifest,
+} from "../cluster/namespace";
 import { kubernetesIdLabel } from "../cluster/kubernetes-label";
+import { patchKubernetesObject } from "../cluster/kubernetes-mutation";
+import { clusterVolumeClaim, clusterVolumeMountName } from "../cluster/volumes";
+import { clusterDatabaseNamespace } from "../cluster/database";
 import {
   AppError,
   clusterWorkloadNeedsOperator,
@@ -174,7 +181,10 @@ export class KubernetesRuntime implements RuntimeAdapter {
     }
   }
   private async ensureNamespace() {
-    await this.create("/api/v1/namespaces", projectNamespaceManifest(this.options.projectId, this.options.runtimeId));
+    await this.create(
+      "/api/v1/namespaces",
+      projectNamespaceManifest(this.options.projectId, this.options.runtimeId),
+    );
     // Ingress is restricted to this project's pods and its OpenShip Edge host.
     // Existing Docker network links are rejected at preflight until translated.
     await this.create(`/apis/networking.k8s.io/v1/namespaces/${this.namespace}/networkpolicies`, {
@@ -266,7 +276,7 @@ export class KubernetesRuntime implements RuntimeAdapter {
       unsupported("Persistent mounts and process adoption");
     if (clusterWorkloadNeedsOperator(undefined, config.imageRef))
       throw new AppError(
-        "Database workloads need an engine operator and persistent storage before cluster deployment.",
+        "Add this database from the project's topology so OpenShip can prepare its data storage and replicas.",
         422,
         "CLUSTER_WORKLOAD_UNSUPPORTED",
       );
@@ -278,6 +288,44 @@ export class KubernetesRuntime implements RuntimeAdapter {
       await this.rememberArchitecture(config.imageRef, builder);
     }
     await this.ensureNamespace();
+    const mounts = structuredClone(this.options.config.mounts ?? []);
+    const volumeClaims: Record<string, string> = {};
+    for (const mount of mounts) {
+      const claim = await this.owned(
+        `${this.core}/persistentvolumeclaims/${clusterVolumeClaim(mount.name)}`,
+      );
+      if (
+        claim.metadata.labels?.["openship.io/volume"] !== mount.name ||
+        claim.metadata.deletionTimestamp ||
+        claim.status?.phase !== "Bound" ||
+        !claim.spec.accessModes?.includes("ReadWriteMany") ||
+        (claim.spec.storageClassName !== "openship-replicated" &&
+          !claim.spec.storageClassName?.startsWith("openship-restore-"))
+      )
+        throw new AppError(
+          `Shared volume ${mount.name} is unavailable. Restore it or remove its mount before deploying.`,
+          409,
+          "CLUSTER_VOLUME_UNAVAILABLE",
+        );
+      const pv = await this.options.api.request(
+        "GET",
+        `/api/v1/persistentvolumes/${claim.spec.volumeName}`,
+        undefined,
+        this.signal,
+      );
+      if (
+        pv.metadata.deletionTimestamp ||
+        pv.spec.claimRef?.uid !== claim.metadata.uid ||
+        pv.spec.claimRef?.namespace !== this.namespace ||
+        pv.spec.csi?.driver !== "driver.longhorn.io"
+      )
+        throw new AppError(
+          `Shared volume ${mount.name} no longer matches its allocated disk. Check storage before deploying.`,
+          409,
+          "CLUSTER_VOLUME_UNAVAILABLE",
+        );
+      volumeClaims[claim.metadata.name!] = claim.metadata.uid!;
+    }
     const name = releaseName(config.deploymentId);
     const labels = this.labels(config.deploymentId);
     const metadata = { name, namespace: this.namespace, labels };
@@ -294,6 +342,7 @@ export class KubernetesRuntime implements RuntimeAdapter {
       ...(!config.portless ? { PORT: String(config.port) } : {}),
       ...Object.fromEntries(projectEnv.entries),
     };
+    const databaseIdentities = await this.databaseIdentities(env);
     const secretData = Object.fromEntries(
       Object.entries(env).map(([key, value]) => [key, Buffer.from(value).toString("base64")]),
     );
@@ -323,12 +372,26 @@ export class KubernetesRuntime implements RuntimeAdapter {
       revisionHistoryLimit: 2,
       progressDeadlineSeconds: 300,
       minReadySeconds: 5,
-      selector: { matchLabels: { "openship.io/deployment": kubernetesIdLabel(config.deploymentId) } },
+      selector: {
+        matchLabels: { "openship.io/deployment": kubernetesIdLabel(config.deploymentId) },
+      },
       template: {
         metadata: { labels },
         spec: {
           automountServiceAccountToken: false,
           enableServiceLinks: false,
+          ...(mounts.length
+            ? {
+                securityContext: { fsGroup: 1000, fsGroupChangePolicy: "OnRootMismatch" },
+                volumes: mounts.map((m) => ({
+                  name: clusterVolumeMountName(m.name),
+                  persistentVolumeClaim: {
+                    claimName: clusterVolumeClaim(m.name),
+                    readOnly: m.readOnly ?? false,
+                  },
+                })),
+              }
+            : {}),
           nodeSelector: {
             "openship.io/runtime": this.options.runtimeId,
             "kubernetes.io/arch": this.artifacts.get(config.imageRef),
@@ -338,7 +401,9 @@ export class KubernetesRuntime implements RuntimeAdapter {
               maxSkew: 1,
               topologyKey: "kubernetes.io/hostname",
               whenUnsatisfiable: "ScheduleAnyway",
-              labelSelector: { matchLabels: { "openship.io/project": kubernetesIdLabel(this.options.projectId) } },
+              labelSelector: {
+                matchLabels: { "openship.io/project": kubernetesIdLabel(this.options.projectId) },
+              },
             },
           ],
           ...(pullData ? { imagePullSecrets: [{ name: `${name}-registry` }] } : {}),
@@ -349,6 +414,15 @@ export class KubernetesRuntime implements RuntimeAdapter {
               imagePullPolicy: "IfNotPresent",
               ...(config.startCommand?.trim() ? { args: ["sh", "-c", config.startCommand] } : {}),
               envFrom: [{ secretRef: { name: `${name}-env` } }],
+              ...(mounts.length
+                ? {
+                    volumeMounts: mounts.map((m) => ({
+                      name: clusterVolumeMountName(m.name),
+                      mountPath: m.mountPath,
+                      readOnly: m.readOnly ?? false,
+                    })),
+                  }
+                : {}),
               resources: { requests: limits, limits },
               securityContext: {
                 allowPrivilegeEscalation: false,
@@ -371,7 +445,7 @@ export class KubernetesRuntime implements RuntimeAdapter {
         },
       },
     };
-    const hash = digest(JSON.stringify({ spec, secretData, pullData }));
+    const hash = digest(JSON.stringify({ spec, secretData, pullData, databaseIdentities }));
     const deployment = await this.create(this.base, {
       apiVersion: "apps/v1",
       kind: "Deployment",
@@ -380,6 +454,8 @@ export class KubernetesRuntime implements RuntimeAdapter {
         annotations: {
           "openship.io/config": hash,
           "openship.io/replicas": String(this.options.config.replicas),
+          "openship.io/database-identities": JSON.stringify(databaseIdentities),
+          ...(mounts.length ? { "openship.io/volume-claims": JSON.stringify(volumeClaims) } : {}),
           ...(config.previousDeploymentId
             ? { "openship.io/previous": releaseName(config.previousDeploymentId) }
             : {}),
@@ -479,10 +555,13 @@ export class KubernetesRuntime implements RuntimeAdapter {
     }
     const spec = { selector: release.spec.selector, ports: release.spec.ports, type: "ClusterIP" };
     if (current)
-      await this.options.api.request(
-        "PATCH",
+      await patchKubernetesObject(
+        this.options.api,
         `${path}/app`,
-        { metadata: { resourceVersion: current.metadata.resourceVersion }, spec },
+        (value) => {
+          this.assertOwned(value);
+          return { spec };
+        },
         this.lifetime.signal,
       );
     else
@@ -614,12 +693,18 @@ export class KubernetesRuntime implements RuntimeAdapter {
   }
   private async replicas(ref: string, count?: number) {
     const path = `${this.base}/${this.refName(ref)}`;
-    const value = await this.owned(path);
-    const replicas = count ?? Number(value.metadata.annotations?.["openship.io/replicas"] ?? 1);
-    await this.options.api.request(
-      "PATCH",
+    await patchKubernetesObject(
+      this.options.api,
       path,
-      { metadata: { resourceVersion: value.metadata.resourceVersion }, spec: { replicas } },
+      async (value) => {
+        this.assertOwned(value);
+        const replicas = count ?? Number(value.metadata.annotations?.["openship.io/replicas"] ?? 1);
+        if (replicas > 0) {
+          await this.validateSavedVolumes(value);
+          await this.validateSavedDatabases(value);
+        }
+        return { spec: { replicas } };
+      },
       this.lifetime.signal,
     );
   }
@@ -633,21 +718,158 @@ export class KubernetesRuntime implements RuntimeAdapter {
   }
   async restart(ref: string) {
     const path = `${this.base}/${this.refName(ref)}`;
-    const value = await this.owned(path);
-    await this.options.api.request(
-      "PATCH",
+    const restartedAt = new Date().toISOString();
+    await patchKubernetesObject(
+      this.options.api,
       path,
-      {
-        metadata: { resourceVersion: value.metadata.resourceVersion },
-        spec: {
-          template: {
-            metadata: { annotations: { "openship.io/restarted-at": new Date().toISOString() } },
+      async (value) => {
+        this.assertOwned(value);
+        await this.validateSavedVolumes(value);
+        await this.validateSavedDatabases(value);
+        return {
+          spec: {
+            template: { metadata: { annotations: { "openship.io/restarted-at": restartedAt } } },
           },
-        },
+        };
       },
       this.lifetime.signal,
     );
     await this.waitReady(this.refName(ref));
+  }
+  private async validateSavedVolumes(release: KubernetesObject) {
+    const claims = JSON.parse(
+      release.metadata.annotations?.["openship.io/volume-claims"] ?? "{}",
+    ) as Record<string, string>;
+    for (const volume of release.spec.template.spec.volumes ?? []) {
+      if (!volume.persistentVolumeClaim) continue;
+      const name = volume.persistentVolumeClaim.claimName;
+      const claim = await this.owned(`${this.core}/persistentvolumeclaims/${name}`);
+      if (
+        claim.metadata.deletionTimestamp ||
+        claim.metadata.uid !== claims[name] ||
+        claim.status?.phase !== "Bound"
+      )
+        throw new AppError(
+          "This release's shared files were removed or replaced. Review the current volumes and deploy a new release before starting it.",
+          409,
+          "CLUSTER_VOLUME_UNAVAILABLE",
+        );
+    }
+  }
+  private async databaseIdentities(env: Record<string, string>) {
+    const names = new Set(
+      Object.values(env).flatMap((value) =>
+        [...value.matchAll(/(os-db-[a-f0-9]{24})\.svc\.cluster\.local/g)].map((match) => match[1]),
+      ),
+    );
+    const result: Record<
+      string,
+      { namespaceUid: string; secretUid: string; databaseUid: string; credentials: string }
+    > = {};
+    const unavailable = () =>
+      new AppError(
+        "A database connection is unavailable or its database was stopped. Restore the database or update this application's connection before deploying or starting it.",
+        409,
+        "CLUSTER_DATABASE_UNAVAILABLE",
+      );
+    for (const name of [...names].sort()) {
+      const base = `/api/v1/namespaces/${name}`;
+      const read = async (path: string) => {
+        try {
+          return await this.options.api.request("GET", path, undefined, this.signal);
+        } catch (error) {
+          if (isMissing(error)) return null;
+          throw error;
+        }
+      };
+      const namespace = await read(base);
+      const secret = await read(`${base}/secrets/credentials`);
+      if (!namespace || !secret) throw unavailable();
+      const databaseId = namespace.metadata.labels?.["openship.io/database"];
+      const owned = (object: KubernetesObject) =>
+        !!object.metadata.uid &&
+        !object.metadata.deletionTimestamp &&
+        object.metadata.labels?.["openship.io/project"] ===
+          kubernetesIdLabel(this.options.projectId) &&
+        object.metadata.labels?.["openship.io/runtime"] === this.options.runtimeId &&
+        object.metadata.labels?.["openship.io/database"] === databaseId;
+      if (
+        !databaseId ||
+        clusterDatabaseNamespace(databaseId) !== name ||
+        !owned(namespace) ||
+        !owned(secret) ||
+        !secret.data?.password
+      )
+        throw unavailable();
+      // A retained database keeps its namespace and credentials. Require the
+      // actual database too, so retained data cannot look like a running target.
+      let database: KubernetesObject | null = null;
+      for (const [group, collection] of [
+        ["postgresql.cnpg.io/v1", "clusters"],
+        ["redis.redis.opstreelabs.in/v1beta2", "redisclusters"],
+        ["redis.redis.opstreelabs.in/v1beta2", "redis"],
+      ]) {
+        database = await read(`/apis/${group}/namespaces/${name}/${collection}/database`);
+        if (database) break;
+      }
+      if (!database || !owned(database)) throw unavailable();
+      result[name] = {
+        namespaceUid: namespace.metadata.uid!,
+        secretUid: secret.metadata.uid!,
+        databaseUid: database.metadata.uid!,
+        credentials: digest(String(secret.data.password)),
+      };
+    }
+    return result;
+  }
+  private async validateSavedDatabases(release: KubernetesObject) {
+    const saved = release.metadata.annotations?.["openship.io/database-identities"];
+    const usesEnvironment = release.spec.template.spec.containers?.some((container: any) =>
+      container.envFrom?.some(
+        (source: any) => source.secretRef?.name === `${release.metadata.name}-env`,
+      ),
+    );
+    if (!usesEnvironment && (!saved || saved === "{}")) return;
+    let secret: KubernetesObject;
+    try {
+      secret = await this.owned(`${this.core}/secrets/${release.metadata.name}-env`);
+    } catch (error) {
+      if (isMissing(error))
+        throw new AppError(
+          "This release's saved connections are missing. Deploy a new release before starting it.",
+          409,
+          "CLUSTER_DATABASE_UNAVAILABLE",
+        );
+      throw error;
+    }
+    const env = Object.fromEntries(
+      Object.entries(secret.data ?? {}).map(([key, value]) => [
+        key,
+        Buffer.from(String(value), "base64").toString(),
+      ]),
+    );
+    const current = await this.databaseIdentities(env);
+    let previous: typeof current;
+    try {
+      previous = JSON.parse(saved ?? "{}");
+    } catch {
+      previous = {};
+    }
+    if (
+      !previous ||
+      typeof previous !== "object" ||
+      Object.keys(previous).length !== Object.keys(current).length ||
+      Object.entries(current).some(([name, identity]) =>
+        Object.entries(identity).some(
+          ([key, value]) => previous[name]?.[key as keyof typeof identity] !== value,
+        ),
+      )
+    )
+      throw new AppError(
+        "A database used by this release was removed, replaced or changed its credentials. Review its connections and deploy a new release before starting it.",
+        409,
+        "CLUSTER_DATABASE_UNAVAILABLE",
+      );
   }
   async destroy(ref: string) {
     const path = `${this.base}/${this.refName(ref)}`;

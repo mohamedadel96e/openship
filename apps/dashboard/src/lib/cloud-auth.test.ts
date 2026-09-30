@@ -55,4 +55,13 @@ describe("invitation post-auth return", () => {
     expect(validateReturnTo("https://evil.example/accept-invite/inv_1")).toBeNull();
     expect(validateReturnTo("//evil.example/accept-invite/inv_1")).toBeNull();
   });
+
+  it("keeps a billing link's organization through login without permitting arbitrary redirects", () => {
+    const returnTo = "/cloud-billing?organizationId=org_one&tab=topups";
+    expect(validateReturnTo(returnTo)).toBe(returnTo);
+    expect(getPostAuthRedirect(params(returnTo))).toBe(returnTo);
+    expect(new URL(buildAuthPageHref("/register", params(returnTo)), "https://dashboard.test").searchParams.get("returnTo")).toBe(returnTo);
+    for (const unsafe of ["//evil.test/cloud-billing", "/cloud-billing/../../settings", "/cloud-billing-extra", "/cloud-billing\\evil.test"])
+      expect(validateReturnTo(unsafe)).toBeNull();
+  });
 });

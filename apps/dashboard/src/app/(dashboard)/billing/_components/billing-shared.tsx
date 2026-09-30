@@ -6,7 +6,7 @@ import Link from "next/link";
 import { PLANS } from "@repo/core";
 import type { BillingState } from "@/lib/api/billing";
 import { needsCloudPlan } from "@/lib/billing-presentation";
-import { useI18n } from "@/components/i18n-provider";
+import { useI18n, interpolate } from "@/components/i18n-provider";
 import { CloudPlanOffer } from "@/components/billing/CloudPlanOffer";
 import { PlanResources } from "@/components/billing/PlanResources";
 import { BillingEmptyState } from "@/components/billing/BillingEmptyState";
@@ -24,7 +24,7 @@ export const BILLING_TABS: Array<{ key: BillingTab; label: string; href: string;
   { key: "invoices", label: "Invoices", href: "/billing/invoices", icon: "receipt" },
 ];
 
-/** A subscription offer before purchase; a single plan summary after purchase. */
+/** A subscription offer without a plan; otherwise summarize the current entitlement. */
 export function BillingSidebar({ state }: { state: BillingState }) {
   const { t, locale } = useI18n();
   if (needsCloudPlan(state)) return <CloudPlanOffer state={state} />;
@@ -33,6 +33,9 @@ export function BillingSidebar({ state }: { state: BillingState }) {
   const price = plan?.price[interval];
   const status = (t.billing.sidebar.statuses as Record<string, string>)[state.status] ?? state.status.replace(/_/g, " ");
   const healthy = state.status === "active" || state.status === "trialing";
+  const complimentary = state.complimentary;
+  const renewal = state.currentPeriod?.end;
+  const formatDate = (value: string) => new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(value));
 
   return <section className="rounded-2xl bg-card p-5 sm:p-6">
     <div className="mb-3 flex items-center justify-between gap-3">
@@ -40,7 +43,17 @@ export function BillingSidebar({ state }: { state: BillingState }) {
       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${healthy ? "bg-success-bg text-success" : "bg-warning-bg text-warning"}`}>{status}</span>
     </div>
     <h2 className="text-xl font-semibold tracking-tight text-foreground">{plan?.name ?? PLANS[state.tier].name}</h2>
-    {price != null && <div className="mb-5 mt-2">
+    {complimentary ? <div className="mb-5 mt-2">
+      <p className="text-sm font-medium text-primary">{t.billing.complimentary.label}</p>
+      <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+        <p>{complimentary.expiresAt
+          ? interpolate(t.billing.complimentary.expiresOn, { date: formatDate(complimentary.expiresAt) })
+          : t.billing.complimentary.untilRevoked}</p>
+        {renewal && (!complimentary.expiresAt || new Date(renewal) < new Date(complimentary.expiresAt)) && (
+          <p>{interpolate(t.billing.complimentary.creditsRenewOn, { date: formatDate(renewal) })}</p>
+        )}
+      </div>
+    </div> : price != null && <div className="mb-5 mt-2">
       <p className="text-3xl font-semibold tracking-tight tabular-nums text-foreground">
         {new Intl.NumberFormat(locale, { style: "currency", currency: "USD", minimumFractionDigits: price % 100 === 0 ? 0 : 2 }).format(price / 100)}
       </p>

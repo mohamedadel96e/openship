@@ -41,9 +41,11 @@ export const KIND_ICON: Record<IssueKind, IconName> = {
   workload_crash_loop: "rotate-left",
   workload_down: "power",
   server_unreachable: "server-off",
+  monitoring_offline: "plug",
   edge_down: "globe",
   edge_absent: "download",
   mail_down: "mail",
+  mail_certificate: "lock",
   update_available: "arrow-up-circle",
   component_behind: "arrow-up-circle",
 };

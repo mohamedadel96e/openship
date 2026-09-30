@@ -8,7 +8,9 @@ import { assertCloudTenantScope } from "../../lib/cloud/scope";
  */
 
 import type { ExecutionContext } from "../../../context";
-import type { GitHubOperations } from "@repo/contracts";
+import type { GitHubOperations, GitHubInstallationSelection } from "@repo/contracts";
+import { repos } from "@repo/db";
+import { resolveAuthBaseUrl } from "../../lib/public-url";
 import { AppError, NotFoundError, normalizeRepoPath } from "@repo/core";
 import { checkSourceTier } from "./github-access";
 import { env } from "@repo/platform/engine/config/env";
@@ -98,7 +100,7 @@ export async function getHome(ctx: ExecutionContext) {
   // local. Only the App/cloud library path resolves it (as before).
   let installUrl = "";
   let cloudUnreachable = false;
-  if (data.state.primary !== "gh-cli") {
+  if (data.state.primary !== "gh-cli" && data.state.primary !== "personal-token") {
     const r = await source.resolveInstallUrl();
     installUrl = r.url;
     cloudUnreachable = r.cloudUnreachable ?? false;
@@ -156,6 +158,89 @@ async function installationRedirect(ctx: ExecutionContext) {
   };
 }
 
+async function connectCloudApp(
+  ctx: ExecutionContext,
+  input: NonNullable<Parameters<GitHubOperations["connect"]>[0]>,
+) {
+  if (input.source === "cli")
+    throw new AppError(
+      "Use a GitHub App or personal token on Openship Cloud.",
+      400,
+      "NOT_SUPPORTED",
+    );
+  const status = await githubAuth.getUserStatus(ctx.userId, ctx);
+  if (status.connected && !input.source && !input.state) {
+    const current = await githubAuth.getUserInstallations(ctx, status);
+    if (current.length) return { connected: true as const };
+  }
+  let state: string;
+  if (input.state) {
+    const binding = await repos.githubInstallState.find(input.state);
+    if (
+      !binding ||
+      binding.flow !== "install" ||
+      binding.sourceId ||
+      binding.userId !== ctx.userId ||
+      binding.organizationId !== ctx.organizationId
+    ) {
+      throw new AppError(
+        "This GitHub connection attempt expired or belongs to another workspace. Start again.",
+        409,
+        "GITHUB_ATTEMPT_EXPIRED",
+      );
+    }
+    state = input.state;
+  } else {
+    const result = await githubAuth.resolveInstallUrl(ctx);
+    if (!result.state || !result.url)
+      throw new AppError(
+        "Could not start GitHub installation. Try again.",
+        503,
+        "GITHUB_APP_UNAVAILABLE",
+      );
+    state = result.state;
+  }
+  if (!status.connected)
+    return {
+      connected: false as const,
+      flow: "redirect" as const,
+      step: "install" as const,
+      completion: "attempt" as const,
+      url: `${resolveAuthBaseUrl()}/api/github/connect/redirect?install_state=${encodeURIComponent(state)}`,
+      state,
+    };
+  // Direct Cloud dashboards and external install links share discovery and
+  // workspace checks. Their browser adapters render the same verified choices.
+  const { getGithubInstallSelection } = await import("../cloud/cloud-github.service");
+  const selection = await getGithubInstallSelection(state);
+  if (selection.kind === "forbidden")
+    throw new AppError(selection.message, 403, "GITHUB_INSTALLATION_FAILED");
+  if (selection.kind === "failed")
+    throw new AppError(selection.error, 502, "GITHUB_INSTALLATION_FAILED");
+  if (selection.kind !== "ready")
+    throw new AppError(
+      "This GitHub connection attempt expired. Start again.",
+      409,
+      "GITHUB_ATTEMPT_EXPIRED",
+    );
+  if (selection.installations.length)
+    return {
+      connected: false,
+      flow: "installations",
+      state,
+      installUrl: selection.installUrl,
+      installations: selection.installations,
+    } satisfies GitHubInstallationSelection;
+  return {
+    connected: false as const,
+    flow: "redirect" as const,
+    step: "install" as const,
+    completion: "attempt" as const,
+    state,
+    url: selection.installUrl,
+  };
+}
+
 /** POST /github/connect - Normalized connection flow.
  *
  *  Returns a consistent shape regardless of auth mode:
@@ -178,6 +263,7 @@ async function installationRedirect(ctx: ExecutionContext) {
  *  The frontend is mode-agnostic - it just reacts to `flow`.
  */
 export async function connect(ctx: ExecutionContext, input: NonNullable<Parameters<GitHubOperations["connect"]>[0]>) {
+  if (env.CLOUD_MODE) return connectCloudApp(ctx, input);
   const userId = ctx.userId;
   // Per-user resolution — picks "cloud-app" when self-hosted + cloud-
   // connected, otherwise falls back to the static mode. Every branch
@@ -223,25 +309,12 @@ export async function connect(ctx: ExecutionContext, input: NonNullable<Paramete
   // credentials and never runs the OAuth round-trip itself. All GitHub
   // auth flows through api.openship.io.
   //
-  // Two-step flow:
-  //   1. If the SaaS doesn't yet have a `account` row with
-  //      providerId='github' for this user → return the SaaS OAuth
-  //      handoff URL. Popup opens it; SaaS bridges to GitHub OAuth;
-  //      Better Auth creates the account row on the SaaS DB.
-  //   2. Once status.connected is true on SaaS → return the SaaS-bound
-  //      install URL (also from cloud-client). The public Setup callback
-  //      validates its durable user/workspace nonce, the user's GitHub token,
-  //      and the Openship App JWT before atomically claiming the installation.
-  //
-  // The frontend keeps clicking Connect; the server's response (`step`)
-  // tells it which UI to show ("connecting GitHub" vs "installing App").
+  // The bridge authorizes repository access on Cloud independently of sign-in.
+  // The subsequent App setup callback claims its installation for this workspace.
   if (mode === "cloud-app") {
     const status = await githubAuth.getUserStatus(userId, ctx);
 
-    // Step 1: GitHub OAuth via SaaS. The Connect button does this FIRST.
-    // Returning the install URL before OAuth is broken — the webhook
-    // can't attribute the install to a SaaS user without the account
-    // row, and the install becomes orphaned on github.com.
+    // Authorize the initiating GitHub user before requesting App installation.
     if (!status.connected) {
       const oauth = await githubAuth.resolveOauthHandoffUrl(userId);
       if (oauth) {
@@ -414,8 +487,25 @@ export async function connect(ctx: ExecutionContext, input: NonNullable<Paramete
   };
 }
 
-/** POST /github/installations/claim — finalize a self-hosted App setup redirect. */
+/** POST /github/installations/claim — connect a verified App installation to this workspace. */
 export async function claimInstallation(ctx: ExecutionContext, input: NonNullable<Parameters<GitHubOperations["claimInstallation"]>[0]>) {
+  if (env.CLOUD_MODE) {
+    const binding = await repos.githubInstallState.find(input.state);
+    if (!binding || binding.userId !== ctx.userId || binding.organizationId !== ctx.organizationId || binding.flow !== "install" || binding.sourceId) {
+      throw new AppError("This GitHub connection attempt expired or belongs to another workspace. Start again.", 403, "GITHUB_ATTEMPT_EXPIRED");
+    }
+    const { attributeGithubInstall } = await import("../cloud/cloud-github.service");
+    const result = await attributeGithubInstall({
+      state: input.state, installationIdRaw: String(input.installationId), setupAction: input.setupAction,
+      clientIp: ctx.clientIp, userAgent: ctx.userAgent,
+    });
+    if (result.kind === "ok") return { ok: true as const, installation: {
+      id: result.installation.id, login: result.installation.account.login, type: result.installation.account.type,
+    } };
+    if (result.kind === "pending-approval") return { ok: true as const, pendingApproval: true };
+    throw new AppError(result.kind === "forbidden" ? result.message : result.kind === "failed" ? result.error : "This GitHub connection attempt expired. Start again.",
+      result.kind === "failed" ? 502 : 403, "GITHUB_INSTALLATION_FAILED");
+  }
   const body = input;
   const { claimLocalGitHubInstallation } = await import("@repo/platform/engine/modules/github/github.installation-claim");
   const result = await claimLocalGitHubInstallation(ctx, body);
@@ -445,10 +535,17 @@ export async function getLocalStatus(ctx: ExecutionContext) {
   };
 }
 
-/** GET /github/connect/poll - Poll the device flow status.
- *  Gated by `localOnly` middleware.
+/** GET /github/connect/poll — observe an exact installation attempt or a local device flow.
  */
-export async function pollConnect(ctx: ExecutionContext) {
+export async function pollConnect(ctx: ExecutionContext, input?: Parameters<GitHubOperations["pollConnect"]>[0]) {
+  if (input?.state) {
+    const result = await repos.githubInstallState.progress(input.state, ctx.userId, ctx.organizationId);
+    if (result.status === "expired") return { status: "error" as const, error: "This GitHub connection attempt expired. Start again." };
+    if (result.status === "pending-approval") return { status: "error" as const, error: "A GitHub organization owner must approve this App installation. Connect again after approval." };
+    if (result.status === "failed") return { status: "error" as const, error: result.error };
+    return { status: result.status };
+  }
+  if (env.CLOUD_MODE) throw new AppError("A GitHub connection attempt is required.", 400, "GITHUB_ATTEMPT_REQUIRED");
   const { getDeviceFlowStatus } = await import("@repo/platform/engine/modules/github/github.local-auth");
   const status = getDeviceFlowStatus(ctx.userId);
   if (!status) {

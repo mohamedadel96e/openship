@@ -1,5 +1,7 @@
 # Openship Cloud release gate
 
+Current retail capacity and funded allowances are documented in [the September 29 model](cloud-capacity-economics.md). That v3 contract supersedes the inherited VM caps and old top-up prices in the historical reports below. Require `reseller.aggregateResourceLimits: true` in the deployed API before new checkout.
+
 Paid Cloud subscriptions use Oblien Mode B. Oblien owns hosted checkout, payment collection,
 subscription renewals, credit grants, usage enforcement, and workspace lifecycle.
 Openship owns its prices, product copy, namespace allowances and application limits,
@@ -29,9 +31,9 @@ longer reproduces. A fresh namespace still has no paid subscription after merely
 opening checkout. A completed payment and signed public delivery remain to be
 verified; see [the checkout verification report](openship-cloud-production-verification.md).
 
-## Reseller offer contract, 2026-09-21
+## Reseller offer contract, updated 2026-09-29
 
-New purchases use Openship's $10 / $39 / $99 monthly catalog. Each checkout saves
+New purchases use Openship's $5 / $20 / $40 / $99 monthly catalog. Each checkout saves
 an immutable generic offer: price, namespace credits, zero-by-default configurable
 grace, VM caps and application plan metadata. The namespace receives the customer
 subscription. The reseller account receives wallet funding and retains its own
@@ -51,12 +53,12 @@ changes. The catalog and detailed configuration are documented in
 [`packages/core/src/pricing/README.md`](../packages/core/src/pricing/README.md).
 
 Deploy the matching Oblien API first: `/billing/catalog` must report
-`reseller: { contractVersion: 2, offerPolicy: true, resourceLimits: true, effectiveResourceLimits: true }`.
+`reseller: { contractVersion: 2, offerPolicy: true, resourceLimits: true, effectiveResourceLimits: true, aggregateResourceLimits: true }`.
 Dashboard docs alone cannot enable this contract. Then deploy the updated
 Openship API and dashboard together. Checkout and the readiness check reject an
 older provider; startup also logs the missing capability. Existing subscription
 management remains available during that update. The npm SDK remains pinned to the
-published 2.4.0 transport, so Openship does not depend on a pending SDK release.
+published 2.5.0 transport, so Openship does not depend on a pending SDK release.
 
 The user reports a successful test-mode payment with the earlier integration.
 That is not a live acceptance result for this new offer contract. Keep the
@@ -78,7 +80,7 @@ browser return URL.
 
 ## What is connected
 
-- `oblien@2.4.0` supplies the official billing module. Openship validates the
+- `oblien@2.5.0` supplies the official billing module. Openship validates the
   returned namespace, subscription shape, hosted URL, and agreement between the
   namespace subscription and its entitlement. Its JSON transport rejects
   credential redirects, bounds request time, checks both HTTP and body failures,
@@ -251,8 +253,7 @@ Checkout errors preserve a validated support reference and known provider code
 without exposing the provider's arbitrary error body. Top-up retries keep their
 original payment key. Webhooks verify HMAC and match a current signed body ID
 to `X-Webhook-Id`; older body-ID-less events retain their existing deduplication
-path. Oblien's outgoing webhooks are best effort without automatic retries, so
-the periodic entitlement sweep and fresh reads remain required.
+path. Oblien retries payment and namespace credit-alert webhooks durably. The periodic entitlement sweep and fresh reads remain required to reconcile current state.
 
 Paid customers retain their verified balance and subscription controls if the
 plan catalog is temporarily unavailable. Usage explanations are collapsed, and
@@ -732,3 +733,12 @@ Provider references: [index](https://oblien.com/llms.txt),
 [namespaces](https://oblien.com/docs/api/namespaces),
 [Pages](https://oblien.com/docs/api/pages),
 [scoped tokens](https://oblien.com/docs/api/scoped-tokens).
+
+## Credit warnings and recovery
+
+Cloud warnings follow Oblien's current namespace quota state and use the existing notification
+pipeline for durable email and in-app delivery. Deploy the additive `quota.alert` provider response
+and database migration `0153_durable_credit_alerts` before rolling out the API and dashboard.
+
+[Namespace credit alerts](namespace-credit-alerts.md) is the reference for delivery guarantees,
+provider requirements, organization isolation, and verification.

@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { docsDirectory, filesUnder, root, cliSurface } from "./docs-surface.mjs";
 import { updateApiReference } from "./generate-api-reference.mjs";
 import { renderCliReference } from "./generate-cli-reference.mjs";
+import { updateMcpReference } from "./generate-mcp-reference.mjs";
 import { checkDocExamples } from "./check-docs-examples.mjs";
 import { checkCliExamples } from "./check-docs-cli.mjs";
 
@@ -133,6 +134,8 @@ for (const metaFile of filesUnder(docsDirectory, "meta.json")) {
 
 if (failures.length) throw new Error([...new Set(failures)].join("\n"));
 console.log(`${pages.size} documentation pages compile; navigation and internal links resolve.`);
+const mcp = updateMcpReference();
+console.log(`${mcp.tools.length} MCP tools match runtime descriptions; every HTTP route is classified.`);
 const api = updateApiReference();
 console.log(
   `${api.methodCount} SDK methods and ${api.routeCount} HTTP routes have one shared reference.`,

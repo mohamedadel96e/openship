@@ -2,11 +2,11 @@
 
 The SDK exposes one authorized platform implementation through native and remote clients. Native calls invoke the shared engine inside an owned Node worker in the host process. HTTP controllers call those same operations. Neither SDK import nor native creation starts an HTTP listener.
 
-This private workspace implements the SDK. `packages/openship` assembles the public `openship` package and CLI. The SDK exports are implemented and tested in the local distribution; publishing the next npm release is separate. The [full plan](../../docs/ship-sdk-plan.md) tracks the remaining platform migration.
+This private workspace implements the SDK. `packages/openship` assembles the public `openship` package and CLI. Ship SDK is published in `openship` 0.8.0 and later; install it with `npm install openship`. The [full plan](../../docs/ship-sdk-plan.md) tracks the remaining platform migration.
 
-The website's [API → Node.js SDK guide](../../apps/web/content/docs/api/sdk/index.mdx) covers installation/release availability, native and remote setup, tenant scopes, deployment workflows, and a [shared SDK/REST reference](../../apps/web/content/docs/api/index.mdx) for the current public groups. The published `openship@0.7.2` is still CLI-only; use a locally built package until the SDK release is published.
+The website's [Ship SDK guide](../../apps/web/content/docs/api/sdk/index.mdx) covers installation, native and remote setup, tenant scopes, deployment and scaling workflows, and a [shared SDK/REST reference](../../apps/web/content/docs/api/index.mdx) for the current public groups. Upgrade older CLI-only dependencies with `npm install openship@latest`.
 
-The public package includes a runnable [native lifecycle example](../openship/examples/native-lifecycle.mjs). From a Node project with the SDK tarball installed, run `node node_modules/openship/examples/native-lifecycle.mjs`. It exercises real deployments, redeployment, tenant isolation, session revocation, persistence, and project teardown in an owned temporary installation. The [package verification](../openship/verify-package.ts) runs and typechecks this exact example outside the workspace on Node 22 and 24. It uses the bare runtime without public routing; live Cloud, Docker, and SSH behavior are separate checks.
+The public package includes a runnable [native lifecycle example](../openship/examples/native-lifecycle.mjs). From a Node project with `openship` installed, run `node node_modules/openship/examples/native-lifecycle.mjs`. It exercises real deployments, redeployment, tenant isolation, session revocation, persistence, and project teardown in an owned temporary installation. The [package verification](../openship/verify-package.ts) runs and typechecks this exact example outside the workspace on Node 22 and 24. It uses the bare runtime without public routing; live Cloud, Docker, and SSH behavior are separate checks.
 
 ## Owned native integration
 
@@ -104,9 +104,9 @@ Connect directly to the canonical cloud instance and its cloud organization ID. 
 
 | Group | Shared functionality |
 | --- | --- |
-| `projects`, `sources`, `deployments` | Lifecycle, environments/settings, source preparation, builds, runtime controls/logs, decisions/cancellation/rollback, events and deletion. |
+| `projects`, `sources`, `deployments` | Lifecycle, environments/settings, source preparation, builds, runtime controls/logs, application replicas, PostgreSQL/Redis databases, shared volumes, backup/recovery, decisions/cancellation/rollback, events and deletion. |
 | `services`, `domains`, `dns` | Service/configuration/storage/connections and domain/routing/DNS/TLS operations. |
-| `servers`, `system`, `credentials` | Server management/install/container streams, profiles, stored credentials and server Git; setup/self-app/edge/terminal coverage is still incomplete. |
+| `servers`, `system`, `credentials` | Server management/install/container streams, private networks, compute clusters, managed runtime/shared-storage setup, profiles, stored credentials and server Git; remaining setup/self-app/edge/terminal coverage is still incomplete. |
 | `apps` | Catalog discovery, installs, configuration and connections. |
 | `backupDestinations`, `backups`, `jobs` | Policies/runs/restores and streams, destination management, job lifecycle and execution. |
 | `analytics`, `issues`, `notifications` | Authorized metrics/issues, delivery channels/subscriptions/verification/history. |

@@ -7,16 +7,15 @@
  */
 
 import { Hono } from "hono";
+import { UpdateJobBody, CreateJobBody, JobResourceSchemas } from "@repo/contracts";
 import { secureRouter } from "../../lib/secure-router";
 import * as ctrl from "./job.controller";
-import { UpdateJobBody, CreateJobBody } from "@repo/contracts";
 
 const r = secureRouter(new Hono(), {
   module: "jobs",
   basePath: "/api/jobs",
   localOnly: true,
 });
-
 
 r.get("/", { tag: "job:read", mcp: { description: "List system + custom jobs with cron, next run, and recent run history." } }, ctrl.list);
 r.post(
@@ -29,8 +28,8 @@ r.post(
 r.get("/trigger-events", { tag: "job:read", mcp: { description: "List the events a job can be triggered on." } }, ctrl.triggerEvents);
 r.get("/backup-schedules", { tag: "job:read", mcp: { description: "List scheduled backup policies (read-only), surfaced alongside jobs." } }, ctrl.backupSchedules);
 r.get("/runs/:runId", { tag: "job:read", mcp: { description: "Get one job run incl. captured output." } }, ctrl.getRun);
-r.get("/runs/:runId/stream", { tag: "job:read", mcp: { description: "Stream a job run's live output (SSE)." } }, ctrl.streamRun);
-r.get("/:key/runs", { tag: "job:read", mcp: { description: "List a job's run history." } }, ctrl.listRuns);
+r.get("/runs/:runId/stream", { tag: "job:read", mcpExcluded: "Live SSE output can remain open. Poll GET /api/jobs/runs/:runId for captured output and completion over MCP." }, ctrl.streamRun);
+r.get("/:key/runs", { tag: "job:read", mcp: { description: "List a job's run history." }, query: JobResourceSchemas.listRuns.input }, ctrl.listRuns);
 r.get("/:key", { tag: "job:read", mcp: { description: "Get one job's config, schedule, and recent runs." } }, ctrl.get);
 r.patch(
   "/:key",

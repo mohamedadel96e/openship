@@ -21,6 +21,7 @@ import { NetworkDiagnosticText } from "./NetworkSetupProgress";
 import { NetworkSetupConfirmation } from "./NetworkSetupConfirmation";
 import { NetworkStreamNotice } from "./NetworkStreamNotice";
 import { ClusterRuntimePanel } from "./ClusterRuntimePanel";
+import { ClusterStoragePanel } from "./ClusterStoragePanel";
 
 export function ClusterDetail({ id }: { id: string }) {
   const { t } = useI18n();
@@ -37,6 +38,7 @@ export function ClusterDetail({ id }: { id: string }) {
     null,
   );
   const [busy, setBusy] = useState(false);
+  const [scalingReady, setScalingReady] = useState(false);
   useEffect(() => {
     let active = true;
     setCluster(null);
@@ -102,7 +104,10 @@ export function ClusterDetail({ id }: { id: string }) {
         </div>
       )}
       {!cluster && !error && (
-        <UiIcon name="spinner" className="mx-auto my-16 size-5 animate-spin text-muted-foreground" />
+        <UiIcon
+          name="spinner"
+          className="mx-auto my-16 size-5 animate-spin text-muted-foreground"
+        />
       )}
       {cluster && (
         <>
@@ -148,6 +153,13 @@ export function ClusterDetail({ id }: { id: string }) {
             key={cluster.id}
             cluster={cluster}
             canManage={!!capabilities?.canManage}
+            onReadyChange={setScalingReady}
+          />
+          <ClusterStoragePanel
+            key={`storage:${cluster.id}`}
+            cluster={cluster}
+            canManage={!!capabilities?.canManage}
+            scalingReady={scalingReady}
           />
           <div className="@container/cluster-detail">
             <div className="grid grid-cols-1 items-start gap-6 @4xl/cluster-detail:grid-cols-[minmax(0,1fr)_320px]">
@@ -177,7 +189,10 @@ export function ClusterDetail({ id }: { id: string }) {
                             <BlurIp>{member.privateIp}</BlurIp>
                           </span>
                         </span>
-                        <UiIcon name="arrow-up-right" className="size-4 shrink-0 text-muted-foreground rtl:-rotate-90" />
+                        <UiIcon
+                          name="arrow-up-right"
+                          className="size-4 shrink-0 text-muted-foreground rtl:-rotate-90"
+                        />
                       </Link>
                     ))}
                 </div>

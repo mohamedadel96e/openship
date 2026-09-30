@@ -2,7 +2,7 @@
 
 import { Icon as UiIcon, type IconName } from "@repo/ui/icons";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { useToast } from "@/context/ToastContext";
 import { projectsApi } from "@/lib/api";
@@ -32,7 +32,10 @@ export function ReleaseImageSourceSettings({
   onCancel?: () => void;
   onSwitchToGit?: () => void;
 }) {
-  const { id, projectData, environments, updateProjectData } = useProjectSettings();
+  const {
+    id, projectData, environments, updateProjectData,
+    updateStatus, updateStatusLoading, refreshUpdateStatus,
+  } = useProjectSettings();
   const { showToast } = useToast();
   const { t } = useI18n();
   const copy = t.projectSettings.releaseImageSource;
@@ -42,42 +45,11 @@ export function ReleaseImageSourceSettings({
   const [draft, setDraft] = useState<ReleaseImageSourceDraft>(sourceDraft);
   const [saving, setSaving] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
-  const [releaseStatus, setReleaseStatus] = useState<{
-    currentVersion?: string | null;
-    latestVersion?: string | null;
-    behind?: boolean;
-  } | null>(null);
-  const [statusLoading, setStatusLoading] = useState(true);
-  const statusRequest = useRef(0);
-
-  const loadReleaseStatus = useCallback(async () => {
-    if (!configured) {
-      setReleaseStatus(null);
-      setStatusLoading(false);
-      return;
-    }
-    const request = ++statusRequest.current;
-    setStatusLoading(true);
-    try {
-      const result = await projectsApi.getCommitStatus(id);
-      if (request !== statusRequest.current) return;
-      setReleaseStatus(result.data?.mode === "release" ? result.data : null);
-    } catch {
-      if (request !== statusRequest.current) return;
-      // Source editing remains available if the upstream version endpoint is
-      // temporarily unavailable. The status rows say so without a noisy toast.
-      setReleaseStatus(null);
-    } finally {
-      if (request === statusRequest.current) setStatusLoading(false);
-    }
-  }, [configured, id]);
+  const releaseStatus = updateStatus?.supported && updateStatus.mode === "release" ? updateStatus : null;
 
   useEffect(() => {
-    void loadReleaseStatus();
-    return () => {
-      statusRequest.current += 1;
-    };
-  }, [loadReleaseStatus]);
+    if (configured) void refreshUpdateStatus();
+  }, [configured, refreshUpdateStatus]);
 
   useEffect(() => {
     setDraft(sourceDraft);
@@ -116,7 +88,6 @@ export function ReleaseImageSourceSettings({
       });
       setDraft(releaseImageDraftFromSource(saved));
       invalidateProjectCachesFor([id, ...environments.map((environment) => environment.id)]);
-      void loadReleaseStatus();
       showToast(copy.toast.saved, "success");
     } catch (error) {
       showToast(getApiErrorMessage(error, copy.toast.saveFailed), "error");
@@ -129,7 +100,7 @@ export function ReleaseImageSourceSettings({
     currentVersion: releaseStatus?.currentVersion,
     latestVersion: releaseStatus?.latestVersion,
     pinnedVersion: source?.pinnedVersion,
-    loading: statusLoading,
+    loading: updateStatusLoading,
     labels: copy.status,
   });
   const pinnedVersionField = (

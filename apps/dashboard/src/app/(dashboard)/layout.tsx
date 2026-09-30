@@ -3,6 +3,7 @@ import { getSession, getDeploymentInfoOrNull } from "@/lib/server/session";
 import { resolveRequestProductView } from "@/lib/server/product-view";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { DashboardShell } from "@/components/dashboard-shell";
+import { CloudCreditAlert } from "@/components/billing/CloudCreditAlert";
 import { UpdateCenter } from "@/components/updates/UpdateCenter";
 import { MigratedLauncher } from "@/components/migrated-launcher";
 import { MigrationInProgress } from "@/components/migration-in-progress";
@@ -168,6 +169,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
             partial outage, maintenance) / available update / what's-new, so it
             adds no chrome when idle. */}
         <UpdateCenter />
+        <CloudCreditAlert />
         <DashboardShell>{children}</DashboardShell>
       </div>
     </DashboardProviders>

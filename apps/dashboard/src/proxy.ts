@@ -30,6 +30,9 @@ const PUBLIC_ROUTES = [
   // MCP client's flow never completed.
   "/mcp/authorize",
   "/accept-invite",
+  // This route validates the session itself and preserves the organization
+  // through login; the generic redirect below would discard the billing link.
+  "/cloud-billing",
 ];
 
 const SESSION_COOKIE_SUFFIX = ".session_token";

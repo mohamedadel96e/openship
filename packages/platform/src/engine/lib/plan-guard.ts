@@ -24,17 +24,28 @@ import {
   AppError,
   FREE_DOMAIN_SUFFIX,
   planLimits,
+  resolvePlan,
   PRICING,
   RESOURCE_TIER_ORDER,
   RESOURCE_TIER_SPECS,
+  formatCpuCores,
+  formatMemoryMb,
   type PlanTierId,
   type PlanLimits,
+  type OblienLimits,
   type WorkloadType,
 } from "@repo/core";
 import { repos } from "@repo/db";
 import { env } from "../config/env";
 import { isCloudManagedHostname } from "./public-endpoints";
-import { resolveBuildResources, resolveCloudServiceResources, resolveRuntimeResources } from "./resources";
+import {
+  cloudDockerNeedsBuild,
+  cloudDockerResources,
+  resolveBuildResources,
+  resolveCloudServiceResources,
+  resolveRuntimeResources,
+  type CloudServiceResourceInput,
+} from "./resources";
 import type { ResourceConfig, RuntimeAdapter } from "@repo/adapters";
 
 /**
@@ -52,6 +63,7 @@ export class PlanUpgradeRequiredError extends AppError {
       | "build-minutes-exhausted"
       | "free-subdomain-limit"
       | "resource-tier"
+      | "workspace-capacity"
       | "running-services"
       | "project-limit",
     /** The tier that refused, for telemetry and copy. */
@@ -83,7 +95,7 @@ export class FreeSubdomainLimitError extends PlanUpgradeRequiredError {
 }
 
 /** The org's current tier. Unknown/missing → the catalog's most restrictive. */
-async function planFor(organizationId: string): Promise<{ tier: PlanTierId; limits: PlanLimits }> {
+async function planFor(organizationId: string): Promise<{ tier: PlanTierId; limits: PlanLimits; resourceLimits: OblienLimits }> {
   const org = await repos.organization.findById(organizationId);
   if (env.CLOUD_MODE && org?.oblienNamespace) {
     const { syncOblienEntitlement } = await import("../modules/billing/billing-oblien-quota");
@@ -92,7 +104,7 @@ async function planFor(organizationId: string): Promise<{ tier: PlanTierId; limi
     return await syncOblienEntitlement(organizationId, { syncResourceLimits: false });
   }
   const tier = (org?.planTierId ?? "free") as PlanTierId;
-  return { tier, limits: planLimits(tier) };
+  return { tier, limits: planLimits(tier), resourceLimits: resolvePlan(tier).oblienLimits };
 }
 
 /** The org's tier, for callers that need to name it in their own error. */
@@ -198,12 +210,9 @@ export async function assertPlanAllowsServices(organizationId: string): Promise<
 /**
  * Refuse a machine size larger than the tier allows.
  *
- * This gate exists because OBLIEN CANNOT DO IT. Its `max_vcpus`/`max_ram_mb` are
- * per-workspace ceilings applied namespace-wide, and a transient BUILD workspace
- * is a workspace — so the ceiling has to be large enough for a 4 vCPU / 8 GB
- * build, which makes it useless as a cap on a 0.5 vCPU service. Oblien is the
- * coarse backstop; this is the real per-service cap, enforced where the size is
- * actually chosen.
+ * Oblien enforces the VM and namespace allocation; several Docker services
+ * can share one VM. Openship also enforces the selected per-service tier inside
+ * that host, so a container cannot silently exceed its service configuration.
  *
  * Sizes are compared through `RESOURCE_TIER_ORDER` — the deploy wizard's own
  * ordering — so "larger than your plan" means the same thing here and in the
@@ -260,7 +269,9 @@ type CloudDeploymentLimits = {
   runsApplication?: boolean;
   /** A native main app may also have separately managed auxiliary services. */
   nativeApplication?: boolean;
-  services?: Array<{ name?: string; enabled?: boolean; advanced?: { resources?: ResourceConfig | Record<string, unknown> | null } | null }>;
+  /** Docker service stacks share one VM; its aggregate allocation also has to fit. */
+  dockerWorkspace?: boolean;
+  services?: CloudServiceResourceInput[];
 };
 
 type CloudServiceAllowance = Pick<CloudDeploymentLimits, "projectId" | "runsApplication" | "nativeApplication" | "services">;
@@ -288,11 +299,17 @@ async function assertServiceAllowance(
       const counted = prospective
         ? await repos.service.countRunningForOrg(organizationId, [], nativeProject, prospective)
         : await repos.service.countRunningForOrg(organizationId, [], nativeProject);
-      const used = nativeApplication ? counted + 1 : Math.max(counted, services?.length ?? 1);
-      if (used > limit) throw new PlanUpgradeRequiredError(
-        `Your plan includes ${limit} services. Stop and disable a service, remove it, or upgrade before deploying.`,
-        "running-services", tier,
-      );
+      const used = nativeApplication
+        ? counted + 1
+        : !input.projectId
+          ? counted + (services?.length ?? 1)
+          : Math.max(counted, services?.length ?? 1);
+      if (used > limit)
+        throw new PlanUpgradeRequiredError(
+          `Your plan includes ${limit} services. Stop and disable a service, remove it, or upgrade before deploying.`,
+          "running-services",
+          tier,
+        );
     }
   }
 }
@@ -309,7 +326,7 @@ export async function assertCloudServiceAllowance(organizationId: string, input:
  * must obey the same limits as the dashboard's resource picker. */
 export async function assertCloudDeploymentLimits(organizationId: string, input: CloudDeploymentLimits): Promise<void> {
   if (!env.CLOUD_MODE) return;
-  const { tier, limits } = await planFor(organizationId);
+  const { tier, limits, resourceLimits: policy } = await planFor(organizationId);
   await assertServiceAllowance(organizationId, tier, input, limits);
   const services = input.services?.filter(service => service.enabled !== false);
   for (const service of services ?? []) {
@@ -326,10 +343,44 @@ export async function assertCloudDeploymentLimits(organizationId: string, input:
       limits,
     );
   }
+  if (input.dockerWorkspace && services?.length) {
+    const allocation = cloudDockerResources({
+      resources: input.resources,
+      buildResources: input.buildResources,
+      reserveBuild: cloudDockerNeedsBuild(services),
+      services: services.map((service) => ({ resources: service.advanced?.resources })),
+    });
+    const shortages = [
+      policy.max_vcpus != null && allocation.cpuCores > policy.max_vcpus
+        ? `${formatCpuCores(allocation.cpuCores)} (plan: ${policy.max_vcpus} vCPU)`
+        : null,
+      policy.max_ram_mb != null && allocation.memoryMb > policy.max_ram_mb
+        ? `${formatMemoryMb(allocation.memoryMb)} RAM (plan: ${policy.max_ram_mb === 0 ? "0 MB" : formatMemoryMb(policy.max_ram_mb)})`
+        : null,
+      policy.max_disk_gb != null && allocation.diskMb > policy.max_disk_gb * 1024
+        ? `${formatMemoryMb(allocation.diskMb)} disk (plan: ${policy.max_disk_gb} GB)`
+        : null,
+    ].filter(Boolean);
+    if (shortages.length)
+      throw new PlanUpgradeRequiredError(
+        `This app's Cloud workspace needs ${shortages.join(", ")}. Upgrade your plan or adjust the service resources before deploying.`,
+        "workspace-capacity",
+        tier,
+      );
+  }
+  if (
+    services?.length &&
+    !input.nativeApplication &&
+    services.every(service => Boolean(service.image || service.advanced?.imageTemplate) &&
+      !service.build && !service.advanced?.build)
+  )
+    return;
   const build = resolveBuildResources(input.buildResources, { isCloud: true });
-  const maximum = PRICING.oblien.buildResources;
+  const maximum = { cpuCores: policy.max_vcpus ?? PRICING.oblien.buildResources.cpuCores,
+    memoryMb: policy.max_ram_mb ?? PRICING.oblien.buildResources.memoryMb,
+    diskGb: policy.max_disk_gb ?? PRICING.oblien.buildResources.diskGb };
   if (limits.maxResourceTier !== null && (!Number.isFinite(build.cpuCores) || !Number.isFinite(build.memoryMb) ||
-      build.cpuCores > maximum.cpuCores || build.memoryMb > maximum.memoryMb || build.diskMb > Math.max(32768, maximum.diskGb * 1024))) {
+      build.cpuCores > maximum.cpuCores || build.memoryMb > maximum.memoryMb || build.diskMb > maximum.diskGb * 1024)) {
     throw new PlanUpgradeRequiredError(
       `Builds on this plan support up to ${maximum.cpuCores} vCPU and ${maximum.memoryMb / 1024} GB RAM. Reduce the build allocation.`,
       "resource-tier", tier,
@@ -383,9 +434,9 @@ export async function planProjectLimit(organizationId: string): Promise<number |
  * Refuse a new running service past the tier's allowance.
  *
  * Compose services share one VM, so workspace count cannot enforce this limit.
- * Count enabled definitions, disabled definitions with a live container, and
- * single-app deployments (including queued reservations). Creation/enabling
- * holds the organization quota lock through the database write.
+ * Count enabled definitions in activated projects, disabled definitions with a
+ * live container, and single-app deployments (including queued reservations).
+ * Callers hold the organization quota lock through the reservation write.
  */
 export async function assertRunningServiceQuota(
   organizationId: string,
@@ -404,10 +455,27 @@ export async function assertRunningServiceQuota(
   throw new PlanUpgradeRequiredError(
     limit === 0
       ? "Choose a Cloud plan to run apps, databases and workers."
-      : `Your plan includes ${limit} running services and you're using ${used}. Upgrade to run more, or remove a service first.`,
+      : `Your plan includes ${limit} service slots and ${used} are reserved. Stop and disable a service, remove it, or upgrade to run more.`,
     "running-services",
     tier,
   );
+}
+
+/** Draft edits do not start services or reserve slots. Re-read the project
+ * inside the caller's organization quota lock so creation/enabling cannot use
+ * stale lifecycle state after waiting for another mutation. Deployment admission
+ * reserves a draft's frozen service names before any provisioning starts. */
+export async function assertServiceDefinitionQuota(
+  organizationId: string,
+  projectId: string,
+  addingCount = 1,
+  replacingServiceIds: readonly string[] = [],
+): Promise<void> {
+  if (!env.CLOUD_MODE || addingCount === 0) return;
+  const project = await repos.project.findByIdInOrganization(projectId, organizationId);
+  if (!project) throw new AppError("Project not found", 404, "PROJECT_NOT_FOUND");
+  if (!project.activeDeploymentId) return;
+  await assertRunningServiceQuota(organizationId, addingCount, replacingServiceIds);
 }
 
 /* ─── Build minutes ──────────────────────────────────────────────────────── */

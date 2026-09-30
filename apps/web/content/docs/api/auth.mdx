@@ -118,6 +118,7 @@ the default API limit fires.
 | Operation | REST API |
 | --- | --- |
 | Handle browser sessions and authentication through Better Auth. | `GET /api/auth/*`<br />`Handler authentication` |
+| Complete a browser-bound Cloud repository authorization; ordinary GitHub sign-in callbacks remain handled by Better Auth. | `GET /api/auth/callback/github`<br />`Handler authentication` |
 | Handle sign-in, account, and session mutations through Better Auth. | `POST /api/auth/*`<br />`Handler authentication` |
 | Exchange a cloud auth `code` for a local session cookie. | `GET /api/auth/cloud-callback`<br />`Handler authentication` |
 | Electron polls this by `nonce` until the cloud sign-in resolves. | `GET /api/auth/desktop-auth-poll`<br />`Handler authentication` |

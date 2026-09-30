@@ -72,24 +72,31 @@ the icon picker also uses it for previews of user-selected artwork URLs.
 
 ## Local assets and CDN configuration
 
-The default asset base is `/icons`. Self-hosted and desktop installations serve
-the bundled files without contacting an icon CDN.
+Openship Cloud loads icons from `https://cdn.oblien.com/static/png-icons` first.
+The root layout selects this host before rendering, including authentication
+screens. Self-hosted and desktop installations default to the bundled `/icons`
+files, including desktop instances connected to Cloud.
 
-To use a CDN, mirror `apps/dashboard/public/icons` under the desired prefix and
-set this in the dashboard environment before starting it:
+To use a custom asset host on a self-hosted installation, mirror
+`apps/dashboard/public/icons` under the desired prefix and set this in the
+dashboard environment before starting it:
 
 ```env
 OPENSHIP_ICON_BASE_URL=https://cdn.oblien.com/static/png-icons
 ```
 
-The dashboard root layout passes this server runtime setting to `IconProvider`.
-It is not a `NEXT_PUBLIC_` build-time setting. Local and CDN copies use exactly
+The dashboard root layout passes the resolved host to `IconProvider`. Cloud
+does not require this environment setting and does not use it to override its
+CDN. It is not a `NEXT_PUBLIC_` build-time setting. Local and CDN copies use exactly
 the same filenames. Keep spaces and literal percent characters in stored names;
 the URL resolver encodes each filename once.
 
-If a CDN or custom-theme asset fails to load, the icon falls back to its bundled
-default. A failed fallback does not start a retry loop. Changing the source URL
-allows the new source to load.
+If a CDN or custom-theme asset fails to load, the dashboard falls back to the
+bundled default catalog artwork under `/icons`. This keeps controls visible if
+the CDN is unavailable or a newly added asset has not been mirrored yet.
+A failed fallback does not start a retry loop. Changing the source URL allows
+the new source to load. Mirror every catalog asset to the Cloud CDN, including
+the generated PNGs and application marks, so normal requests stay on the CDN.
 
 ## Alternate artwork themes
 
@@ -113,9 +120,9 @@ const theme: IconTheme = {
 ```
 
 Unspecified entries use the default catalog. A nested provider inherits its
-parent's base URL or theme when that setting is omitted. Supply the replacement
-files at the configured asset base. No theme selection screen is required to use
-this API.
+parent's base URL, fallback base URL, or theme when that setting is omitted. Supply
+the replacement files at the configured asset base. No theme selection screen is
+required to use this API.
 
 For replacement assets, measure the nontransparent pixel bounds and scale each
 coordinate from the source canvas to 24 units. Supply those as `bounds` to keep

@@ -73,7 +73,7 @@ export async function waitForDeployment(operations: DeploymentOperations, id: st
         if (!response.success) throw new AppError("Deployment prompt expired or was already answered", 409, "PROMPT_UNAVAILABLE");
         answered.add(key);
       }
-    } else if (terminal.has(state) && !status.cancellationPending) return outcome;
+    } else if (terminal.has(state) && !status.completionPending && !status.cancellationPending) return outcome;
     await pause(pollIntervalMs, signal);
   }
 }

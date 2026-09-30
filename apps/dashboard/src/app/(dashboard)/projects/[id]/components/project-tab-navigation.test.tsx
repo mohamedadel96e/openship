@@ -1,18 +1,21 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { baseDictionary } from "@/i18n";
 import { ProjectSettingsProvider, useProjectSettings } from "@/context/ProjectSettingsContext";
 import { ProjectMobileTabs, ProjectSidebar } from "./ProjectSidebar";
 import { ProjectTabSections } from "./ProjectTabSections";
+import { ReleaseImageSourceSettings } from "./ReleaseImageSourceSettings";
+import type { ProjectUpdateStatus } from "@/lib/api/projects";
 
-const platform = vi.hoisted(() => ({ selfHosted: true }));
+const platform = vi.hoisted(() => ({ selfHosted: true, commitStatus: vi.fn() }));
 
 vi.mock("@/lib/api", () => ({
-  projectsApi: {},
+  projectsApi: { getCommitStatus: platform.commitStatus },
   servicesApi: { list: async () => ({ services: [] }) },
 }));
+vi.mock("@/context/ToastContext", () => ({ useToast: () => ({ showToast: vi.fn() }) }));
 vi.mock("@/hooks/useProjectEndpoints", () => ({
   useProjectInfo: () => ({ isLoading: false }),
   PROJECT_INFO_NOT_FOUND: "missing",
@@ -32,11 +35,15 @@ vi.mock("@/components/i18n-provider", () => ({
 
 let root: Root;
 let host: HTMLDivElement;
+let settings: ReturnType<typeof useProjectSettings>;
+let showReleaseSource = false;
 
 function Navigation() {
-  const { activeTab } = useProjectSettings();
+  settings = useProjectSettings();
+  const { activeTab } = settings;
   return (
     <>
+      {showReleaseSource && <ReleaseImageSourceSettings />}
       <div data-layout="desktop">
         <ProjectSidebar />
       </div>
@@ -49,11 +56,15 @@ function Navigation() {
   );
 }
 
-async function render(slug: string, deployTarget: "cloud" | "server" | "local" = "server") {
+async function render(
+  slug: string,
+  deployTarget: "cloud" | "server" | "local" = "server",
+  project: Partial<NonNullable<ComponentProps<typeof ProjectSettingsProvider>["initialProjectData"]>> = {},
+) {
   await act(async () =>
     root.render(
       <ProjectSettingsProvider
-        id="project"
+        id={project.id ?? "project"}
         slug={[slug]}
         initialProjectData={{
           id: "project",
@@ -63,6 +74,7 @@ async function render(slug: string, deployTarget: "cloud" | "server" | "local" =
           framework: "nextjs",
           deployTarget,
           activeDeploymentId: "live",
+          ...project,
         }}
       >
         <Navigation />
@@ -77,19 +89,25 @@ function sectionLink(section: string) {
   return link!;
 }
 
-function expectSelected(group: string, section: string) {
+function expectSelected(group: string, section: string, hasSections = true) {
   for (const layout of ["desktop", "mobile"]) {
     const selected = host.querySelectorAll(`[data-layout="${layout}"] a[aria-current="page"]`);
     expect(selected).toHaveLength(1);
     expect(selected[0]?.textContent).toBe(group);
   }
   expect(host.querySelector("output")?.textContent).toBe(section);
-  expect(sectionLink(section).getAttribute("aria-current")).toBe("page");
+  if (hasSections) {
+    expect(sectionLink(section).getAttribute("aria-current")).toBe("page");
+  } else {
+    expect(host.querySelector("nav")).toBeNull();
+  }
 }
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   platform.selfHosted = true;
+  showReleaseSource = false;
+  platform.commitStatus.mockReset().mockResolvedValue({ data: { supported: false } });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -167,28 +185,145 @@ describe("merged project navigation", () => {
     },
   );
 
-  it("keeps Advanced links selected under Settings and Configuration one click away", async () => {
+  it("opens Settings directly without separate Configuration and Advanced tabs", async () => {
     await render("advanced");
-    expectSelected("Settings", "advanced");
-    await act(async () => sectionLink("runtime").click());
-    expectSelected("Settings", "runtime");
-    expect(sectionLink("runtime").textContent).toBe("Configuration");
-    expect(window.location.pathname).toBe("/projects/project/runtime");
-    await act(async () => sectionLink("advanced").click());
-    expectSelected("Settings", "advanced");
-    expect(window.location.pathname).toBe("/projects/project/advanced");
+    expectSelected("Settings", "advanced", false);
+    expect(host.querySelector('a[href="/projects/project/runtime"]')).toBeNull();
+    for (const layout of ["desktop", "mobile"]) {
+      await render("overview");
+      const settings = host.querySelector<HTMLAnchorElement>(
+        `[data-layout="${layout}"] a[href="/projects/project/advanced"]`,
+      );
+      expect(settings?.textContent).toBe("Settings");
+      await act(async () => settings!.click());
+      expectSelected("Settings", "advanced", false);
+      expect(window.location.pathname).toBe("/projects/project/advanced");
+    }
   });
 
   it("follows route changes and preserves older Git, Settings and Build aliases", async () => {
     await render("git");
     expectSelected("Source & Triggers", "source");
     await render("advanced");
-    expectSelected("Settings", "advanced");
-    for (const alias of ["settings", "build"]) {
+    expectSelected("Settings", "advanced", false);
+    for (const alias of ["settings", "build", "runtime"]) {
       await render(alias);
-      expectSelected("Settings", "runtime");
+      expectSelected("Settings", "advanced", false);
     }
     await render("webhooks");
     expectSelected("Source & Triggers", "webhooks");
+  });
+});
+
+describe("project update indicator", () => {
+  const commit: ProjectUpdateStatus = {
+    supported: true, mode: "commit", behind: true, latestInProgress: false,
+    branch: "main", latestSha: "latest", latestMessage: null, deployedSha: "previous",
+  };
+  const indicatorLabel = baseDictionary.projectSettings.appSource.updateAvailable;
+  const indicators = () => host.querySelectorAll(`[role="img"][aria-label="${indicatorLabel}"]`);
+
+  it.each(["commit", "release", "image"] as const)(
+    "shares a confirmed %s update across desktop and mobile Deployments links",
+    async (mode) => {
+      platform.commitStatus.mockResolvedValue({ data: { supported: true, behind: true, mode } });
+      await render("overview");
+      expect(platform.commitStatus).toHaveBeenCalledExactlyOnceWith("project");
+      expect(indicators()).toHaveLength(2);
+      for (const layout of ["desktop", "mobile"]) {
+        const link = host.querySelector<HTMLAnchorElement>(
+          `[data-layout="${layout}"] a[href="/projects/project/deployments"]`,
+        )!;
+        expect(link.querySelector(`[aria-label="${indicatorLabel}"]`)?.getAttribute("title")).toBe(indicatorLabel);
+        await act(async () => link.click());
+        expectSelected("Deployments", "deployments", false);
+        expect(window.location.pathname).toBe("/projects/project/deployments");
+      }
+      expect(platform.commitStatus).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    { supported: false, behind: true },
+    { supported: true, behind: false },
+    { supported: true, behind: true, latestInProgress: true },
+  ])("does not flag unsupported, current, or already deploying updates: %j", async (data) => {
+    platform.commitStatus.mockResolvedValue({ data });
+    await render("overview");
+    expect(indicators()).toHaveLength(0);
+  });
+
+  it("skips the CLI-managed control plane", async () => {
+    await render("overview", "server", { appTemplateId: "openship" });
+    expect(platform.commitStatus).not.toHaveBeenCalled();
+    expect(indicators()).toHaveLength(0);
+  });
+
+  it.each([
+    { activeDeploymentId: "updated" },
+    { latestDeploymentId: "building", latestDeploymentStatus: "building" },
+    { gitBranch: "production" },
+    { releaseSource: { mode: "github" as const, repo: "example/app" } },
+  ])("clears the previous result while checking changed deployment/source state: %j", async (change) => {
+    platform.commitStatus.mockResolvedValueOnce({ data: commit });
+    await render("overview");
+    expect(indicators()).toHaveLength(2);
+
+    let resolve!: (value: { data: ProjectUpdateStatus }) => void;
+    platform.commitStatus.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    await act(async () => settings.setProjectData((project) => ({ ...project, ...change })));
+    expect(indicators()).toHaveLength(0);
+    expect(platform.commitStatus).toHaveBeenCalledTimes(2);
+    await act(async () => resolve({ data: { ...commit, behind: false } }));
+    expect(indicators()).toHaveLength(0);
+  });
+
+  it("ignores a previous project's late response", async () => {
+    let resolve!: (value: { data: ProjectUpdateStatus }) => void;
+    platform.commitStatus.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    await render("overview");
+    await render("overview", "server", { id: "other" });
+    expect(platform.commitStatus).toHaveBeenLastCalledWith("other");
+    await act(async () => resolve({ data: commit }));
+    expect(indicators()).toHaveLength(0);
+  });
+
+  it("deduplicates simultaneous refreshes and checks again on a later visit", async () => {
+    let resolve!: (value: { data: ProjectUpdateStatus }) => void;
+    platform.commitStatus.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    await render("overview");
+    const first = settings.refreshUpdateStatus();
+    const second = settings.refreshUpdateStatus();
+    expect(first).toBe(second);
+    expect(platform.commitStatus).toHaveBeenCalledOnce();
+    await act(async () => {
+      resolve({ data: commit });
+      await first;
+    });
+    expect(indicators()).toHaveLength(2);
+    await act(async () => settings.refreshUpdateStatus());
+    expect(platform.commitStatus).toHaveBeenCalledTimes(2);
+    expect(indicators()).toHaveLength(0);
+  });
+
+  it("keeps failed checks silent without showing an update", async () => {
+    platform.commitStatus.mockRejectedValue(new Error("Network unavailable"));
+    await render("overview");
+    expect(indicators()).toHaveLength(0);
+    expectSelected("Overview", "overview", false);
+  });
+
+  it("shares the release check with source settings even when the deployed version is current", async () => {
+    showReleaseSource = true;
+    platform.commitStatus.mockResolvedValue({ data: {
+      supported: true, mode: "release", behind: false, latestInProgress: false,
+      currentVersion: "1.2.3", latestVersion: "1.2.3", pinned: false,
+    } satisfies ProjectUpdateStatus });
+    await render("source", "server", {
+      releaseSource: { mode: "github", repo: "example/app", artifactKind: "image", imageTemplate: "ghcr.io/example/app:{tag}" },
+    });
+    expect(platform.commitStatus).toHaveBeenCalledExactlyOnceWith("project");
+    expect(indicators()).toHaveLength(0);
+    expect(host.textContent).toContain("1.2.3");
   });
 });

@@ -27,6 +27,8 @@ import type { ExecutionContext as RequestContext } from "@repo/platform";
 import { CHAINS, type GitHubTokenSource } from "@repo/platform/engine/modules/github/github.token";
 import { repos } from "@repo/db";
 import { instanceAuthorization } from "../../lib/instance-authorization";
+import type { GitHubCapabilities } from "@repo/contracts";
+export type { GitHubCapabilities } from "@repo/contracts";
 
 /**
  * A way to connect, as the UI needs to reason about it.
@@ -37,38 +39,8 @@ import { instanceAuthorization } from "../../lib/instance-authorization";
  * the operator picks directly. The UI vocabulary and the resolver vocabulary
  * overlap without being the same set, so they stay separate types.
  */
-export type GitHubMethodKind =
-  | "device" // browser device sign-in (instance-wide git identity)
-  | "token" // pasted PAT (same slot as `device`)
-  | "app" // local operator-owned or Openship Cloud App installation
-  | "ssh-key" // per-server deploy key — clone transport, not a token
-  | "forwarding"; // desktop SSH relay of the operator's identity
-
-export interface GitHubMethod {
-  kind: GitHubMethodKind;
-  /** Offerable on this install at all. `false` → the UI must not render it. */
-  available: boolean;
-  /** Already set up. Drives "Connected" vs "Set up" affordances. */
-  configured: boolean;
-  /**
-   * Needs an Openship Cloud link before it can work. Set only when this instance
-   * has no complete operator-owned App, so the UI turns the action into
-   * "Connect Openship Cloud" rather than showing a button that 403s.
-   */
-  requiresCloud?: boolean;
-  /** Present when `available` is false, so the UI can explain rather than hide. */
-  unavailableReason?: string;
-}
-
-export interface GitHubCapabilities {
-  /** "saas" | "selfhosted" — which column of CHAINS applies. */
-  platform: "saas" | "selfhosted";
-  /** True for the desktop app (the only place the identity relay applies). */
-  desktop: boolean;
-  /** The recommended method to lead with, or null when nothing is offerable. */
-  primary: GitHubMethodKind | null;
-  methods: GitHubMethod[];
-}
+export type GitHubMethod = GitHubCapabilities["methods"][number];
+export type GitHubMethodKind = GitHubMethod["kind"];
 
 /** Does the token chain for this platform contain a given credential at all? */
 function chainHas(platform: "saas" | "selfhosted", kind: GitHubTokenSource): boolean {
@@ -93,7 +65,8 @@ export async function resolveGitHubCapabilities(
   // The instance-wide git identity (device sign-in / pasted token) occupies ONE
   // storage slot, so "configured" is the same fact for both rows — they differ only
   // in how you'd establish it.
-  const settings = await repos.instanceSettings.get().catch(() => null);
+  const settings = platform === "selfhosted" ? await repos.instanceSettings.get().catch(() => null) : null;
+  const personalSettings = platform === "saas" ? await repos.settings.findByUser(ctx.userId) : null;
   const identityConfigured = Boolean(settings?.ghDeviceTokenEncrypted);
   const identityMethod = settings?.ghDeviceTokenMethod ?? null;
   const customAppConfigured =
@@ -104,14 +77,15 @@ export async function resolveGitHubCapabilities(
   // there is the real test of whether these two rows can work at all — not a
   // mode string the UI guessed at.
   const identityUsable = chainHas(platform, "gh-cli");
+  const personalTokenUsable = platform === "saas" && chainHas(platform, "user-pat");
 
   // Device sign-in additionally needs a client id to exist. Without one the
   // backend answers `flow: "token"`, so offering the device row would be a button
   // that turns into a different flow — say so instead.
-  const { resolveDeviceClientId } = await import("@repo/platform/engine/modules/github/github.local-auth");
-  const hasDeviceClientId = !env.CLOUD_MODE && resolveDeviceClientId() !== null;
+  const hasDeviceClientId = identityUsable &&
+    (await import("./github.local-auth")).resolveDeviceClientId() !== null;
 
-  const methods: GitHubMethod[] = [
+  const methods: GitHubCapabilities["methods"] = [
     {
       kind: "device",
       available: identityUsable && hasDeviceClientId,
@@ -124,9 +98,9 @@ export async function resolveGitHubCapabilities(
     },
     {
       kind: "token",
-      available: identityUsable,
-      configured: identityConfigured && identityMethod !== "device",
-      unavailableReason: identityUsable ? undefined : "Not available on Openship Cloud.",
+      available: identityUsable || personalTokenUsable,
+      configured: personalTokenUsable ? Boolean(personalSettings?.cloneTokenEncrypted) : identityConfigured && identityMethod !== "device",
+      credentialScope: personalTokenUsable ? "user" : "instance",
     },
     {
       kind: "app",
@@ -165,7 +139,7 @@ export async function resolveGitHubCapabilities(
     },
   ];
 
-  if (!(await instanceAuthorization.allows(ctx, "write"))) {
+  if (platform === "selfhosted" && !(await instanceAuthorization.allows(ctx, "write"))) {
     for (const method of methods) if (method.kind === "device" || method.kind === "token") {
       method.available = false;
       method.unavailableReason = "An instance administrator must connect this Git identity.";
@@ -175,6 +149,7 @@ export async function resolveGitHubCapabilities(
   // Lead with what needs the least setup and works here. Device sign-in when it's
   // possible, else the token paste, else the App.
   const primary: GitHubMethodKind | null =
+    (platform === "saas" ? methods.find((m) => m.kind === "app" && m.available)?.kind : undefined) ??
     methods.find((m) => m.kind === "device" && m.available)?.kind ??
     methods.find((m) => m.kind === "token" && m.available)?.kind ??
     methods.find((m) => m.kind === "app" && m.available)?.kind ??

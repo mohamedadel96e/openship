@@ -121,10 +121,14 @@ app.use(
 // Hono's default logger includes the raw query string and path. Invitation ids
 // are bearer credentials embedded in a path, while OAuth/signed credentials
 // commonly live in queries, so sanitize both before anything reaches stdout.
-app.use(
-  "*",
-  logger((line) => console.log(sanitizeRequestLogLine(line))),
-);
+// Bypass logging for periodic healthcheck probes to prevent log flooding.
+const requestLogger = logger((line) => console.log(sanitizeRequestLogLine(line)));
+app.use("*", (c, next) => {
+  if (c.req.path === "/api/health" || c.req.path === "/health") {
+    return next();
+  }
+  return requestLogger(c, next);
+});
 // Seed a per-request memo store FIRST so every downstream handler shares it.
 // Collapses idempotent-per-request reads (cloud session validation, GitHub
 // auth-mode, installations) to one call each — a single /github/status was
@@ -303,6 +307,10 @@ setupWebSocket(app);
 
 /* ---------- Cloud-only routes (gated by CLOUD_MODE) ---------- */
 if (env.CLOUD_MODE) {
+  const { cloudSupportRoutes } = await import("./modules/cloud-support/cloud-support.routes");
+  app.route("/api/cloud/support", cloudSupportRoutes);
+  const { cloudAnalyticsRoutes } = await import("./modules/cloud-analytics/cloud-analytics.routes");
+  app.route("/api/cloud/telemetry", cloudAnalyticsRoutes);
   const { cloudSaasRoutes } = await import("./modules/cloud/cloud-saas.routes");
   app.route("/api/cloud", cloudSaasRoutes);
 
@@ -450,6 +458,12 @@ if (env.CLOUD_MODE) {
     .catch((err) => console.warn("[boot] backfillOrgNamespaces failed:", err));
 
   if (env.CLOUD_MODE) {
+    void import("@repo/platform/engine/modules/cloud-support/index")
+      .then(({ startCloudSupport }) => startCloudSupport())
+      .catch(() => console.warn("[cloud-support] Background delivery could not start; requests remain saved."));
+    void import("@repo/platform/engine/modules/cloud-analytics/index")
+      .then(({ startCloudAnalytics }) => startCloudAnalytics())
+      .catch(() => console.warn("[cloud-analytics] Background delivery could not start."));
     void import("@repo/platform/engine/lib/oblien-client")
       .then(({ getOblienBillingApi }) => getOblienBillingApi().assertResellerSupport())
       .catch((error) =>

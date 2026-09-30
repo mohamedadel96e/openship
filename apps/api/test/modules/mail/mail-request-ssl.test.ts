@@ -1,5 +1,5 @@
 import "./_setup-env";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, it, test, vi } from "vitest";
 
 /**
  * Mail's cert step must issue through the SAME `platform.ssl` as every other
@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
     verified: true,
     reason: "issued" as const,
   })),
+  verifyCert: vi.fn().mockResolvedValue({ verified: false }),
   resolveTargetPlatform: vi.fn(),
   disposePlatform: vi.fn(),
 }));
@@ -46,7 +47,7 @@ const TARGET = { serverId: "srv_1", organizationId: "org_1" };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.resolveTargetPlatform.mockResolvedValue({ ssl: { provisionCert: mocks.provisionCert } } as never);
+  mocks.resolveTargetPlatform.mockResolvedValue({ ssl: { provisionCert: mocks.provisionCert, verifyCert: mocks.verifyCert } } as never);
 });
 
 describe("step 12 — issuance goes through platform.ssl", () => {
@@ -63,7 +64,7 @@ describe("step 12 — issuance goes through platform.ssl", () => {
     expect(mocks.disposePlatform).not.toHaveBeenCalled();
     finish();
     expect((await pending).success).toBe(!fail);
-    expect(mocks.disposePlatform).toHaveBeenCalledExactlyOnceWith({ ssl: { provisionCert: mocks.provisionCert } });
+    expect(mocks.disposePlatform).toHaveBeenCalledExactlyOnceWith({ ssl: { provisionCert: mocks.provisionCert, verifyCert: mocks.verifyCert } });
   });
 
   test("delegates to provisionCert for mail.<domain> and never execs certbot", async () => {
@@ -128,4 +129,19 @@ describe("step 12 — issuance goes through platform.ssl", () => {
     expect(mocks.resolveTargetPlatform).not.toHaveBeenCalled();
     expect(commands).toHaveLength(0);
   });
+});
+
+
+it("reuses a healthy mail certificate during setup without another ACME order", async () => {
+  mocks.verifyCert.mockResolvedValueOnce({ domain: "mail.example.com", verified: true, issuer: "test", expiresAt: "2030-01-01T00:00:00.000Z" });
+  const result = await stepRequestSSL(fakeExecutor().executor, "example.com", () => {}, TARGET);
+  expect(result.success).toBe(true);
+  expect(mocks.provisionCert).not.toHaveBeenCalled();
+});
+
+it("renews an expired certificate when a legacy mail setup is resumed", async () => {
+  mocks.verifyCert.mockResolvedValueOnce({ domain: "mail.example.com", verified: true, issuer: "test", expiresAt: new Date(Date.now() - 86400000).toISOString() });
+  const result = await stepRequestSSL(fakeExecutor().executor, "example.com", () => {}, TARGET);
+  expect(result.success).toBe(true);
+  expect(mocks.provisionCert).toHaveBeenCalledWith("mail.example.com", expect.objectContaining({ force: true }));
 });

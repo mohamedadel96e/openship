@@ -67,9 +67,11 @@ describe("build status uses the durable outcome (#919)", () => {
         status: expected,
         deploymentStatus: status,
         is_active: false,
+        completionPending: true,
         cancellationPending: status === "cancelled",
         buildDurationMs: null,
       });
+      expect(mocks.live).toHaveBeenCalledExactlyOnceWith("dep-1", "project-1");
     },
   );
 
@@ -82,8 +84,29 @@ describe("build status uses the durable outcome (#919)", () => {
     expect(await getBuildSessionStatus("dep-1")).toMatchObject({
       status: "deploying",
       is_active: true,
+      completionPending: false,
     });
+    expect(mocks.live).not.toHaveBeenCalled();
   });
+
+  it.each(["ready", "failed", "cancelled"])(
+    "keeps %s cleanup pending when the lease cannot be read, then observes its release",
+    async (status) => {
+      mocks.load.mockResolvedValue({
+        dep: { id: "dep-1", organizationId: "org-1", status },
+        project: { id: "project-1" },
+      });
+      mocks.live.mockRejectedValueOnce(new Error("database unavailable")).mockResolvedValue(false);
+      expect(await getBuildSessionStatus("dep-1")).toMatchObject({
+        deploymentStatus: status, is_active: false, completionPending: true,
+        cancellationPending: status === "cancelled",
+      });
+      expect(await getBuildSessionStatus("dep-1")).toMatchObject({
+        deploymentStatus: status, is_active: false, completionPending: false, cancellationPending: false,
+      });
+      expect(mocks.live).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("observes cancellation committed between the deployment and session reads", async () => {
     mocks.load.mockResolvedValue({
@@ -94,6 +117,7 @@ describe("build status uses the durable outcome (#919)", () => {
     expect(await getBuildSessionStatus("dep-1")).toMatchObject({
       status: "cancelled",
       is_active: false,
+      completionPending: true,
       cancellationPending: true,
       buildDurationMs: 15_000,
     });
@@ -122,6 +146,7 @@ describe("build status uses the durable outcome (#919)", () => {
     expect(await getBuildSessionStatus("dep-1")).toMatchObject({
       status: "cancelled",
       is_active: false,
+      completionPending: false,
       cancellationPending: false,
       buildDurationMs: 3500,
     });

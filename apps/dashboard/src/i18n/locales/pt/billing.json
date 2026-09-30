@@ -1,4 +1,21 @@
 {
+  "home": {
+    "label": "Openship Cloud",
+    "title": "Pronto para lançar?",
+    "plansAndBilling": "Planos e faturação",
+    "description": "Builds e alojamento geridos, com espaço para crescer.",
+    "manageDescription": "O seu plano, utilização e faturação num só lugar.",
+    "purchasesUnavailable": "Novas subscrições estão indisponíveis de momento.",
+    "viewPlans": "Explorar planos"
+  },
+  "welcome": {
+    "eyebrow": "Está tudo pronto",
+    "title": "Boas-vindas ao {name}",
+    "description": "O seu plano Cloud está ativo. Vamos pô-lo a trabalhar.",
+    "dismiss": "Fechar boas-vindas",
+    "openProjects": "Abrir projetos",
+    "viewPlan": "Ver o meu plano"
+  },
   "capacity": {
     "title": "Capacidade e uso",
     "subtitle": "Capacidade incluída no seu plano e quanto você usou. Os números ao vivo são sincronizados do Openship Cloud.",
@@ -89,6 +106,14 @@
     "replacementNotice": "Alterar o plano ou o intervalo de cobrança inicia um novo ciclo pelo preço integral selecionado após o pagamento. Não há ajuste proporcional automático.",
     "changeViaSupport": "Entre em contato com o suporte para alterar sua assinatura atual.",
     "billingUnavailable": "As compras ainda não estão disponíveis para esta conta."
+  },
+  "complimentary": {
+    "label": "Plano de cortesia · Sem cobrança",
+    "untilRevoked": "Ativo até ser revogado",
+    "expiresOn": "Disponível até {date}",
+    "creditsRenewOn": "Os créditos são renovados em {date}",
+    "changeViaSupport": "O suporte gerencia alterações no seu plano de cortesia.",
+    "topupsUnavailable": "O suporte gerencia o uso adicional do seu plano de cortesia."
   },
   "pricing": {
     "custom": "Personalizado",
@@ -306,9 +331,9 @@
     "creditsPerCycle": "{amount} créditos / ciclo de cobrança",
     "buildTime": "Tempo de compilação",
     "buildMinutes": "{amount} min / mês",
-    "buildHint": "Tempo gasto no build do código. Um build de 5 minutos usa 5 minutos da sua franquia mensal.",
-    "apps": "Serviços ativos",
-    "appsHint": "Aplicativos, bancos de dados e processos executados ao mesmo tempo. Cada serviço Compose ativo conta para este limite.",
+    "buildHint": "As compilações consomem a franquia compartilhada conforme os recursos utilizados. Um limite de tempo separado só se aplica quando incluído no seu plano salvo.",
+    "apps": "Vagas de serviços",
+    "appsHint": "Reservadas por projetos implantados e implantações na fila. Rascunhos não implantados não ocupam vagas.",
     "machine": "CPU e memória por serviço",
     "machineHint": "A capacidade máxima de CPU e memória para um serviço. É um limite, não um saldo compartilhado.",
     "projects": "Projetos",
@@ -320,7 +345,7 @@
     "setupOnly": "Assinatura necessária",
     "setupHint": "Escolha um plano Cloud para criar projetos, compilar código e executar apps.",
     "includedTitle": "Seus recursos",
-    "limitsHint": "Projetos, serviços em execução e tempo de build mensal do seu plano.",
+    "limitsHint": "Projetos, serviços em execução e qualquer limite de tempo de compilação incluído no seu plano.",
     "balanceRule": "Os apps são pausados quando a franquia acaba. Adicione mais uso para continuar ou mude de plano para aumentar os limites de recursos.",
     "reset": "A cota de compilação renova em {date}",
     "cpuHint": "Processamento usado ao longo do tempo. 1 vCPU durante 1 hora equivale a 1 vCPU-hora.",
@@ -340,7 +365,12 @@
     "usageIncluded": "Franquia de uso compartilhada incluída",
     "usageSummary": "Builds e apps em execução compartilham uma franquia de uso. Máquinas maiores e tempos de execução mais longos consomem mais.",
     "usageDetails": "Detalhes de uso",
-    "usagePercent": "{percent}% utilizado"
+    "usagePercent": "{percent}% utilizado",
+    "poolHint": "Compartilhado por todos os espaços, incluindo os parados e as alterações pendentes.",
+    "creditUnitsHint": "Créditos medem consumo de recursos, não minutos. CPU, memória, atividade de disco e transferência têm taxas próprias.",
+    "topupCapacityHint": "Recargas adicionam créditos de uso. Altere o plano para aumentar CPU, RAM ou armazenamento.",
+    "poolTitle": "Capacidade compartilhada",
+    "poolCapacity": "{cpu} vCPU · {ram} GB de RAM · {disk} GB de disco"
   },
   "onboarding": {
     "workspaceDescription": "Escolha um plano Cloud para criar projetos, compilar código e executar seus apps. Antes da assinatura, nenhum projeto ou recurso de computação está incluído.",
@@ -404,5 +434,18 @@
     "currentPeriod": "Período de cobrança atual",
     "viewUsage": "Ver uso detalhado",
     "bandwidthPerMonth": "{amount} GB / mês"
+  },
+  "creditAlert": {
+    "lowTitle": "Os créditos Cloud estão a acabar",
+    "lowDescription": "Usou {percent}% da sua quota, incluindo os créditos comprados. Restam {credits} créditos.",
+    "graceTitle": "Está a usar créditos de tolerância",
+    "graceDescription": "Os créditos pagos esgotaram-se. Restam {credits} créditos de tolerância antes do bloqueio de novas cargas de trabalho.",
+    "exhaustedTitle": "Créditos Cloud esgotados",
+    "exhaustedDescription": "As novas cargas de trabalho ficam bloqueadas até adicionar créditos ou renovar a quota paga. Consulte a faturação para ver as opções.",
+    "buyCredits": "Comprar mais créditos",
+    "openBilling": "Abrir faturação",
+    "close": "Entendido",
+    "opening": "A abrir a faturação da organização deste alerta…",
+    "wrongOrganization": "Este link de faturação não está disponível para a sua conta. Inicie sessão com uma conta da organização deste alerta."
   }
 }

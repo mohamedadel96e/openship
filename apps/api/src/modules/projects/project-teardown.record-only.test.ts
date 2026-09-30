@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { repos } from "@repo/db";
 
 /**
  * Record-only ("Remove from Openship only") delete contract.
@@ -84,6 +85,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@repo/db", () => ({
   repos: {
+    clusterDatabase: { list: vi.fn(async () => []) },
     project: {
       findById: vi.fn(async () => h.project),
       claimDeletion: h.claimDeletion,
@@ -178,6 +180,16 @@ beforeEach(() => {
   h.activeMigration = null;
   h.listByProjectCalls = 0;
   h.consumers = [];
+});
+
+describe("teardownProject — dependency inspection", () => {
+  it.each([false, true])("keeps the project when its stored-data guard cannot be checked (recordOnly=%s)", async recordOnly => {
+    vi.mocked(repos.project.findById).mockRejectedValueOnce(new Error("Database unavailable"));
+    await expect(teardownProject(ctx, "p1", { force: true, recordOnly })).rejects.toThrow("Database unavailable");
+    expect(h.claimDeletion).not.toHaveBeenCalled();
+    expect(h.executeCleanup).not.toHaveBeenCalled();
+    expect(h.deleteHard).not.toHaveBeenCalled();
+  });
 });
 
 describe("teardownProject — the GitHub webhook step vs. repo write access", () => {

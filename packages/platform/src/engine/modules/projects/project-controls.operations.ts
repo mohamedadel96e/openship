@@ -15,6 +15,7 @@ import { createProjectTransferOperations } from "./project-transfer.operations";
 import { appProjectOperations } from "../apps/app.operations";
 import { createProjectClusterOperations } from "./project-cluster.operations";
 import { createClusterDatabaseOperations } from "./cluster-database.operations";
+import { createClusterVolumeOperations } from "./cluster-volume.operations";
 import { retryProjectRoutingOperation } from "./project-routing-retry.operations";
 
 /** Existing services, with the controller's audit/presentation duties shared by all callers. */
@@ -32,6 +33,7 @@ export function createProjectControls(
   return {
     ...createProjectClusterOperations(recordAudit),
     ...createClusterDatabaseOperations(recordAudit),
+    ...createClusterVolumeOperations(recordAudit),
     ...appProjectOperations,
     ...createProjectTransferOperations(recordAudit),
     ...projectLogOperations,

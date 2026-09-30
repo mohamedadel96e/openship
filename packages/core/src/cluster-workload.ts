@@ -1,5 +1,6 @@
 import { AppError } from "./errors";
 import { detectDbImage } from "./backup-image-detect";
+import { validateClusterVolumeMounts, type ClusterVolumeMount } from "./cluster-storage";
 
 /** Database replicas require an engine-specific workflow, not application copies. */
 export function clusterWorkloadNeedsOperator(
@@ -19,6 +20,8 @@ export interface ClusterWorkloadConfig {
   replicas: number;
   /** Registry repository, without a tag; source builds publish immutable releases here. */
   imageRepository?: string;
+  /** References to project-owned shared volumes, frozen with each release. */
+  mounts?: ClusterVolumeMount[];
 }
 
 export interface ClusterWorkloadStatus {
@@ -41,6 +44,7 @@ export interface ClusterWorkloadStatus {
 }
 
 export function validateClusterWorkload(config: ClusterWorkloadConfig): void {
+  if (config.mounts) validateClusterVolumeMounts(config.mounts);
   if (!Number.isSafeInteger(config.replicas) || config.replicas < 1 || config.replicas > 100)
     throw new AppError(
       "Choose between 1 and 100 application instances.",

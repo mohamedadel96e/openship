@@ -87,6 +87,8 @@ describe("platform transport self-repair", () => {
         to: "owner@example.net",
         subject: "Alert",
         html: "<p>Alert</p>",
+        replyTo: "support@openship.io",
+        messageId: "<support-test@openship.io>",
         preferSource: "platform",
       }),
     ).resolves.toBe(true);
@@ -99,5 +101,8 @@ describe("platform transport self-repair", () => {
     });
     expect(mocks.firstSend).toHaveBeenCalledOnce();
     expect(mocks.repairedSend).toHaveBeenCalledOnce();
+    expect(mocks.repairedSend).toHaveBeenCalledWith(expect.objectContaining({
+      replyTo: "support@openship.io", messageId: "<support-test@openship.io>",
+    }));
   });
 });

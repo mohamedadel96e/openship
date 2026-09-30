@@ -882,7 +882,7 @@ export async function deleteMigration(c: Context) {
  * panel that has to ask for it knows about it only while it happens to be mounted. The project
  * payload carries it now (`readActiveMigration` in the projects module), which is the same
  * field the status pills read, so there is one answer and every surface sees it. Note the
- * gates differ: this route is `server:write` and returns the confirmation token; the project
+ * gates differ: this route is `server:read` and returns the confirmation token; the project
  * payload is `project:read` and returns id/status/mode only.
  */
 export async function getActiveMigration(c: Context) {
@@ -895,5 +895,5 @@ export async function getActiveMigration(c: Context) {
   const runs = await repos.dockerMigrationRun.findActiveForServer(serverId);
   // Org-scope: a run for a server outside this org won't match (IDOR guard).
   const run = runs.find((r) => r.organizationId === ctx.organizationId) ?? null;
-  return c.json({ success: true, run, confirmationToken: run?.confirmationToken ?? null });
+  return c.json({ success: true, run: run ? maskMigrationRunEnv(run) : null, confirmationToken: run?.confirmationToken ?? null });
 }

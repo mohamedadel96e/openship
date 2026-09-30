@@ -203,7 +203,7 @@
     "cardTitle": "Existing services",
     "cardDesc": "Migrate a running Docker or Compose deployment into Openship.",
     "action": "Migrate apps",
-    "tab": "Existing server",
+    "tab": "Import existing project",
     "comingSoon": "Docker migration is coming soon"
   },
   "view": {

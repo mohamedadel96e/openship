@@ -19,6 +19,7 @@ import {
 import { withDeploymentRuntime, type DeploymentMeta } from "../../lib/deployment-runtime";
 import { findActiveDeployment } from "../../lib/active-deployment";
 import { withLiveProjectRuntimeMutation } from "../../lib/project-runtime-lock";
+import { assertProjectStorageEmpty } from "../../lib/project-storage-guard";
 import { fleetAdmin } from "../system/managed-network.operations";
 import {
   authorizeMember,
@@ -79,8 +80,19 @@ export function createProjectClusterOperations(
       await fleetAdmin(ctx);
       const changed = await withLiveProjectRuntimeMutation(id, async (project) => {
         assertResourceInOrg(project, "Project", ctx.organizationId, id);
-        if (input.clusterId !== project.clusterId && (await repos.clusterDatabase.list(ctx.organizationId, id)).length)
-          throw new AppError("This project owns databases on its current cluster. Remove or migrate those databases before changing the application's cluster.", 409, "CLUSTER_DATABASES_ATTACHED");
+        if (
+          input.clusterId !== project.clusterId &&
+          (await repos.clusterDatabase.list(ctx.organizationId, id)).some(
+            (database) => database.clusterId !== input.clusterId,
+          )
+        )
+          throw new AppError(
+            "Choose the same cluster as this project's databases, or remove or migrate those databases before changing the application's cluster.",
+            409,
+            "CLUSTER_DATABASES_ATTACHED",
+          );
+        if (project.clusterId && input.clusterId !== project.clusterId)
+          await assertProjectStorageEmpty(ctx.organizationId, id, project.clusterId);
         if (project.appTemplateId === "openship")
           throw new AppError(
             "The OpenShip control plane cannot be moved through workload scaling.",

@@ -61,7 +61,7 @@ vi.mock("@repo/platform/engine/lib/oblien-client", () => ({
 vi.mock("@repo/platform/engine/lib/cloud/client", () => ({ cloudClient: () => ({ request: provider.cloudRequest }) }));
 vi.mock("@repo/platform/engine/modules/billing/billing-resources.service", () => ({ getBillingResources: provider.resources }));
 import { db, schema, repos, seedOwner, type SeededOwner } from "../jobs/_harness";
-import { AppError, CREDIT_PACKS, FREE_DOMAIN_SUFFIX } from "@repo/core";
+import { AppError, CREDIT_PACKS, FREE_DOMAIN_SUFFIX, getAppTemplate } from "@repo/core";
 import { createShip, type VerifiedIdentity } from "@repo/sdk/native";
 import { OpenshipClient } from "@repo/sdk/client";
 import { getPlatformKernel } from "@repo/platform/engine/lib/platform";
@@ -119,6 +119,7 @@ beforeEach(() => {
   }
   provider.catalog.mockResolvedValue({
     success: true,
+    // Deliberately stale provider prices: customer offers come from Openship.
     plans: [
       { tierId: "hobby", name: "Hobby", priceMonthly: 10, priceYearly: 100, currency: "usd", creditsPerCycle: 1200, yearlyCreditsPerCycle: 14400, features: [] },
       { tierId: "pro", name: "Pro", priceMonthly: 29, priceYearly: 290, currency: "usd", creditsPerCycle: 3000, yearlyCreditsPerCycle: 36000, features: [] },
@@ -137,6 +138,95 @@ afterEach(async () => {
 });
 
 describe("billing through the same SDK and HTTP application operations", () => {
+  it("reports a Supabase draft as one project and zero services, then tracks its deployment reservation", async () => {
+    const owner = await seedOwner(),
+      c = await clients(owner);
+    await c.native.getState();
+    const namespace = (await repos.organization.findById(owner.orgId))!.oblienNamespace!;
+    provider.subscriptions.set(namespace, {
+      tierId: "scale",
+      status: "active",
+      billingInterval: "monthly",
+      periodStart: "2026-09-27T00:00:00Z",
+      periodEnd: "2026-10-27T00:00:00Z",
+      cancelAtPeriodEnd: false,
+      canceledAt: null,
+    });
+    provider.resourceRead.mockImplementation(async (slug: string) => ({
+      success: true,
+      data: {
+        slug,
+        effective_resource_limits: {
+          max_workspaces: 12,
+          max_total_vcpus: 8,
+          max_total_ram_mb: 16384,
+          max_total_disk_gb: 256,
+        },
+        allocated_resource_usage: {
+          workspaces: 0,
+          vcpus: 0,
+          ram_mb: 0,
+          disk_gb: 0,
+          pending_updates: 0,
+        },
+      },
+    }));
+    const groupId = `group-${owner.orgId}`,
+      projectId = `project-${owner.orgId}`;
+    await db
+      .insert(schema.projectGroup)
+      .values({ id: groupId, organizationId: owner.orgId, name: "Supabase", slug: "supabase" });
+    await db.insert(schema.project).values({
+      id: projectId,
+      groupId,
+      organizationId: owner.orgId,
+      name: "Supabase",
+      slug: "supabase",
+      isApp: true,
+      appTemplateId: "supabase",
+    });
+    const services = [];
+    for (const spec of getAppTemplate("supabase")!.services!) {
+      services.push(
+        await repos.service.create({ projectId, name: spec.name, image: spec.image, enabled: true }),
+      );
+    }
+    expect(services).toHaveLength(9);
+    const expectSlots = async (used: number) => {
+      for (const client of [c.native, c.remote]) {
+        expect(await client.getState()).toMatchObject({
+          tier: "team",
+          balance: { quotaUsed: 0 },
+          capacity: {
+            services: { used, max: 50 },
+            projects: { used: 1, max: null },
+            workspaces: { used: 0, max: 12 },
+            vcpus: { used: 0, max: 8 },
+            ramMb: { used: 0, max: 16384 },
+            diskGb: { used: 0, max: 256 },
+          },
+        });
+      }
+    };
+    await expectSlots(0);
+    const deploymentId = `deployment-${owner.orgId}`;
+    await db.insert(schema.deployment).values({
+      id: deploymentId,
+      projectId,
+      organizationId: owner.orgId,
+      branch: "main",
+      status: "queued",
+      meta: {
+        cloudApplicationSlot: false,
+        cloudServiceSlots: services.map((service) => service.name),
+      },
+    });
+    await expectSlots(services.length);
+    await repos.deployment.updateStatus(deploymentId, "failed");
+    await expectSlots(0);
+    expect(await repos.service.listByProject(projectId)).toHaveLength(services.length);
+  });
+
   it("verifies a checkout only inside its authenticated organization in both transports", async () => {
     const owner = await seedOwner(),
       other = await seedOwner();
@@ -238,9 +328,10 @@ describe("billing through the same SDK and HTTP application operations", () => {
           capacity: { buildMinutes: { used: 0, max: 0 }, services: { max: 0 }, projects: { max: 0 } },
           maxServiceMachine: null, topups: { available: false, status: "unavailable" },
         });
-        await expect(client.createTopup({ packId: "pack_5k" })).rejects.toMatchObject({
-          code: "CLOUD_PLAN_REQUIRED",
-        });
+        for (const pack of CREDIT_PACKS)
+          await expect(client.createTopup({ packId: pack.id })).rejects.toMatchObject({
+            statusCode: 402, code: "CLOUD_PLAN_REQUIRED",
+          });
       }
       namespaces.add((await repos.organization.findById(owner.orgId))!.oblienNamespace!);
     }
@@ -316,7 +407,7 @@ describe("billing through the same SDK and HTTP application operations", () => {
     expect(provider.entitlement).toHaveBeenCalledTimes(5);
     expect(provider.subscription).toHaveBeenCalledTimes(5);
     expect(provider.quota).not.toHaveBeenCalled();
-    expect(provider.resourceRead).not.toHaveBeenCalled();
+    expect(provider.resourceRead).toHaveBeenCalled();
     expect(provider.resourceUpdate).not.toHaveBeenCalled();
   });
 
@@ -331,7 +422,7 @@ describe("billing through the same SDK and HTTP application operations", () => {
     expect(provider.quota).not.toHaveBeenCalled();
     expect(provider.checkout).toHaveBeenCalledTimes(2);
     for (const [input] of provider.checkout.mock.calls) {
-      expect(input.offer.resourceLimits).toEqual({ max_workspaces: 52, max_vcpus: null, max_ram_mb: null, max_disk_gb: null });
+      expect(input.offer.resourceLimits).toEqual({ max_workspaces: 12, max_vcpus: 4, max_ram_mb: 12288, max_disk_gb: 64, max_total_vcpus: 8, max_total_ram_mb: 16384, max_total_disk_gb: 256 });
     }
   });
 
@@ -340,7 +431,7 @@ describe("billing through the same SDK and HTTP application operations", () => {
     const c = await clients(await seedOwner());
     for (const client of [c.native, c.remote]) {
       await expect(client.createSubscription({ planTierId: "starter", interval: "monthly" })).rejects.toMatchObject({ code: "OBLIEN_BILLING_UNAVAILABLE" });
-      await expect(client.createTopup({ packId: "pack_5k" })).rejects.toMatchObject({
+      await expect(client.createTopup({ packId: CREDIT_PACKS[0]!.id })).rejects.toMatchObject({
         code: "OBLIEN_BILLING_UNAVAILABLE",
       });
     }
@@ -353,12 +444,18 @@ describe("billing through the same SDK and HTTP application operations", () => {
     const native = await c.native.listPlans({ locale: "ar" });
     expect(await remote.billing.listPlans({ locale: "ar" })).toEqual(native);
     expect(native.locale).toBe("ar");
-    expect(native.plans.find(plan => plan.id === "starter")).toMatchObject({
-      price: { monthly: 1000, annual: null },
-      monthlyCredits: 1_200_000,
-      annualCredits: null,
-      limits: { buildMinutesPerMonth: 3000 },
-    });
+    for (const [id, monthlyPrice, monthlyCredits] of [
+      ["hobby", 500, 400_000],
+      ["starter", 2000, 1_700_000],
+      ["pro", 4000, 3_500_000],
+      ["team", 9900, 9_000_000],
+    ] as const)
+      expect(native.plans.find(plan => plan.id === id)).toMatchObject({
+        price: { monthly: monthlyPrice, annual: null },
+        monthlyCredits,
+        annualCredits: null,
+        limits: { buildMinutesPerMonth: null },
+      });
     expect(JSON.stringify(native)).not.toMatch(/stripeCouponEnv|oblienLimits|STRIPE_PRICE/);
     const response = await app.request("/api/billing/plans", { headers: { "Accept-Language": "de" } });
     expect(response.headers.get("Vary")).toBe("Accept-Language");
@@ -366,13 +463,18 @@ describe("billing through the same SDK and HTTP application operations", () => {
     expect(provider.checkout).not.toHaveBeenCalled();
   });
 
-  it("uses the selected tenant for provider state and checkout without auditing session URLs", async () => {
+  it.each([
+    ["hobby", 500, 400],
+    ["starter", 2000, 1700],
+    ["pro", 4000, 3500],
+    ["team", 9900, 9000],
+  ] as const)("uses the selected tenant and current %s offer without auditing checkout URLs", async (tier, unitAmount, credits) => {
     const owner = await seedOwner(), other = await seedOwner(), c = await clients(owner);
     await db.update(schema.organization).set({ planTierId: "team" }).where(eq(schema.organization.id, other.orgId));
     expect(await c.native.getState()).toEqual(await c.remote.getState());
     expect((await c.native.getState()).tier).toBe("free");
     for (const client of [c.native, c.remote]) {
-      expect(await client.createSubscription({ planTierId: "starter", interval: "monthly" })).toEqual({ checkoutUrl: "https://checkout.stripe.com/private-session" });
+      expect(await client.createSubscription({ planTierId: tier, interval: "monthly" })).toEqual({ checkoutUrl: "https://checkout.stripe.com/private-session" });
     }
     const org = await repos.organization.findById(owner.orgId);
     expect(org?.oblienNamespace).toBeTruthy();
@@ -380,8 +482,9 @@ describe("billing through the same SDK and HTTP application operations", () => {
       expect(input).toMatchObject({
         namespace: org!.oblienNamespace,
         kind: "subscription",
-        offer: { reference: "openship:starter:v1", unitAmount: 1000, credits: 1200 },
+        offer: { reference: `openship:${tier}:v3`, unitAmount, credits },
         billingInterval: "monthly",
+        metadata: { openship_organization: owner.orgId, openship_namespace: org!.oblienNamespace, openship_offer_version: "3" },
       });
       expect(input).not.toHaveProperty("customer");
       expect(input).not.toHaveProperty("line_items");
@@ -479,35 +582,62 @@ describe("billing through the same SDK and HTTP application operations", () => {
   });
 
   it("uses Openship credit packs instead of legacy database prices and enforces the independent top-up switch", async () => {
-    const owner = await seedOwner(), c = await clients(owner), legacyPack = CREDIT_PACKS[0]!;
+    const owner = await seedOwner(), c = await clients(owner), pack = CREDIT_PACKS[0]!;
     await c.native.getState();
     provider.subscriptions.set((await repos.organization.findById(owner.orgId))!.oblienNamespace!, {
       tierId: "hobby", status: "active", billingInterval: "monthly", periodStart: "2026-09-01T00:00:00Z", periodEnd: "2026-10-01T00:00:00Z",
       cancelAtPeriodEnd: false, canceledAt: null,
     });
-    await db.insert(schema.creditPack).values({ id: legacyPack.id, name: legacyPack.name, creditsMilli: 999, priceCents: 999, sortOrder: 0, stripeProductId: "product_retired", stripePriceId: "price_retired", active: true });
+    await db.insert(schema.creditPack).values({ id: pack.id, name: pack.name, creditsMilli: 999, priceCents: 999, sortOrder: 0, stripeProductId: "product_retired", stripePriceId: "price_retired", active: true });
+    const expectedPacks = [
+      { id: "pack_400", credits_milli: 400_000, price_cents: 500 },
+      { id: "pack_1700", credits_milli: 1_700_000, price_cents: 2000 },
+      { id: "pack_4500", credits_milli: 4_500_000, price_cents: 5000 },
+    ];
     for (const client of [c.native, c.remote]) {
       const packs = await client.listTopupPacks();
-      expect(packs).toHaveLength(3);
-      expect(packs[0]).toMatchObject({ id: "pack_5k", credits_milli: 5_000_000, price_cents: 500 });
-      expect(await client.createTopup({ packId: "pack_5k" })).toEqual({
-        checkoutUrl: "https://checkout.stripe.com/private-session",
-      });
+      expect(packs).toMatchObject(expectedPacks);
+      for (const expectedPack of expectedPacks) {
+        expect(await client.createTopup({ packId: expectedPack.id })).toEqual({
+          checkoutUrl: "https://checkout.stripe.com/private-session",
+        });
+        expect(provider.checkout).toHaveBeenLastCalledWith(expect.objectContaining({
+          namespace: (await repos.organization.findById(owner.orgId))!.oblienNamespace,
+          kind: "topup",
+          offer: {
+            reference: `openship:${expectedPack.id}:v3`,
+            name: "Openship compute credits",
+            description: expect.any(String),
+            unitAmount: expectedPack.price_cents,
+            currency: "usd",
+            credits: expectedPack.credits_milli / 1000,
+          },
+        }));
+      }
     }
-    expect(
-      provider.checkout.mock.calls.every(
-        ([input]) =>
-          input.kind === "topup" &&
-          input.offer.reference === "openship:pack_5k:v1" &&
-          input.offer.unitAmount === 500 &&
-          input.offer.credits === 5000,
-      ),
-    ).toBe(true);
+    expect(provider.checkout).toHaveBeenCalledTimes(6);
     provider.topups = false;
     for (const client of [c.native, c.remote])
-      await expect(client.createTopup({ packId: "pack_5k" })).rejects.toMatchObject({
+      await expect(client.createTopup({ packId: pack.id })).rejects.toMatchObject({
         code: "BILLING_TOPUPS_NOT_ENABLED",
       });
+    expect(provider.checkout).toHaveBeenCalledTimes(6);
+  });
+
+  it.each(["pack_500", "pack_5k"])("rejects the retired %s pack without creating a provider checkout", async packId => {
+    const owner = await seedOwner(), c = await clients(owner);
+    await c.native.getState();
+    const namespace = (await repos.organization.findById(owner.orgId))!.oblienNamespace!;
+    provider.subscriptions.set(namespace, {
+      tierId: "hobby", status: "active", billingInterval: "monthly",
+      periodStart: "2026-09-01T00:00:00Z", periodEnd: "2026-10-01T00:00:00Z",
+      cancelAtPeriodEnd: false, canceledAt: null,
+    });
+    for (const client of [c.native, c.remote])
+      await expect(client.createTopup({ packId })).rejects.toMatchObject({
+        statusCode: 404, code: "BILLING_PACK_NOT_FOUND",
+      });
+    expect(provider.checkout).not.toHaveBeenCalled();
   });
 
   it.each(["canceled", "past_due"] as const)("refuses top-ups when entitlement is %s despite an active subscription row", async status => {
@@ -527,7 +657,7 @@ describe("billing through the same SDK and HTTP application operations", () => {
     });
     for (const client of [c.native, c.remote]) {
       expect((await client.getState()).topups).toEqual({ available: false, status: "unavailable" });
-      await expect(client.createTopup({ packId: "pack_5k" })).rejects.toMatchObject({
+      await expect(client.createTopup({ packId: CREDIT_PACKS[0]!.id })).rejects.toMatchObject({
         statusCode: 402, code: "CLOUD_PLAN_REQUIRED",
       });
     }
@@ -551,7 +681,7 @@ describe("billing through the same SDK and HTTP application operations", () => {
     });
     for (const client of [c.native, c.remote]) {
       expect((await client.getState()).topups.available).toBe(true);
-      expect(await client.createTopup({ packId: "pack_5k" })).toHaveProperty("checkoutUrl");
+      expect(await client.createTopup({ packId: CREDIT_PACKS[0]!.id })).toHaveProperty("checkoutUrl");
     }
     expect(provider.resourceUpdate).not.toHaveBeenCalled();
   });

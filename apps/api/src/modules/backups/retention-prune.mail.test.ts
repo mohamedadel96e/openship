@@ -50,6 +50,7 @@ vi.mock("@repo/db", () => ({
       }),
     },
     backupRestore: { findActiveByRunId: async () => undefined },
+    clusterDatabase: { hasActiveImport: async () => false },
     backupDestination: { findById: vi.fn(async () => h.destination) },
   },
 }));

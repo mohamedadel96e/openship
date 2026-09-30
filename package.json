@@ -1,6 +1,6 @@
 {
   "name": "@repo/workspace",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "description": "Open-source, self-hostable deployment platform",
   "license": "Apache-2.0",
   "repository": {
@@ -52,7 +52,7 @@
     "release": "bun scripts/release.ts",
     "prepare": "git config core.hooksPath .githooks || true",
     "build:sdk": "bun run --cwd packages/openship build",
-    "docs:reference": "node scripts/generate-api-reference.mjs --write && node scripts/generate-cli-reference.mjs --write",
+    "docs:reference": "node scripts/generate-api-reference.mjs --write && node scripts/generate-cli-reference.mjs --write && node scripts/generate-mcp-reference.mjs --write",
     "docs:check": "node scripts/check-docs.mjs"
   },
   "devDependencies": {
@@ -70,6 +70,6 @@
   },
   "private": true,
   "patchedDependencies": {
-    "oblien@2.4.0": "packages/adapters/patches/oblien@2.4.0.patch"
+    "oblien@2.5.0": "packages/adapters/patches/oblien@2.5.0.patch"
   }
 }

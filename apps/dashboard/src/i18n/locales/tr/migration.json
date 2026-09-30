@@ -152,7 +152,7 @@
     "cardTitle": "Mevcut servisler",
     "cardDesc": "Çalışan bir Docker veya Compose dağıtımını Openship'e taşıyın.",
     "action": "Uygulamaları taşı",
-    "tab": "Mevcut sunucu",
+    "tab": "Mevcut projeyi içe aktar",
     "comingSoon": "Docker taşıma özelliği yakında geliyor"
   },
   "tab": {

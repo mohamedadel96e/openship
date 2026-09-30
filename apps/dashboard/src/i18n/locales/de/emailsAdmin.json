@@ -300,8 +300,19 @@
       "notListeningHint": "Kein Prozess lauscht auf diesem Port.",
       "notExposedHint": "Lauscht nur auf Loopback; entfernte Clients können keine Verbindung herstellen.",
       "unknownHint": "Die öffentliche Erreichbarkeit konnte nicht geprüft werden.",
-      "ports": { "smtp": "SMTP eingehend", "smtps": "SMTP-Einlieferung (TLS)", "submission": "SMTP-Einlieferung (STARTTLS)", "imaps": "IMAP-Abruf (TLS)" },
-      "status": { "reachable": "Erreichbar", "blocked": "Blockiert", "not_listening": "Kein Listener", "not_exposed": "Nicht freigegeben", "unknown": "Unbekannt" }
+      "ports": {
+        "smtp": "SMTP eingehend",
+        "smtps": "SMTP-Einlieferung (TLS)",
+        "submission": "SMTP-Einlieferung (STARTTLS)",
+        "imaps": "IMAP-Abruf (TLS)"
+      },
+      "status": {
+        "reachable": "Erreichbar",
+        "blocked": "Blockiert",
+        "not_listening": "Kein Listener",
+        "not_exposed": "Nicht freigegeben",
+        "unknown": "Unbekannt"
+      }
     },
     "delivery": {
       "title": "Ausgehender Versand",
@@ -411,7 +422,8 @@
       "partSignatures": "{names} läuft nicht - Virensignaturen werden nicht mehr aktualisiert, Mail wird also gegen einen veraltenden Signaturstand geprüft",
       "partAdvisory": "{names} läuft nicht",
       "almostSubQueueOne": "{count} Nachricht wartet auf den Versand – siehe Ausgehender Versand unten.",
-      "almostSubQueueOther": "{count} Nachrichten warten auf den Versand – siehe Ausgehender Versand unten."
+      "almostSubQueueOther": "{count} Nachrichten warten auf den Versand – siehe Ausgehender Versand unten.",
+      "partCertificate": "Das Mail-Zertifikat muss geprüft werden"
     },
     "time": {
       "secondsAgo": "vor {n} Sek.",
@@ -647,5 +659,28 @@
     "loadingLogs": "Protokolle werden geladen…",
     "noLogLines": "Noch keine Protokollzeilen für diese Komponente.",
     "rowActions": "Aktionen für {name}"
+  },
+  "certificate": {
+    "title": "Mail-Zertifikat",
+    "manage": "Zertifikat verwalten",
+    "check": "Zertifikat prüfen",
+    "checking": "Wird geprüft…",
+    "renew": "Zertifikat erneuern",
+    "renewing": "Wird erneuert…",
+    "autoRenew": "Automatische Erneuerung",
+    "autoRenewHint": "Vor Ablauf erneuern und die Mail-Dienste neu laden.",
+    "desktopHint": "Openship muss für die automatische Erneuerung geöffnet bleiben.",
+    "jobDisabled": "Der gemeinsame SSL-Erneuerungsauftrag ist deaktiviert.",
+    "manageJob": "Erneuerungsauftrag öffnen",
+    "failed": "Das Mail-Zertifikat konnte nicht aktualisiert werden.",
+    "notChecked": "Nicht geprüft",
+    "expires": "Läuft am {date} ab",
+    "checked": "Geprüft: {time}",
+    "status": {
+      "ok": "Gültig",
+      "warn": "Erneuerung fällig",
+      "fail": "Prüfung erforderlich",
+      "unknown": "Unbestätigt"
+    }
   }
 }

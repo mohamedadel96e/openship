@@ -12,12 +12,13 @@ import { useI18n, interpolate } from "@/components/i18n-provider";
  * Library doesn't silently enumerate someone's repos on first open. Consent is
  * remembered in localStorage; after "Allow" the repository list renders.
  */
-export function GhCliConsent({ login, onAllow }: { login?: string; onAllow: () => void }) {
+export function GhCliConsent({ login, onAllow, header }: { login?: string; onAllow: () => void; header?: React.ReactNode }) {
   const { t } = useI18n();
   const c = t.library.ghCliConsent;
 
   return (
     <div className="bg-card rounded-2xl border border-border/50">
+      {header}
       <div className="px-6 py-12 text-center">
         <div className="mx-auto mb-5 flex size-14 items-center justify-center rounded-2xl bg-info/10 ring-4 ring-info/5">
           <UiIcon name="terminal" className="size-6 text-info" />

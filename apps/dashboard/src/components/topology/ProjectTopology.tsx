@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import type { Connection } from "@xyflow/react";
 import { resolveWorkload, type ProjectResources } from "@repo/core";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
+import { usePlatform } from "@/context/PlatformContext";
 import { useToast } from "@/context/ToastContext";
 import { useModal } from "@/context/ModalContext";
 import { useCloudDeployPricing } from "@/hooks/useCloudDeployPricing";
@@ -32,8 +33,11 @@ import { randomUUID } from "@/lib/random-uuid";
 import {
   buildProjectTopology,
   addClusterDatabases,
+  addClusterVolumes,
+  volumeNodeId,
   buildDatabaseReplicaTopology,
   databaseNodeId,
+  applicationNodeId,
   buildClusterReplicaTopology,
   dependencyProblem,
   hasSeparateApplication,
@@ -61,6 +65,8 @@ import { useTopologyData } from "./useTopologyData";
 import { useClusterDatabases } from "./useClusterDatabases";
 import { useTopologyFullscreen } from "./useTopologyFullscreen";
 import { ClusterDatabasePanel } from "./ClusterDatabasePanel";
+import { ClusterVolumePanel } from "./ClusterVolumePanel";
+import { useClusterVolumes } from "./useClusterVolumes";
 import "@/components/scale/scale.css";
 
 function mergeAdvanced(service: Service, patch: Partial<ServiceInput>): Service {
@@ -79,13 +85,16 @@ export default function ProjectTopology({
 }) {
   const { id, projectData, servicesData, refreshServices } = useProjectSettings();
   const { t } = useI18n();
+  const { selfHosted } = usePlatform();
   const project: TopologyProject = projectData;
   const router = useRouter();
   const { showToast } = useToast();
   const { showModal, hideModal } = useModal();
   const showCloudPricing = useCloudDeployPricing();
   const clusterTarget = project.deployTarget === "cluster" || !!project.clusterId;
-  const databases = useClusterDatabases(id, clusterTarget);
+  const resourcePicker = selfHosted && project.deployTarget !== "cloud";
+  const databases = useClusterDatabases(id, resourcePicker);
+  const volumes = useClusterVolumes(id, clusterTarget);
   const runtime = useTopologyData(
     id,
     refreshServices,
@@ -102,6 +111,7 @@ export default function ProjectTopology({
   );
   const [instanceServiceId, setInstanceServiceId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [addKind, setAddKind] = useState<"database" | "volume" | "service" | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [reviewServiceId, setReviewServiceId] = useState<string | undefined>();
   const [intent, setIntent] = useState<DeploymentIntent>("refresh");
@@ -170,16 +180,20 @@ export default function ProjectTopology({
   }, [servicesData.services, changes]);
 
   const fullGraph = useMemo(() => {
-    const graph = addClusterDatabases(
-      buildProjectTopology({
+    const graph = addClusterVolumes(
+      addClusterDatabases(
+        buildProjectTopology({
+          project,
+          services: previewServices,
+          containers: runtime.containers,
+          connections: runtime.connections,
+          cluster: runtime.cluster?.status,
+        }),
         project,
-        services: previewServices,
-        containers: runtime.containers,
-        connections: runtime.connections,
-        cluster: runtime.cluster?.status,
-      }),
+        databases.databases,
+      ),
       project,
-      databases.databases,
+      volumes.volumes,
     );
     for (const node of graph.nodes) {
       node.isNew = changes.some(
@@ -211,6 +225,7 @@ export default function ProjectTopology({
     runtime.cluster,
     changes,
     databases.databases,
+    volumes.volumes,
   ]);
 
   const instanceService = fullGraph.nodes.find(
@@ -242,7 +257,7 @@ export default function ProjectTopology({
   const relation =
     selection?.kind === "edge" ? graph.edges.find((edge) => edge.id === selection.id) : undefined;
   const hasSelection = !!resource || !!relation;
-  const inspectorOpen = hasSelection || (adding && clusterTarget);
+  const inspectorOpen = hasSelection || (adding && resourcePicker && addKind !== "service");
   const currentService = reviewServiceId
     ? servicesData.services.find((service) => service.id === reviewServiceId)
     : undefined;
@@ -397,6 +412,10 @@ export default function ProjectTopology({
       if (busy || hasSavedChanges) return;
       if (edge.databaseId) {
         setSelection({ kind: "node", id: databaseNodeId(edge.databaseId) });
+        return;
+      }
+      if (edge.volumeName) {
+        setSelection({ kind: "node", id: volumeNodeId(edge.volumeName) });
         return;
       }
       if (edge.kind === "binding" && edge.connection) {
@@ -636,9 +655,14 @@ export default function ProjectTopology({
       onKeyDown={(event) => {
         trapFocus(event);
         if (
-          fullscreen && event.key === "Escape" && !event.defaultPrevented &&
+          fullscreen &&
+          event.key === "Escape" &&
+          !event.defaultPrevented &&
           event.currentTarget.contains(event.target as Node) &&
-          !inspectorOpen && !adding && !reviewing && !placement &&
+          !inspectorOpen &&
+          !adding &&
+          !reviewing &&
+          !placement &&
           !event.currentTarget.querySelector('[aria-expanded="true"]')
         ) {
           event.preventDefault();
@@ -681,7 +705,11 @@ export default function ProjectTopology({
             </div>
           </div>
           <div className="topology-toolbar flex min-w-0 flex-wrap items-center gap-2">
-            {fullscreen && <div className="topology-environment min-w-0" inert={inspectorOpen}>{environmentControl}</div>}
+            {fullscreen && (
+              <div className="topology-environment min-w-0" inert={inspectorOpen}>
+                {environmentControl}
+              </div>
+            )}
             <div
               className={`topology-actions flex items-center gap-1.5 transition-opacity ${inspectorOpen ? "opacity-50" : ""}`}
               inert={inspectorOpen}
@@ -697,6 +725,7 @@ export default function ProjectTopology({
                   invalidateProjectCaches(id);
                   void runtime.refresh();
                   void databases.refresh();
+                  void volumes.refresh();
                 }}
               >
                 <UiIcon name="refresh" className={runtime.loading ? "animate-spin" : ""} />
@@ -707,11 +736,12 @@ export default function ProjectTopology({
                   disabled={busy || hasSavedChanges || !!servicesData.error}
                   onClick={() => {
                     setSelection(null);
+                    setAddKind(null);
                     setAdding(true);
                   }}
                 >
                   <UiIcon name="plus" />
-                  {clusterTarget ? "Add database" : "Add service"}
+                  {resourcePicker ? "Add resource" : "Add service"}
                 </Button>
               )}
               <DropdownMenu
@@ -735,6 +765,20 @@ export default function ProjectTopology({
             </Button>
           </div>
         </header>
+        {volumes.stream.error && (
+          <div
+            role="alert"
+            className="flex items-center gap-2 bg-warning/5 px-4 py-2 text-xs text-warning"
+          >
+            <UiIcon name="alert-circle" className="size-4 shrink-0" />
+            <span className="flex-1">
+              Shared file status is unavailable. {volumes.stream.error.message}
+            </span>
+            <Button variant="ghost" size="sm" onClick={volumes.stream.reconnect}>
+              Reconnect
+            </Button>
+          </div>
+        )}
         <div
           className="scale-workspace topology-workspace relative isolate flex-1 overflow-hidden rounded-b-2xl"
           data-inspector={inspectorOpen ? "expanded" : undefined}
@@ -837,19 +881,21 @@ export default function ProjectTopology({
                 Review & apply
               </Button>
             </div>
-          ) : runtime.ready && (
-            <div
-              className="topology-hint absolute bottom-5 end-5 z-10 text-xs text-muted-foreground"
-              inert={inspectorOpen}
-            >
-              {deploymentBusy
-                ? "Deployment in progress"
-                : instanceServiceId
-                  ? "Select an instance to view its health and server"
-                  : graph.nodes.filter((node) => node.kind === "service").length > 1
-                    ? "Drag between services to set startup order"
-                    : "Select an application or service to configure it"}
-            </div>
+          ) : (
+            runtime.ready && (
+              <div
+                className="topology-hint absolute bottom-5 end-5 z-10 text-xs text-muted-foreground"
+                inert={inspectorOpen}
+              >
+                {deploymentBusy
+                  ? "Deployment in progress"
+                  : instanceServiceId
+                    ? "Select an instance to view its health and server"
+                    : graph.nodes.filter((node) => node.kind === "service").length > 1
+                      ? "Drag between services to set startup order"
+                      : "Select an application or service to configure it"}
+              </div>
+            )
           )}
           <button
             className="scale-inspector-backdrop"
@@ -864,13 +910,39 @@ export default function ProjectTopology({
               key={`${selection!.kind}:${selection!.id}`}
               title={resource?.name || "Connection"}
               kind={resource?.tone ?? "service"}
+              icon={resource?.volume ? <UiIcon name="hard-drive" className="size-5" /> : undefined}
               onClose={() => select(null)}
               onBack={instanceServiceId ? back : undefined}
             >
-              {resource?.database ? (
+              {resource?.volume ? (
+                <ClusterVolumePanel
+                  projectId={id}
+                  clusterId={project.clusterId!}
+                  backups={volumes.backups}
+                  onRefresh={volumes.refresh}
+                  volume={resource.volume}
+                  disabled={busy}
+                  onSaved={(volume) => {
+                    volumes.update(volume);
+                    setSelection({ kind: "node", id: volumeNodeId(volume.name) });
+                  }}
+                  onRemoved={() => {
+                    void volumes.refresh();
+                    select(null);
+                  }}
+                  onDeploy={() => review("refresh")}
+                />
+              ) : resource?.database ? (
                 <ClusterDatabasePanel
                   projectId={id}
+                  clusterId={project.clusterId ?? undefined}
                   database={resource.database}
+                  databases={databases.databases}
+                  onChooseCluster={() => {
+                    setInstanceServiceId(null);
+                    setSelection({ kind: "node", id: applicationNodeId(project.id) });
+                    setInitialTab("scaling");
+                  }}
                   disabled={busy}
                   onSaved={(database) => {
                     databases.update(database);
@@ -908,29 +980,116 @@ export default function ProjectTopology({
               )}
             </ScaleDetailsPanel>
           )}
-          {adding && clusterTarget && (
+          {adding && resourcePicker && addKind !== "service" && (
             <ScaleDetailsPanel
-              title="Add database"
-              kind="postgres"
+              title={
+                addKind === "volume"
+                  ? "Shared files"
+                  : addKind === "database"
+                    ? "Add database"
+                    : "Add resource"
+              }
+              kind={addKind === "database" ? "postgres" : "service"}
+              icon={
+                addKind === "volume" ? <UiIcon name="hard-drive" className="size-5" /> : undefined
+              }
+              onBack={addKind ? () => setAddKind(null) : undefined}
               onClose={() => setAdding(false)}
             >
-              <ClusterDatabasePanel
-                projectId={id}
-                disabled={busy}
-                onClose={() => setAdding(false)}
-                onDeploy={() => review("refresh")}
-                onSaved={(database) => {
-                  databases.update(database);
-                  setAdding(false);
-                  setSelection({ kind: "node", id: databaseNodeId(database.id) });
-                }}
-              />
+              {addKind === null ? (
+                <div className="space-y-3">
+                  <p className="mb-4 text-sm text-muted-foreground">
+                    Add what your application needs. OpenShip handles the setup across your servers.
+                  </p>
+                  {[
+                    ...(!clusterTarget
+                      ? [
+                          {
+                            kind: "service" as const,
+                            title: "Service",
+                            description: "Add a service on this application's current server.",
+                            icon: "server" as const,
+                            color: "text-success bg-success/10",
+                          },
+                        ]
+                      : []),
+                    {
+                      kind: "database" as const,
+                      title: "Database on a cluster",
+                      description:
+                        "PostgreSQL or Redis, with replication, backups and an option to import your data.",
+                      icon: "database" as const,
+                      color: "text-primary bg-primary/10",
+                    },
+                    ...(clusterTarget
+                      ? [
+                          {
+                            kind: "volume" as const,
+                            title: "Shared files",
+                            description:
+                              "Uploads and files available to every application instance.",
+                            icon: "hard-drive" as const,
+                            color: "text-info bg-info/10",
+                          },
+                        ]
+                      : []),
+                  ].map((item) => (
+                    <button
+                      key={item.kind}
+                      type="button"
+                      className="flex w-full items-center gap-3 rounded-xl bg-muted/30 p-4 text-start transition-colors hover:bg-muted/50"
+                      onClick={() => setAddKind(item.kind)}
+                    >
+                      <span
+                        className={`grid size-10 shrink-0 place-items-center rounded-xl ${item.color}`}
+                      >
+                        <UiIcon name={item.icon} className="size-5" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium">{item.title}</span>
+                        <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                          {item.description}
+                        </span>
+                      </span>
+                      <UiIcon name="chevron-right" className="size-4 text-muted-foreground" />
+                    </button>
+                  ))}
+                </div>
+              ) : addKind === "volume" ? (
+                <ClusterVolumePanel
+                  projectId={id}
+                  clusterId={project.clusterId!}
+                  backups={volumes.backups}
+                  onRefresh={volumes.refresh}
+                  disabled={busy}
+                  onSaved={(volume) => {
+                    volumes.update(volume);
+                    setAdding(false);
+                    setSelection({ kind: "node", id: volumeNodeId(volume.name) });
+                  }}
+                  onRemoved={() => setAdding(false)}
+                  onDeploy={() => review("refresh")}
+                />
+              ) : (
+                <ClusterDatabasePanel
+                  projectId={id}
+                  clusterId={project.clusterId ?? undefined}
+                  disabled={busy}
+                  onClose={() => setAdding(false)}
+                  onDeploy={() => review("refresh")}
+                  onSaved={(database) => {
+                    databases.update(database);
+                    setAdding(false);
+                    setSelection({ kind: "node", id: databaseNodeId(database.id) });
+                  }}
+                />
+              )}
             </ScaleDetailsPanel>
           )}
         </div>
       </section>
       <AddServiceModal
-        open={adding && !clusterTarget}
+        open={adding && (!resourcePicker || addKind === "service")}
         projectId={id}
         projectName={project.name}
         isCloudProject={project.deployTarget === "cloud"}

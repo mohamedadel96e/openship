@@ -53,3 +53,22 @@ export function mapAccounts(installations: GitHubInstallation[]): MappedAccount[
   }
   return [...accounts.values()];
 }
+
+/** One row per repository, retaining App coverage and remote-capable tokens. */
+export function mergeRepositorySources(...lists: MappedRepository[][]): MappedRepository[] {
+  const merged = new Map<string, MappedRepository>();
+  for (const repo of lists.flat()) {
+    const key = repo.full_name.toLowerCase();
+    const prior = merged.get(key);
+    if (!prior) {
+      merged.set(key, repo);
+      continue;
+    }
+    const sources = new Set([prior.source, repo.source]);
+    const app = sources.has("app") || sources.has("both");
+    const cli = sources.has("cli") || sources.has("both");
+    const source = app ? cli ? "both" : "app" : sources.has("token") ? "token" : prior.source;
+    merged.set(key, { ...repo, source });
+  }
+  return [...merged.values()];
+}

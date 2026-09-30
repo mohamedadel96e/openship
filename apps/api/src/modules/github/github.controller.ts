@@ -122,7 +122,7 @@ export async function deleteWebhook(c: Context) {
   return c.json(data, 200);
 }
 export async function pollConnect(c: Context) {
-  const data = await operationData(c, ops().pollConnect(call(c)));
+  const data = await operationData(c, ops().pollConnect(call(c), { state: c.req.query("state") }));
   return c.json(data, data.status === "none" ? 404 : 200);
 }
 
@@ -154,6 +154,10 @@ function getSetCookieHeaders(headers: Headers): string[] {
  *  it's available when GitHub redirects back to the callback URL.
  */
 export async function connectRedirect(c: Context) {
+  if (env.CLOUD_MODE) {
+    const { startRepositoryAuthorization } = await import("./github-repository.controller");
+    return startRepositoryAuthorization(c);
+  }
   // HIGH #8 — connectRedirect runs per-user (the redirect is initiated
   // from a popup that carries the user's session cookies). The sync
   // `getGitHubAuthMode()` returns the LOCAL-only mode and reports "cli"

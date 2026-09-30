@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+vi.mock("@repo/platform/engine/modules/github/github.http", async (original) => ({
+  ...await original<object>(),
+  ghSend: vi.fn(async () => Response.json({ login: "owner" }, { headers: { "x-oauth-scopes": "repo" } })),
+}));
 import { Hono } from "hono";
 import { seedOwner, seedServer, installFakeRunner, db, schema, repos, type SeededOwner } from "../jobs/_harness";
 import { eq } from "@repo/db";

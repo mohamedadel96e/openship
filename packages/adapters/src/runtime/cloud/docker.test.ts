@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PassThrough } from "node:stream";
 import type { Oblien } from "oblien";
 import { CloudDockerRuntime } from "./docker";
 import { DockerRuntime } from "../docker";
 import { BuildLogger } from "../build-pipeline";
 import type { MultiServiceDeployConfig, MultiServiceDeployResult } from "../types";
 import { CLOUD_DOCKER_BRIDGE_VERSION } from "./docker-bridge-source";
+import * as dockerTransport from "./docker-transport";
 import { CloudInfraProvider } from "../../infra/cloud";
 import { resolveExecutor } from "../../backup/registry";
 import { DockerBackupExecutor } from "../../backup/executors/docker";
@@ -79,6 +81,42 @@ beforeEach(async () => {
 });
 afterEach(async () => { await runtime?.dispose(); vi.restoreAllMocks(); });
 describe("containers on one Oblien Docker workspace", () => {
+  it("reports a missing provider proxy immediately without reinstalling or restarting the bridge", async () => {
+    ws.runtime.mockResolvedValue({ proxy: () => ({ fetch: async () => new Response("404 page not found", {
+      status: 404, headers: { "x-request-id": "provider-request-404" },
+    }) }) });
+    ws.workloads = { list: vi.fn(), create: vi.fn(), stop: vi.fn(), start: vi.fn() };
+    await expect(runtime["ensureBridge"]()).rejects.toMatchObject({
+      code: "CLOUD_RUNTIME_PROXY_UNAVAILABLE", statusCode: 502,
+      message: expect.stringContaining("HTTP 404"),
+    });
+    expect(runtime.executor.writeFile).not.toHaveBeenCalled();
+    expect(ws.workloads.list).not.toHaveBeenCalled();
+    expect(ws.restart).not.toHaveBeenCalled();
+    expect(ws.delete).not.toHaveBeenCalled();
+    ws.runtime.mockResolvedValue({ proxy: () => ({ fetch: async () => new Response(CLOUD_DOCKER_BRIDGE_VERSION) }) });
+    await expect(runtime["ensureBridge"]()).resolves.toBeUndefined();
+    expect(runtime.executor.writeFile).not.toHaveBeenCalled();
+  });
+  it("reports the failed health check instead of the provider's successful log-fetch envelope", async () => {
+    vi.useFakeTimers();
+    ws.runtime.mockResolvedValue({ proxy: () => ({ fetch: async () => new Response("bad gateway", { status: 502 }) }) });
+    ws.workloads = {
+      list: vi.fn(async () => [{ id: "bridge-a", name: "openship-docker-api-v1", state: "running" }]),
+      stop: vi.fn(), start: vi.fn(),
+      logs: vi.fn(async () => ({ logs: "", success: true, _serverId: "node2" })),
+    };
+    try {
+      const result = runtime["ensureBridge"]().catch(error => error as Error);
+      await vi.advanceTimersByTimeAsync(61_000);
+      const error = await result;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("HTTP 502");
+      expect((error as Error).message).toContain("Bridge state: running");
+      expect((error as Error).message).not.toContain('"success"');
+      expect((error as Error).message).not.toContain("_serverId");
+    } finally { vi.useRealTimers(); }
+  });
   it("applies environment inside the existing workspace without replacing or restarting the VM", async () => {
     const apply = vi.spyOn(DockerRuntime.prototype, "applyEnvironment").mockResolvedValue({ containerId: "replacement-a" });
     const options = { projectId: "project-a", serviceName: "api", onReplaced: vi.fn() };
@@ -130,6 +168,135 @@ describe("containers on one Oblien Docker workspace", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+  it.each([401, 403, 405, 501])("reports proxy HTTP %s before changing the workspace", async status => {
+    const fetch = vi.fn(async () => new Response("private-provider-response", {
+      status, headers: { "x-request-id": "provider-request-123" },
+    }));
+    ws.runtime.mockResolvedValue({ proxy: () => ({ fetch }) });
+    const error = await runtime["ensureBridge"]().catch(error => error);
+    expect(error).toMatchObject([401, 403].includes(status)
+      ? { statusCode: 503, code: "CLOUD_DOCKER_PROXY_UNAVAILABLE" }
+      : { statusCode: 502, code: "CLOUD_RUNTIME_PROXY_UNAVAILABLE" });
+    expect(error.message).toContain(`HTTP ${status}`);
+    expect(error.message).toContain("provider-request-123");
+    expect(error.message).toContain("workspace-a");
+    expect(error.message).not.toContain("private-provider-response");
+    expect(fetch).toHaveBeenCalledTimes(status === 401 ? 2 : 1);
+    if (status === 401) expect(ws.runtime).toHaveBeenCalledWith({ force: true });
+    else expect(ws.runtime).not.toHaveBeenCalledWith({ force: true });
+    expect(runtime.executor.exec).not.toHaveBeenCalled();
+    expect(runtime.executor.writeFile).not.toHaveBeenCalled();
+    expect(ws.restart).not.toHaveBeenCalled();
+    expect(ws.delete).not.toHaveBeenCalled();
+    // Failure is not cached; a provider repair allows the same VM to recover.
+    ws.runtime.mockResolvedValue({ proxy: () => ({ fetch: async () => new Response(CLOUD_DOCKER_BRIDGE_VERSION) }) });
+    await expect(runtime["ensureBridge"]()).resolves.toBeUndefined();
+  });
+  it("refreshes a stale runtime credential once after a cold workspace restart", async () => {
+    const stale = vi.fn(async () => new Response("unauthorized", { status: 401 }));
+    const fresh = vi.fn(async () => new Response(CLOUD_DOCKER_BRIDGE_VERSION));
+    ws.runtime.mockImplementation(async (options?: { force?: boolean }) => ({ proxy: () => ({ fetch: options?.force ? fresh : stale }) }));
+    await expect(runtime["ensureBridge"]()).resolves.toBeUndefined();
+    expect(stale).toHaveBeenCalledOnce();
+    expect(fresh).toHaveBeenCalledOnce();
+    expect(ws.runtime).toHaveBeenCalledTimes(2);
+    expect(ws.runtime).toHaveBeenLastCalledWith({ force: true });
+    expect(runtime.executor.exec).not.toHaveBeenCalled();
+    expect(ws.restart).not.toHaveBeenCalled();
+    expect(ws.delete).not.toHaveBeenCalled();
+  });
+  it("keeps a namespace credential rejection closed during runtime refresh", async () => {
+    const fetch = vi.fn(async () => new Response("unauthorized", { status: 401 }));
+    ws.runtime.mockImplementation(async (options?: { force?: boolean }) => {
+      if (options?.force) throw Object.assign(new Error("private credential rejected"), { status: 403 });
+      return { proxy: () => ({ fetch }) };
+    });
+    const error = await runtime["ensureBridge"]().catch(error => error);
+    expect(error).toMatchObject({ statusCode: 503, code: "CLOUD_DOCKER_PROXY_UNAVAILABLE" });
+    expect(error.message).toContain("Runtime credential refresh failed");
+    expect(error.message).not.toContain("private credential");
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(ws.runtime).toHaveBeenCalledTimes(2);
+    expect(runtime.executor.exec).not.toHaveBeenCalled();
+    expect(ws.restart).not.toHaveBeenCalled();
+  });
+  it("revalidates a cached bridge after a failed handshake without replaying a Docker request", async () => {
+    await runtime["ensureBridge"]();
+    let refreshed = false;
+    const socket = {} as WebSocket;
+    ws.runtime.mockImplementation(async (options?: { force?: boolean }) => {
+      if (options?.force) refreshed = true;
+      return { proxy: () => ({
+        ws: () => socket,
+        fetch: async () => refreshed ? new Response(CLOUD_DOCKER_BRIDGE_VERSION) : new Response("unauthorized", { status: 401 }),
+      }) };
+    });
+    const upstream = new PassThrough();
+    const open = vi.spyOn(dockerTransport, "dockerWebSocketStream")
+      .mockRejectedValueOnce(new Error("Cloud Docker connection failed"))
+      .mockResolvedValueOnce(upstream);
+    try {
+      await expect(runtime["connectBridge"]()).resolves.toBe(upstream);
+      expect(open).toHaveBeenCalledTimes(2);
+      expect(ws.runtime).toHaveBeenCalledWith({ force: true });
+      expect(runtime.executor.exec).not.toHaveBeenCalled();
+      expect(ws.restart).not.toHaveBeenCalled();
+      expect(ws.delete).not.toHaveBeenCalled();
+    } finally { upstream.destroy(); }
+  });
+  it("bounds failed WebSocket handshakes to two attempts", async () => {
+    ws.runtime.mockResolvedValue({ proxy: () => ({
+      fetch: async () => new Response(CLOUD_DOCKER_BRIDGE_VERSION), ws: () => ({} as WebSocket),
+    }) });
+    const open = vi.spyOn(dockerTransport, "dockerWebSocketStream").mockRejectedValue(new Error("Cloud Docker connection failed"));
+    await expect(runtime["connectBridge"]()).rejects.toThrow("Cloud Docker connection failed");
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(runtime.executor.exec).not.toHaveBeenCalled();
+    expect(ws.restart).not.toHaveBeenCalled();
+  });
+  it.each(["upstream", "network", "timeout"])("reports a %s failure without treating log retrieval as readiness", async failure => {
+    vi.useFakeTimers();
+    ws.runtime.mockResolvedValue({ proxy: () => ({ fetch: async () => {
+      if (failure === "upstream") return new Response("private-provider-response", { status: 502 });
+      throw Object.assign(new Error("https://workspace.example/?token=private-token"), {
+        name: failure === "timeout" ? "TimeoutError" : "TypeError",
+      });
+    } }) });
+    ws.workloads = {
+      list: vi.fn(async () => [{ id: "bridge-a", name: "openship-docker-api-v1", state: "running" }]),
+      stop: vi.fn(), start: vi.fn(), logs: vi.fn(async () => ({ logs: "", success: true, _serverId: "node2" })),
+    };
+    try {
+      const outcome = runtime["ensureBridge"]().catch(error => error);
+      await vi.advanceTimersByTimeAsync(61_000);
+      const error = await outcome;
+      expect(error).toMatchObject({ statusCode: 503, code: "CLOUD_DOCKER_BRIDGE_NOT_READY" });
+      expect(error.message).toContain(failure === "upstream" ? "HTTP 502" : failure === "timeout" ? "timed out" : "network request failed");
+      expect(error.message).toContain("Bridge state: running; workspace workspace-a");
+      expect(error.message).not.toMatch(/private-|success|_serverId/);
+      expect(ws.workloads.logs).not.toHaveBeenCalled();
+      expect(ws.restart).not.toHaveBeenCalled();
+      expect(ws.delete).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+  it("bounds an unexpected health body and waits for the managed bridge to start", async () => {
+    const cancel = vi.fn();
+    let running = false;
+    ws.runtime.mockResolvedValue({ proxy: () => ({ fetch: async () => running
+      ? new Response(CLOUD_DOCKER_BRIDGE_VERSION)
+      : new Response(new ReadableStream({
+        start(controller) { controller.enqueue(new Uint8Array(1024)); }, cancel,
+      })),
+    }) });
+    ws.workloads = {
+      list: vi.fn(async () => []),
+      create: vi.fn(async () => { running = true; }),
+    };
+    await expect(runtime["ensureBridge"]()).resolves.toBeUndefined();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(ws.workloads.create).toHaveBeenCalledOnce();
+    expect(ws.restart).not.toHaveBeenCalled();
   });
   it("allocates distinct edge ports for services sharing a container port, and reuses them on redeploy", async () => {
     const first = await runtime.deployServiceWorkload(group, { ...config, cloudEndpoints: [...config.cloudEndpoints!, { hostname: "console.opsh.io", port: 9090, custom: false }] });

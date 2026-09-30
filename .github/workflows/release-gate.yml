@@ -29,10 +29,44 @@ on:
   workflow_call: {}
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   scaling:
     name: Scaling E2E
     uses: ./.github/workflows/scaling-e2e.yml
+
+  acme-dns:
+    name: Wildcard HTTPS (real ACME + DNS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - run: bun install --frozen-lockfile
+      - name: Install the pinned ACME test authority and DNS server
+        env:
+          GOBIN: ${{ runner.temp }}/acme-test-tools
+        run: |
+          go install github.com/letsencrypt/pebble/v2/cmd/pebble@v2.10.1
+          go install github.com/letsencrypt/pebble/v2/cmd/pebble-challtestsrv@v2.10.1
+          echo "$GOBIN" >> "$GITHUB_PATH"
+      - name: Issue, recover and renew wildcard certificates using real DNS proof
+        working-directory: packages/adapters
+        env:
+          RUN_ACME_E2E: '1'
+        run: node ../../node_modules/vitest/vitest.mjs run test/acme-dns.e2e.test.ts --maxWorkers=1
 
   test:
     name: Typecheck + tests
@@ -40,6 +74,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Reuse a verified successful job
+        id: resume
+        uses: ./.github/actions/release-resume
+        with:
+          scope: unit
+          job-name: Typecheck + tests
+          workflow: .github/workflows/release-gate.yml
+          job-id: test
 
       # `latest`, matching what CI has always run these suites on. Deliberately NOT
       # switched to the pinned .bun-version here: these two jobs now block releases,
@@ -47,11 +92,13 @@ jobs:
       # get a gate whose first red run nobody can attribute. Worth revisiting as its
       # own change — a gate arguably should be reproducible.
       - name: Setup Bun
+        if: steps.resume.outputs.reused != 'true'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
       - name: Cache bun install
+        if: steps.resume.outputs.reused != 'true'
         uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
@@ -60,14 +107,17 @@ jobs:
             ${{ runner.os }}-bun-
 
       - name: Install dependencies
+        if: steps.resume.outputs.reused != 'true'
         run: bun install --frozen-lockfile
 
       # Covers packages/* too: they resolve to source, so an error in @repo/db surfaces
       # here. This is the only typecheck between a tag and a published image.
       - name: Typecheck apps/api
+        if: steps.resume.outputs.reused != 'true'
         run: bun run --cwd apps/api lint
 
       - name: Typecheck SDK and shared platform
+        if: steps.resume.outputs.reused != 'true'
         run: |
           bun run --cwd packages/contracts lint
           bun run --cwd packages/platform lint
@@ -80,6 +130,7 @@ jobs:
       # migrations-additive (the static ADD COLUMN ... NOT NULL scan). Those are the
       # coverage for "the update crash-looped on migrations".
       - name: Run tests
+        if: steps.resume.outputs.reused != 'true'
         run: bun run test
 
   sdk-package:
@@ -90,15 +141,31 @@ jobs:
         node: ['22', '24']
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Reuse a verified successful job
+        id: resume
+        uses: ./.github/actions/release-resume
+        with:
+          scope: sdk
+          job-name: Installed SDK (Node ${{ matrix.node }})
+          workflow: .github/workflows/release-gate.yml
+          job-id: sdk-package
+
       - uses: actions/setup-node@v6
+        if: steps.resume.outputs.reused != 'true'
         with:
           node-version: ${{ matrix.node }}
       - uses: oven-sh/setup-bun@v2
+        if: steps.resume.outputs.reused != 'true'
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
+        if: steps.resume.outputs.reused != 'true'
       - run: bun run --cwd packages/openship build
+        if: steps.resume.outputs.reused != 'true'
       - run: bun run --cwd packages/openship test:package
+        if: steps.resume.outputs.reused != 'true'
 
   # Rollback and restore against a REAL Docker daemon. This is the only job that proves
   # those paths work at all; every other test in the repo mocks the runtime. It lived in
@@ -124,13 +191,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Reuse a verified successful job
+        id: resume
+        uses: ./.github/actions/release-resume
+        with:
+          scope: ${{ matrix.scope }}
+          job-name: E2E (real Docker, ${{ matrix.scope }})
+          workflow: .github/workflows/release-gate.yml
+          job-id: e2e-docker
 
       - name: Setup Bun
+        if: steps.resume.outputs.reused != 'true'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
       - name: Cache bun install
+        if: steps.resume.outputs.reused != 'true'
         uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
@@ -139,16 +219,19 @@ jobs:
             ${{ runner.os }}-bun-
 
       - name: Install dependencies
+        if: steps.resume.outputs.reused != 'true'
         run: bun install --frozen-lockfile
 
       # Fail here rather than inside vitest, so "the runner lost Docker" is
       # distinguishable at a glance from "a rollback assertion broke".
       - name: Check the Docker daemon
+        if: steps.resume.outputs.reused != 'true'
         run: |
           docker info
           docker version
 
       - name: Run real-daemon E2E
+        if: steps.resume.outputs.reused != 'true'
         env:
           RUN_DOCKER_E2E: "1"
           E2E_SCOPE: ${{ matrix.scope }}

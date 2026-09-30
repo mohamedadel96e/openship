@@ -103,7 +103,7 @@
     "deletionInProgress": "Another delete is already running for this project",
     "deletionInProgressTitle": "Deletion in progress",
     "confirmForceOrphan": "Some resources couldn't be removed from the server. Delete the project anyway and clean them up automatically later?",
-    "teardownFailedAt": "Teardown failed at: {reasons}. Retry, or force-delete to orphan them.",
+    "teardownFailedAt": "Cleanup could not finish: {reasons}. The project is still saved. Retry deletion after resolving this issue.",
     "teardownFailed": "Teardown failed",
     "cleanupFailedTitle": "Cleanup failed",
     "alreadyDeleted": "Project already deleted",

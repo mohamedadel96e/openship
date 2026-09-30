@@ -1,4 +1,5 @@
 import { getMcpTools } from "./mcp-tools";
+import { env } from "@repo/platform/engine/config/index";
 
 /**
  * MCP `prompts` — the guided-flow catalog. Tools tell an agent WHAT it can do
@@ -24,6 +25,7 @@ interface PromptDef {
   title: string;
   description: string;
   arguments?: McpPromptArgument[];
+  localOnly?: boolean;
   /** Build the guidance body. `ref(method, path)` → the tool's generated name. */
   build: (args: Record<string, string>, ref: (method: string, path: string) => string) => string;
 }
@@ -54,7 +56,7 @@ export function workspaceInstructions(workspace?: { organizationId: string | nul
  * the issue tracker rather than silently working around it.
  */
 const BUG_REPORT =
-  "If you hit what looks like a bug in Openship itself — an unexpected 500, a tool that misbehaves, or a deploy that fails for a platform reason rather than your input — tell the user to open an issue at https://github.com/oblien/openship/issues, including the tool name, the arguments you sent, and any error text returned.";
+  "If an Openship tool fails unexpectedly, report the tool name, error code and a redacted reproduction at https://github.com/oblien/openship/issues. Remove tokens, passwords, environment values and other secrets from arguments and logs before sharing them.";
 
 const PROMPTS: PromptDef[] = [
   {
@@ -71,12 +73,17 @@ const PROMPTS: PromptDef[] = [
         `- Deployments — ${ref("POST", "/api/deployments/build/access")} (deploy), ${ref("GET", "/api/deployments/:id")} (status), ${ref("GET", "/api/deployments/:id/logs")} (logs), rollback/redeploy/restart.`,
         `- GitHub — ${ref("GET", "/api/github/home")} (accounts + repos in one call), browse repos/branches, and ${ref("GET", "/api/github/repos/:owner/:repo/detect")} for build config (read-only; you cannot create/delete repos via MCP).`,
         `- Catalog apps — ${ref("GET", "/api/apps/catalog")} (list), ${ref("POST", "/api/apps")} (install).`,
-        "- Domains, jobs, webhooks, notifications, analytics, backups — read history and change config.",
+        "- Domains, jobs, webhooks, notifications, analytics, backups — inspect current state, configure, run and recover.",
+        "- Self-hosted infrastructure — private networks, server clusters, application scaling, shared files and managed databases. These tools do not implement policy-driven autoscaling or live worker joining.",
         "",
         "Guided flows (fetch these prompts for step-by-step chains):",
         "- `deploy-from-git` — deploy a GitHub/linked repo.",
         "- `deploy-a-folder` — deploy a local source folder (has an out-of-band upload step).",
         "- `install-catalog-app` — install a one-click app.",
+        "- `cluster-and-scale` — private networking → server cluster → optional shared files → application deployment → scale → recovery/cleanup (self-hosted).",
+        "- `cluster-database` — provision, connect, back up and recover a managed database (self-hosted).",
+        "- `backup-and-restore` — destination → policy → backup → prepared restore → apply.",
+        "- `migrate-docker-project` — inspect → preview → migrate → verify → explicit cutover (self-hosted).",
         "",
         "Permission scoping to know about:",
         "- A read-only token sees only GET tools. A restricted (scoped) token sees only tools for the resources it was granted.",
@@ -146,11 +153,70 @@ const PROMPTS: PromptDef[] = [
       ].join("\n");
     },
   },
+  {
+    name: "cluster-and-scale",
+    title: "Run an application across servers",
+    description: "Private networking, automated server setup, shared files, application deployment, guarded replica changes and recovery. Self-hosted only.",
+    localOnly: true,
+    build: (_args, ref) => [
+      "This workflow runs on the Openship controller and its registered servers, not the MCP client. Use tools/list inputSchema for exact fields. Manual replicas (1–100) are supported; metric-driven autoscaling, adding/draining live workers and Compose application scaling are not implemented.",
+      `1. Discover infrastructure with ${ref("GET", "/api/system/networks/capabilities")}, ${ref("GET", "/api/system/servers")}, ${ref("GET", "/api/system/networks")} and ${ref("GET", "/api/system/compute-clusters")}. Reuse suitable resources. Network and runtime mutations require fleet administration and access to every selected server.`,
+      `2. For existing native private networking, inspect each host with ${ref("POST", "/api/system/servers/:id/network/inspect")}, register its actual addresses with ${ref("POST", "/api/system/networks")}, then ${ref("POST", "/api/system/networks/:id/verify")} using the saved revision. Poll ${ref("GET", "/api/system/networks/:id")} and inspect the dated peer report. Registration does not create provider networks or open provider firewalls.`,
+      `3. Alternatively, start managed WireGuard preparation with ${ref("POST", "/api/system/networks/preparations")}. Persist requestId and reuse it after a lost response. Poll ${ref("GET", "/api/system/networks/preparations/:preparationId")}; follow operationId to ${ref("GET", "/api/system/networks/operations/:operationId")}. Review host changes and firewall requirements, then apply the exact planHash with ${ref("POST", "/api/system/networks/operations/:operationId/apply")}. Poll the same operation to completion. Full bidirectional member access is required for k3s. Failed operations offer explicit resume/rollback; do not create competing plans.`,
+      `4. Create the compute cluster with ${ref("POST", "/api/system/compute-clusters")} using that networkId and its serverIds. Start ${ref("POST", "/api/system/compute-clusters/:id/runtime")} with the cluster’s revision and a stable requestId. Poll ${ref("GET", "/api/system/compute-clusters/:id/runtime")}; accepted is not ready. On failed/interrupted work, inspect per-host errors, fix prerequisites and use ${ref("POST", "/api/system/compute-clusters/:id/runtime/retry")} with the latest sequence. Never change membership while the runtime exists.`,
+      `Optional shared files: use ${ref("POST", "/api/system/compute-clusters/:id/storage")} with at least two independent servers, reviewed empty directories and a stable requestId. Follow ${ref("GET", "/api/system/compute-clusters/:id/storage")} until ready. Failed/interrupted operations require an explicit retry with the current sequence. Set an external backup destination for recoverable archives. Once the project selects this cluster, create its shared volume with ${ref("POST", "/api/projects/:id/cluster/volumes")}, add it to config.mounts and deploy. Observe copies and attachment health with ${ref("GET", "/api/projects/:id/cluster/volumes")}. Host bind mounts and Compose conversion remain separate migration work.`,
+      `5. Create or select a stateless single application. Read ${ref("GET", "/api/projects/:id/cluster")}, then ${ref("PATCH", "/api/projects/:id/cluster")} with clusterId, stateless:true, expectedUpdatedAt and config.replicas. Built images need config.imageRepository in a registry reachable by every node; configure registry credentials before deploying. This selects the next deployment target, it does not migrate persistent data.`,
+      `6. Start ${ref("POST", "/api/deployments/build/access")} with projectId. Poll ${ref("GET", "/api/deployments/:id")} and ${ref("GET", "/api/deployments/:id/logs")}; inspect ${ref("GET", "/api/deployments/:id/pending")} for decisions. Read ${ref("GET", "/api/projects/:id/cluster")} for observed ready/available pods and ${ref("GET", "/api/projects/:id/pending-actions")} for routing/TLS blockers. Desired replicas alone do not prove health.`,
+      `7. For each scale up or down, read cluster state again and call ${ref("POST", "/api/projects/:id/cluster/scale")} with replicas, expectedDeploymentId=activeDeploymentId and expectedUpdatedAt=updatedAt. Poll the returned deploymentId, then confirm ready/available replicas and public routing. Scaling reuses the retained image. On 409, re-read active state; do not replay stale guards or silently change intent.`,
+      `8. Recover through deployment logs, pending actions and the retained-image rollback tool ${ref("POST", "/api/deployments/:id/rollback")}. Do not reset/reinstall infrastructure merely because an observation failed. Cleanup is explicit: disconnect and remove dependent applications, databases and shared volumes, then remove empty shared storage with ${ref("DELETE", "/api/system/compute-clusters/:id/storage")}. Remove the runtime with ${ref("DELETE", "/api/system/compute-clusters/:id/runtime")} using its current sequence and poll until removed; delete the empty compute cluster with its current revision. External archives are preserved. Remove managed networking through a reviewed removal plan, or the unused native network record with its revision. Never bypass dependency guards.`,
+    ].join("\n\n"),
+  },
+  {
+    name: "cluster-database",
+    title: "Provision and recover a managed cluster database",
+    description: "Add and scale PostgreSQL or Redis, back up and recover data, import existing project backups and review upgraded copies before changing application connections.",
+    localOnly: true,
+    build: (_args, ref) => [
+      `1. Read ${ref("GET", "/api/projects/:id/cluster")} and ${ref("GET", "/api/projects/:id/cluster/databases")}. A ready cluster is required. Database replication is separate from scaling the application.`,
+      `2. Create with ${ref("POST", "/api/projects/:id/cluster/databases")} and a stable requestId. Use only the engine/topology options advertised by inputSchema. Redis cluster mode requires clusterAwareClient:true; applications must support that protocol. Poll ${ref("POST", "/api/projects/:id/cluster/databases/inspect")} with databaseId and observe:true for native readiness, volumes and errors.`,
+      `3. Save a supported database connection through ${ref("POST", "/api/projects/:id/cluster/databases/connect")}. Replacing an existing managed connection requires explicit review and replace.databaseId plus replace.expectedSequence for the source; the destination uses its own expectedSequence. Read the returned connection/environment state, then redeploy the app separately to apply it. Never replace a saved environment value with its masked display value.`,
+      `4. Change permitted resources, PostgreSQL replicas, Redis shards or backup configuration with ${ref("PATCH", "/api/projects/:id/cluster/databases")} using expectedSequence from fresh inspection. Redis shard changes require confirmRedisRebalance:true after review and a verified recent backup. Failed/interrupted operations use ${ref("POST", "/api/projects/:id/cluster/databases/retry")}; re-read before retrying stale sequences. Engine changes and volume shrink are not supported; PostgreSQL major upgrades use a new copy.`,
+      `5. Configure an eligible S3 destination and trigger ${ref("POST", "/api/projects/:id/cluster/databases/backup")} for PostgreSQL or Redis. Poll inspection until the native backup completes. Recover into a NEW database using restoreFrom and a backup name from inspection; verify data before switching connections. Redis captures consistent snapshots per shard, not a transaction across the cluster. The source database is retained.`,
+      `Import or upgrade: ${ref("GET", "/api/projects/:id/cluster/databases/imports")} lists eligible existing Docker database backups. Create with importFrom.runId and importFrom.artifactName plus a ready clusterId while the app is still on Docker. For a PostgreSQL 17-to-18 upgrade, create with copyFrom.databaseId and its current expectedSequence, preserving the original. After verifying the target, choose that cluster for the application, explicitly save or replace its database connection and deploy. Pause source writes and take a fresh recovery point before a final cutover; later writes are not copied automatically.`,
+      `6. Deletion uses ${ref("DELETE", "/api/projects/:id/cluster/databases")} with current expectedSequence and the database’s exact name. Review active connections and the deleteData choice first. Poll until cleanup finishes; keeping data can retain dependencies that block runtime removal.`,
+    ].join("\n\n"),
+  },
+  {
+    name: "backup-and-restore",
+    title: "Back up application data and restore it",
+    description: "Configure and test a destination, create/run a policy, follow every run, then prepare and explicitly apply a restore.",
+    build: (_args, ref) => [
+      `1. Read ${ref("GET", "/api/backup-destinations")} and ${ref("GET", "/api/projects/:projectId/backup-policies")}. Reuse a suitable destination/policy. New destinations use ${ref("POST", "/api/backup-destinations")} and ${ref("POST", "/api/backup-destinations/:id/preflight")}. Resolve failed connectivity/permission checks before starting backups.`,
+      `2. Create or update the project/service policy with ${ref("POST", "/api/projects/:projectId/backup-policies")} or ${ref("PATCH", "/api/backup-policies/:policyId")}. Inspect payload, selected volumes, database dump support, schedule and retention. Do not assume a source-code repository backs up application data.`,
+      `3. Run ${ref("POST", "/api/backup-policies/:policyId/run")}. Follow EVERY returned runId/runIds with ${ref("GET", "/api/backup-runs/:runId")}. A queued/running job is not a usable backup. Read history with ${ref("GET", "/api/projects/:projectId/backup-runs")}; query.before continues before the last run in the previous page. Protect a recovery point from retention with ${ref("POST", "/api/backup-runs/:runId/protect")} when needed.`,
+      `4. Restore starts with ${ref("POST", "/api/backup-runs/:runId/restore/prepare")}. Keep restoreId and confirmationToken. Poll ${ref("GET", "/api/backup-restores/:restoreId")} until prepared and review the target/mode. Preparation does not apply data.`,
+      `5. Apply only the reviewed restore with ${ref("POST", "/api/backup-restores/:restoreId/apply")} and confirmationToken, then poll status through completion. In-place apply can stop services and overwrite data. ${ref("POST", "/api/backup-restores/:restoreId/cancel")} requests cancellation; it cannot undo already-written data. Verify application health after restoration.`,
+    ].join("\n\n"),
+  },
+  {
+    name: "migrate-docker-project",
+    title: "Migrate Docker workloads with verified cutover",
+    description: "Discover/adopt existing containers or move an Openship project, preserving environment/data and explicitly handling partial transfers and cutover.",
+    localOnly: true,
+    build: (_args, ref) => [
+      `1. Discover servers, then ${ref("POST", "/api/migration/scan")} on the source. Select container IDs from that scan to distinguish services with the same name in different Compose groups. Secrets are masked; the server rediscovers real source values. Never submit masked values as replacement secrets.`,
+      `2. Inspect repository Compose configuration with ${ref("POST", "/api/migration/repo-compose")} if linking a repo. Review service mapping, environment overrides, volumes and routes, then ${ref("POST", "/api/migration/preview")} with the same selected services and destination.`,
+      `3. Start ${ref("POST", "/api/migration/migrate")} and keep migrationId and confirmationToken. Leave killOriginals:false to pause for explicit cutover; true authorizes automatic destruction of original containers after verification. Existing Openship projects use ${ref("POST", "/api/migration/project")} for move/copy instead. These tools move Docker workloads, not live k3s databases.`,
+      `4. Poll ${ref("GET", "/api/migration/migrations/:id")}. Respond only to the returned pendingPrompt using ${ref("POST", "/api/migration/migrations/:id/respond")} and its prompt/action IDs. Partial transfers use ${ref("POST", "/api/migration/migrations/:id/resume")} after reviewing failed paths; skipping a path excludes its data.`,
+      `5. At awaiting_cutover, verify target deployment, saved environment, volumes, routes and health. Confirm with ${ref("POST", "/api/migration/migrations/:id/cutover")} and the confirmationToken; kill:false retains originals stopped, while kill:true deletes them. Re-read status to confirm completion.`,
+      `6. Before cutover, ${ref("POST", "/api/migration/migrations/:id/cancel")} requests rollback. For a failed migration, ${ref("POST", "/api/migration/migrations/:id/cleanup-target")} removes copied target data; inspect ownership and failure state first. Deleting a terminal migration record removes history only.`,
+    ].join("\n\n"),
+  },
 ];
 
 /** Client-facing `prompts/list` descriptors. */
 export function listPrompts() {
-  return PROMPTS.map((p) => ({
+  return PROMPTS.filter((p) => !p.localOnly || !env.CLOUD_MODE).map((p) => ({
     name: p.name,
     title: p.title,
     description: p.description,
@@ -167,7 +233,7 @@ export function getPrompt(
   args: Record<string, string>,
 ): { description: string; messages: unknown[] } | null {
   const prompt = PROMPTS.find((p) => p.name === name);
-  if (!prompt) return null;
+  if (!prompt || (prompt.localOnly && env.CLOUD_MODE)) return null;
   const text = `${workspaceInstructions()}\n\n${prompt.build(args ?? {}, toolRef)}\n\n${BUG_REPORT}`;
   return {
     description: prompt.description,

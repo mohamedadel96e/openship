@@ -269,21 +269,28 @@ function redactBotToken(message: string, botToken: string): string {
 
 /* ─── Channel workers ─────────────────────────────────────────────────────── */
 
+class PermanentNotificationError extends Error {}
+
 async function sendEmail(
   delivery: NotificationDelivery,
   channel: NotificationChannel,
 ): Promise<void> {
-  const config = channel.config as { address?: string };
+  const config = channel.config as { address?: string; accountEmail?: boolean };
   if (!config?.address) {
     throw new Error("Email channel has no address configured");
   }
 
+  if (config.accountEmail || channel.id.startsWith("nch_account_email_")) {
+    const account = await repos.user.findById(delivery.userId);
+    if (!account?.emailVerified || account.email !== config.address) throw new PermanentNotificationError("Account email is no longer verified");
+  }
   const { title, body } = renderMessage(delivery);
   const delivered = await sendMail({
     to: config.address,
     subject: `[Openship] ${title}`,
     text: body,
     html: renderEmailHtml(delivery),
+    organizationId: delivery.organizationId,
   });
   // THROW when nothing could carry it. `sendMail` only warns on an empty transport
   // chain, so ignoring its result meant this worker returned normally and the delivery
@@ -590,6 +597,7 @@ export async function sendTestToChannel(channel: NotificationChannel): Promise<v
   if (!worker) throw new Error(`No worker for channel kind "${channel.kind}"`);
   const testDelivery = {
     id: "test",
+    userId: channel.userId,
     category: "test",
     createdAt: new Date(),
     payload: {
@@ -623,11 +631,10 @@ const MAX_ATTEMPTS = 5;
  * batch of queued rows, sends them concurrently, and marks the results.
  *
  * Retry policy:
- *   - Transient failures (worker throws): up to MAX_ATTEMPTS attempts,
- *     backoff via the next scheduled tick (no in-process delay — keeps
- *     the loop simple and the DB row visibly "queued" between tries)
- *   - Permanent failures (channel missing, malformed config): mark
- *     failed immediately, surface in the dashboard
+ *   - Transient failures: ordinary notices have MAX_ATTEMPTS; durable credit
+ *     alerts retry with persisted backoff. A renewable lease recovers a lost
+ *     worker or database acknowledgment without waiting for an API restart.
+ *   - Lost access or deleted/disabled/unverified channels fail permanently.
  */
 async function deliverQueuedNotifications(): Promise<void> {
   const queued = await repos.notificationDelivery.claimQueued(25).catch(() => []);
@@ -635,50 +642,61 @@ async function deliverQueuedNotifications(): Promise<void> {
 
   const settled = await Promise.allSettled(
     queued.map(async (delivery) => {
-      // Resolve channel — null channelId means the subscription pointed
-      // at a now-deleted channel. Mark failed permanently.
-      if (!delivery.channelId) {
-        await repos.notificationDelivery.markFailed(delivery.id, "Channel deleted", false);
-        return;
-      }
-      const channel = await repos.notificationChannel
-        .findById(delivery.channelId)
-        .catch(() => undefined);
-      if (!channel) {
-        await repos.notificationDelivery.markFailed(delivery.id, "Channel not found", false);
-        return;
-      }
-      if (channel.userId !== delivery.userId || !channel.enabled || !channel.verified ||
-          !(await canReceiveNotification(delivery.userId, delivery.organizationId, delivery))) {
-        await repos.notificationDelivery.markFailed(delivery.id, "Channel or recipient access is no longer available", false);
-        return;
-      }
-
-      const worker = WORKERS[channel.kind];
-      if (!worker) {
-        await repos.notificationDelivery.markFailed(
-          delivery.id,
-          `No worker for channel kind "${channel.kind}"`,
-          false,
-        );
-        return;
-      }
-
+      let channel: NotificationChannel | undefined;
+      const attempt = delivery.attempts + 1;
+      let renewal: Promise<unknown> | undefined;
+      const heartbeat = setInterval(() => {
+        renewal ??= repos.notificationDelivery.renewLease(delivery.id, attempt)
+          .catch(() => false).finally(() => { renewal = undefined; });
+      }, 20_000);
+      heartbeat.unref?.();
       try {
+        // Resolve channel — null channelId means the subscription pointed
+        // at a now-deleted channel. Mark failed permanently.
+        if (!delivery.channelId) {
+          await repos.notificationDelivery.markFailed(delivery.id, "Channel deleted", false, attempt);
+          return;
+        }
+        channel = await repos.notificationChannel.findById(delivery.channelId);
+        if (!channel) {
+          await repos.notificationDelivery.markFailed(delivery.id, "Channel not found", false, attempt);
+          return;
+        }
+        if (channel.userId !== delivery.userId || !channel.enabled || !channel.verified ||
+            !(await canReceiveNotification(delivery.userId, delivery.organizationId, delivery))) {
+          await repos.notificationDelivery.markFailed(delivery.id, "Channel or recipient access is no longer available", false, attempt);
+          return;
+        }
+
+        const worker = WORKERS[channel.kind];
+        if (!worker) {
+          await repos.notificationDelivery.markFailed(
+            delivery.id,
+            `No worker for channel kind "${channel.kind}"`,
+            false,
+            attempt,
+          );
+          return;
+        }
+
+        if (!(await repos.notificationDelivery.renewLease(delivery.id, attempt))) return;
         await worker(delivery, channel);
-        await repos.notificationDelivery.markSent(delivery.id);
+        await repos.notificationDelivery.markSent(delivery.id, attempt);
         await repos.notificationChannel.touchLastDelivered(channel.id).catch(() => {});
       } catch (err) {
-        const message = channelErrorMessage(err, channel);
-        const attempts = delivery.attempts + 1;
-        const retry = attempts < MAX_ATTEMPTS;
-        await repos.notificationDelivery.markFailed(delivery.id, message, retry);
+        const message = channel ? channelErrorMessage(err, channel) : "Notification lookup temporarily unavailable";
+        const retry = !(err instanceof PermanentNotificationError) &&
+          ((delivery.payload as { durable?: boolean })?.durable === true || attempt < MAX_ATTEMPTS);
+        await repos.notificationDelivery.markFailed(delivery.id, message, retry, attempt);
         if (!retry) {
           console.error(
-            `[notification] delivery ${delivery.id} failed permanently after ${attempts} attempts:`,
+            `[notification] delivery ${delivery.id} failed permanently after ${attempt} attempts:`,
             message,
           );
         }
+      } finally {
+        clearInterval(heartbeat);
+        await renewal;
       }
     }),
   );

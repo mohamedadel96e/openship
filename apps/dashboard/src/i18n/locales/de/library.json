@@ -10,16 +10,17 @@
   },
   "page": {
     "title": "Neues Projekt",
-    "subtitle": "Importiere ein Repository, füge eine URL ein oder starte von einer Vorlage",
+    "subtitle": "Stelle eine App bereit oder importiere dein eigenes Projekt.",
     "tabs": {
       "folder": "Ordner",
       "github": "GitHub",
-      "url": "Git-URL",
-      "template": "Vorlage"
+      "templates": "Vorlagen",
+      "gitUrl": "Git-URL"
     }
   },
   "connect": {
     "connectGithub": "GitHub verbinden",
+    "deployApp": "App bereitstellen",
     "manageInSettings": "In den Einstellungen verwalten",
     "terminal": {
       "title": "GitHub verbinden",
@@ -45,6 +46,20 @@
       "ghCliDesc": "Nutze die GitHub-Anmeldung deines Rechners. Keine Cloud nötig.",
       "useGhCli": "gh CLI verwenden",
       "connecting": "Verbinde…"
+    },
+    "installationPicker": {
+      "title": "GitHub-Zugriff auswählen",
+      "description": "Wähle eine bestehende App-Installation für diesen Arbeitsbereich.",
+      "sharedHint": "Deine anderen Openship-Verbindungen bleiben dabei erhalten.",
+      "connect": "Dieses Konto verwenden",
+      "connected": "Bereits verbunden",
+      "installAnother": "Auf einem anderen GitHub-Konto installieren",
+      "failed": "Diese Installation konnte nicht verbunden werden.",
+      "tryAgain": "Neu starten",
+      "successTitle": "GitHub verbunden",
+      "successDescription": "Der Repository-Zugriff ist bereit. Du kannst zu Openship zurückkehren.",
+      "errorTitle": "GitHub-Verbindung überprüfen",
+      "returnToApp": "Zur Bibliothek"
     }
   },
   "folderUpload": {
@@ -124,8 +139,6 @@
     "noMatchingDesc": "Versuche einen anderen Suchbegriff oder passe deine Filter an",
     "noReposDesc": "Dieses Konto hat noch keine Repositories",
     "privateBadge": "Privat",
-    "localOnly": "Nur lokal",
-    "localOnlyTooltip": "Die Openship App ist nicht auf {owner} installiert. Nur lokale Builds — installiere die App bei diesem Owner, um Remote-Deploys zu aktivieren.",
     "repoCountSingular": "{count} Repository",
     "repoCountPlural": "{count} Repositories",
     "matching": "passend zu \"{query}\"",
@@ -159,7 +172,7 @@
     "checking": "Wird geprüft…",
     "notConnectedManage": "Nicht verbunden — in den Einstellungen verwalten",
     "optional": "Optional",
-    "footnote": "Lokale Bibliothek über gh CLI; Remote-Deploys nutzen kurzlebige Tokens —",
+    "footnote": "Verwalte die GitHub-Verbindungen zum Durchsuchen und Bereitstellen von Repositories.",
     "manageGithubSettings": "GitHub in den Einstellungen verwalten"
   },
   "urlImport": {

@@ -23,6 +23,68 @@ function python(body: string) {
   expect(result.status, result.stderr).toBe(0);
 }
 describe("K3s host setup", () => {
+  it.each([
+    { state: "null", ipam: { Config: null } },
+    { state: "missing", ipam: {} },
+    { state: "empty", ipam: { Config: [] } },
+  ])("inspects Docker hosts with $state subnet lists and preserves occupied ranges", ({ ipam }) => {
+    const networks = [
+      { Name: "host", Driver: "host", IPAM: ipam },
+      { Name: "none", Driver: "null", IPAM: ipam },
+      {
+        Name: "bridge",
+        Driver: "bridge",
+        IPAM: { Config: [{ Subnet: "172.17.0.0/16" }] },
+      },
+      {
+        Name: "application",
+        Driver: "bridge",
+        IPAM: {
+          Config: [{ Subnet: "10.42.0.0/16" }, { Subnet: "fd00::/64" }, { Subnet: null }, {}],
+        },
+      },
+    ];
+    python(`from types import SimpleNamespace
+ns['C'] = {'host': {'role': 'server', 'privateIp': '10.20.0.1'}}
+ns['owner'] = lambda: None
+ns['foreign'] = lambda: None
+files = {
+    '/proc/swaps': 'Filename Type Size Used Priority\\n',
+    '/proc/meminfo': 'MemTotal: 8388608 kB\\n',
+    '/sys/fs/cgroup/cgroup.controllers': 'cpuset cpu io memory pids',
+    '/etc/resolv.conf': 'nameserver 10.43.0.53\\n',
+}
+networks = json.loads(${JSON.stringify(JSON.stringify(networks))})
+def command(args, **kwargs):
+    if args == ['ip', '-j', 'addr', 'show']:
+        output = json.dumps([{'ifname': 'eth1', 'flags': ['UP'], 'mtu': 1500, 'addr_info': [{'family': 'inet', 'local': '10.20.0.1', 'prefixlen': 24}]}])
+    elif args == ['ip', '-j', '-4', 'route', 'show', 'table', 'all']:
+        output = json.dumps([{'dst': 'default'}, {'dst': '0.0.0.0/0'}, {'dst': '10.50.0.0/16'}])
+    elif args == ['systemctl', 'is-active', '--quiet', 'docker']:
+        output = ''
+    elif args == ['docker', 'network', 'ls', '-q']:
+        output = 'host-id\\nnone-id\\nbridge-id\\napplication-id\\n'
+    elif args == ['docker', 'network', 'inspect', 'host-id', 'none-id', 'bridge-id', 'application-id']:
+        output = json.dumps(networks)
+    else:
+        raise AssertionError('Unexpected command: ' + repr(args))
+    return SimpleNamespace(returncode=0, stdout=output, stderr='')
+with patch('pathlib.Path.is_dir', lambda path: str(path) == '/run/systemd/system'), \\
+     patch('pathlib.Path.exists', lambda path: str(path) in files), \\
+     patch('pathlib.Path.is_file', lambda path: str(path) in files), \\
+     patch('pathlib.Path.read_text', lambda path: files[str(path)]), \\
+     patch('os.cpu_count', return_value=4), \\
+     patch('shutil.disk_usage', return_value=SimpleNamespace(free=20 * 1024**3)), \\
+     patch('shutil.which', return_value='/usr/bin/docker'), \\
+     patch('socket.socket'), \\
+     patch('subprocess.run', side_effect=command):
+    assert ns['inspect']() == {
+        'interfaceName': 'eth1',
+        'ranges': ['10.20.0.0/24', '10.42.0.0/16', '10.43.0.53/32', '10.50.0.0/16', '172.17.0.0/16'],
+        'installed': False,
+    }
+`);
+  });
   it("reserves upstream DNS addresses hidden behind a local resolver stub", () => {
     python(`with tempfile.TemporaryDirectory() as folder:
     stub = pathlib.Path(folder)/'stub.conf'

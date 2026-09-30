@@ -12,7 +12,13 @@ const resources: Record<string, [string, boolean]> = {
   Service: ["services", true],
   ConfigMap: ["configmaps", true],
   Secret: ["secrets", true],
+  PersistentVolumeClaim: ["persistentvolumeclaims", true],
   Deployment: ["deployments", true],
+  Job: ["jobs", true],
+  DaemonSet: ["daemonsets", true],
+  NetworkPolicy: ["networkpolicies", true],
+  PriorityClass: ["priorityclasses", false],
+  CSIDriver: ["csidrivers", false],
   ClusterRole: ["clusterroles", false],
   ClusterRoleBinding: ["clusterrolebindings", false],
   Role: ["roles", true],
@@ -105,7 +111,7 @@ export async function ensureClusterAddonObject(
 }
 
 const manifestCache = new Map<string, KubernetesObject[]>();
-async function download(
+export async function downloadClusterAddon(
   name: keyof typeof sources,
   signal: AbortSignal,
 ): Promise<KubernetesObject[]> {
@@ -240,7 +246,7 @@ export async function installDatabaseAddon(
         >)
       : [name];
   const manifests: KubernetesObject[] = [];
-  for (const key of names) manifests.push(...(await download(key, signal)));
+  for (const key of names) manifests.push(...(await downloadClusterAddon(key, signal)));
   const objects = prepareDatabaseAddon(name, manifests, runtimeId);
   for (const object of objects) {
     await ensureClusterAddonObject(api, object, runtimeId, name, signal, fence);

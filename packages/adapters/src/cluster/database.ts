@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   AppError,
   clusterDatabasePodCount,
+  clusterPostgresVersion,
   validateClusterDatabase,
   type ClusterDatabaseConfig,
   type ClusterDatabaseObservation,
@@ -22,6 +23,8 @@ import {
 } from "./database-backups";
 import { kubernetesPodIssue, kubernetesPodPhase } from "./kubernetes-health";
 import { kubernetesIdLabel } from "./kubernetes-label";
+import { patchKubernetesObject } from "./kubernetes-mutation";
+import { RedisArchive, DatabaseArchiveTasks } from "./redis-backups";
 export type { ClusterDatabaseBackupStorage } from "./database-backups";
 
 export const DATABASE_IMAGES = {
@@ -30,6 +33,10 @@ export const DATABASE_IMAGES = {
   redis:
     "quay.io/opstree/redis:v7.4.11@sha256:115d8e221b1459b9f2db7d927ed40318ffac4eb2cddb5702974bce92d32b7a51",
 } as const;
+export const postgresDatabaseImage = (config: ClusterDatabaseConfig) =>
+  clusterPostgresVersion(config) === "18"
+    ? "ghcr.io/cloudnative-pg/postgresql:18.4@sha256:6138f19539304b585c6cafd1af82ca407f184139459a8e06f0880df4556d3588"
+    : DATABASE_IMAGES.postgres;
 export const clusterDatabaseNamespace = (id: string) =>
   `os-db-${createHash("sha256").update(id).digest("hex").slice(0, 24)}`;
 export function clusterDatabaseHosts(id: string, config: ClusterDatabaseConfig) {
@@ -68,7 +75,8 @@ const conflict = (message: string) =>
 export class ClusterDatabaseAdapter {
   readonly namespace: string;
   private readonly labels: Record<string, string>;
-  readonly archive: PostgresArchive;
+  readonly archive: PostgresArchive | RedisArchive;
+  readonly dataTasks: DatabaseArchiveTasks;
   constructor(
     readonly api: KubernetesApi,
     readonly target: DatabaseTarget,
@@ -81,14 +89,27 @@ export class ClusterDatabaseAdapter {
       "openship.io/project": kubernetesIdLabel(target.projectId),
       "openship.io/runtime": target.runtimeId,
     };
-    this.archive = new PostgresArchive(
+    this.dataTasks = new DatabaseArchiveTasks(
       api,
       this.namespace,
       this.labels,
+      target.config,
+      target.backupStorage,
       signal,
       fence,
       (path, object, update) => this.declare(path, object, update),
     );
+    this.archive =
+      target.config.engine === "redis"
+        ? this.dataTasks
+        : new PostgresArchive(
+            api,
+            this.namespace,
+            this.labels,
+            signal,
+            fence,
+            (path, object, update) => this.declare(path, object, update),
+          );
   }
   private base() {
     return `/api/v1/namespaces/${this.namespace}`;
@@ -117,25 +138,28 @@ export class ClusterDatabaseAdapter {
     if (existing) {
       this.assertOwned(existing);
       if (!update) return existing;
-      if (
-        Number(existing.metadata.annotations?.["openship.io/generation"] ?? 0) >
-        this.target.generation
-      )
-        throw conflict("A newer database operation has already updated this resource.");
-      await this.fence();
-      return this.api.request(
-        "PATCH",
+      return patchKubernetesObject(
+        this.api,
         full,
-        {
-          ...object,
-          metadata: {
-            ...object.metadata,
-            resourceVersion: existing.metadata.resourceVersion,
-            annotations: {
-              ...object.metadata.annotations,
-              "openship.io/generation": String(this.target.generation),
+        async (current) => {
+          this.assertOwned(current);
+          if (
+            current.metadata.uid !== existing.metadata.uid ||
+            Number(current.metadata.annotations?.["openship.io/generation"] ?? 0) >
+              this.target.generation
+          )
+            throw conflict("A newer database operation has already updated this resource.");
+          await this.fence();
+          return {
+            ...object,
+            metadata: {
+              ...object.metadata,
+              annotations: {
+                ...object.metadata.annotations,
+                "openship.io/generation": String(this.target.generation),
+              },
             },
-          },
+          };
         },
         this.signal,
       );
@@ -241,25 +265,35 @@ export class ClusterDatabaseAdapter {
         metadata: this.metadata("database"),
         spec: {
           instances: c.instances,
-          imageName: DATABASE_IMAGES.postgres,
+          imageName: postgresDatabaseImage(c),
           enableSuperuserAccess: false,
-          bootstrap: this.target.restoreSource
-            ? {
-                recovery: {
-                  source: "original",
-                  database: c.databaseName,
-                  owner: "app",
-                  secret: { name: "credentials" },
-                  recoveryTarget: {
-                    backupID: this.target.restoreSource.backupId,
-                    targetImmediate: true,
+          bootstrap:
+            this.target.restoreSource &&
+            (!this.target.restoreSource.format ||
+              this.target.restoreSource.format === "postgres-physical")
+              ? {
+                  recovery: {
+                    source: "original",
+                    database: c.databaseName,
+                    owner: "app",
+                    secret: { name: "credentials" },
+                    recoveryTarget: {
+                      backupID: this.target.restoreSource.backupId,
+                      targetImmediate: true,
+                    },
+                  },
+                }
+              : {
+                  initdb: {
+                    database: c.databaseName,
+                    owner: "app",
+                    secret: { name: "credentials" },
                   },
                 },
-              }
-            : {
-                initdb: { database: c.databaseName, owner: "app", secret: { name: "credentials" } },
-              },
-          ...(this.target.restoreSource && this.target.restoreStorage
+          ...(this.target.restoreSource &&
+          (!this.target.restoreSource.format ||
+            this.target.restoreSource.format === "postgres-physical") &&
+          this.target.restoreStorage
             ? {
                 externalClusters: [
                   {
@@ -320,7 +354,14 @@ export class ClusterDatabaseAdapter {
       podAntiAffinity: {
         requiredDuringSchedulingIgnoredDuringExecution: [
           {
-            labelSelector: { matchLabels: { [managed]: this.target.id } },
+            labelSelector: {
+              // Backups and verification Jobs share database ownership, but
+              // must be able to run alongside its data pods on a full cluster.
+              matchLabels: {
+                [managed]: this.target.id,
+                redis_setup_type: c.mode === "cluster" ? "cluster" : "standalone",
+              },
+            },
             topologyKey: "kubernetes.io/hostname",
           },
         ],
@@ -342,6 +383,10 @@ export class ClusterDatabaseAdapter {
         kubernetesConfig: {
           image: DATABASE_IMAGES.redis,
           imagePullPolicy: "IfNotPresent",
+          // The operator copies CR annotations into its pod templates. Keep
+          // OpenShip's stale-operation fence on the CR without rolling every
+          // existing data pod while a partition resize is in progress.
+          ignoreAnnotations: ["openship.io/generation"],
           resources,
           redisSecret: { name: "credentials", key: "password" },
           persistentVolumeClaimRetentionPolicy: { whenDeleted: "Retain", whenScaled: "Retain" },
@@ -444,7 +489,72 @@ export class ClusterDatabaseAdapter {
         throw new Error("This storage class does not support online volume expansion.");
     }
     await this.declare(this.crBase(), this.manifest(), true);
-    if (c.backup) await this.archive.schedule(c.backup);
+    if (c.backup && !this.target.restoreSource) await this.archive.schedule(c.backup);
+  }
+
+  async needsRedisResize() {
+    if (this.target.config.engine !== "redis" || this.target.config.mode !== "cluster")
+      return false;
+    const current = await clusterObject(this.api, `${this.crBase()}/database`, this.signal);
+    if (!current) return false;
+    this.assertOwned(current);
+    return current.spec.clusterSize !== this.target.config.instances;
+  }
+
+  async backupBeforeRedisResize(log: (message: string) => Promise<void>) {
+    if (!(this.archive instanceof RedisArchive) || !this.target.backupStorage)
+      throw conflict("Configure a backup destination before moving Redis data.");
+    const current = await this.api.request(
+      "GET",
+      `${this.crBase()}/database`,
+      undefined,
+      this.signal,
+    );
+    this.assertOwned(current);
+    if (
+      current.status?.state !== "Ready" ||
+      current.status.readyLeaderReplicas !== current.spec.clusterSize ||
+      current.status.readyFollowerReplicas !== current.spec.clusterSize
+    )
+      throw conflict(
+        "Wait for all Redis instances and replicas to recover before changing its data partitions.",
+      );
+    await this.archive.secret("backup-destination", this.target.backupStorage);
+    await this.archive.run(`before-resize-${this.target.generation}`, this.target.generation, log);
+  }
+
+  async restore(log: (message: string) => Promise<void>) {
+    if (
+      !this.target.restoreSource ||
+      !["redis-rdb-set", "postgres-logical", "backup-artifact"].includes(
+        this.target.restoreSource.format ?? "",
+      )
+    )
+      return;
+    if (!this.target.restoreStorage)
+      throw conflict("The saved recovery destination is unavailable.");
+    await this.dataTasks.restore(this.target.restoreSource, this.target.restoreStorage, log);
+  }
+
+  async releaseRestorePin() {
+    const source = this.target.restoreSource;
+    if (
+      !source ||
+      !["redis-rdb-set", "postgres-logical"].includes(source.format ?? "") ||
+      !source.pinId
+    )
+      return;
+    const archive = new RedisArchive(
+      this.api,
+      clusterDatabaseNamespace(source.databaseId),
+      { ...this.labels, [managed]: source.databaseId },
+      this.target.config,
+      undefined,
+      this.signal,
+      this.fence,
+      (path, object, update) => this.declare(path, object, update),
+    );
+    await archive.pin(source.backupName, source.pinId, true);
   }
 
   async observe(): Promise<ClusterDatabaseObservation> {
@@ -524,6 +634,7 @@ export class ClusterDatabaseAdapter {
     const archiveCondition = root?.status?.conditions?.find(
       (condition: any) => condition.type === "ContinuousArchiving",
     );
+    const backups = current.backup ? await this.archive.list() : undefined;
     return {
       ready: healthy,
       observedAt: new Date().toISOString(),
@@ -539,12 +650,29 @@ export class ClusterDatabaseAdapter {
       volumes,
       ...(current.backup
         ? {
-            backups: await this.archive.list(),
-            archive: {
-              healthy: archiveCondition ? archiveCondition.status === "True" : null,
-              message: archiveCondition?.message ?? "Waiting for the first archive check.",
-              lastSuccessfulBackup: root?.status?.lastSuccessfulBackup ?? null,
-            },
+            backups,
+            archive:
+              current.engine === "redis"
+                ? {
+                    healthy:
+                      backups?.[0]?.phase === "completed"
+                        ? true
+                        : backups?.[0]?.phase === "failed"
+                          ? false
+                          : null,
+                    message:
+                      backups?.[0]?.error ??
+                      (backups?.[0]?.phase === "completed"
+                        ? "Redis data snapshots are saved at the backup destination."
+                        : "Waiting for the first completed data backup."),
+                    lastSuccessfulBackup:
+                      backups?.find((backup) => backup.phase === "completed")?.completedAt ?? null,
+                  }
+                : {
+                    healthy: archiveCondition ? archiveCondition.status === "True" : null,
+                    message: archiveCondition?.message ?? "Waiting for the first archive check.",
+                    lastSuccessfulBackup: root?.status?.lastSuccessfulBackup ?? null,
+                  },
           }
         : {}),
       pods: dataPods.map((pod) => {
@@ -575,7 +703,10 @@ export class ClusterDatabaseAdapter {
     };
   }
 
-  async verify(log: (message: string) => Promise<void>): Promise<ClusterDatabaseObservation> {
+  async verify(
+    log: (message: string) => Promise<void>,
+    purpose = "ready",
+  ): Promise<ClusterDatabaseObservation> {
     let last = "";
     await waitForClusterResource(
       this.signal,
@@ -627,7 +758,7 @@ export class ClusterDatabaseAdapter {
       )
     )
       throw conflict("The application namespace has different ownership or is being removed.");
-    const name = `db-${this.namespace.slice(6)}-verify-${this.target.generation}`;
+    const name = `db-${this.namespace.slice(6)}-verify-${this.target.generation}-${purpose}`;
     const labels = {
       ...this.labels,
       "app.kubernetes.io/managed-by": "openship",
@@ -663,7 +794,7 @@ export class ClusterDatabaseAdapter {
     const check =
       c.engine === "postgres"
         ? "test \"$(psql -X -A -t -c 'SELECT 1')\" = 1"
-        : `test \"$(timeout 10 redis-cli -h ${host} PING)\" = PONG${c.mode === "cluster" ? ` && timeout 10 redis-cli -h ${host} CLUSTER INFO | tr -d '\\r' | grep -qx 'cluster_state:ok' && timeout 10 redis-cli -h ${host} CLUSTER INFO | tr -d '\\r' | grep -qx 'cluster_slots_assigned:16384'` : ""}`;
+        : `test \"$(timeout 10 redis-cli -h ${host} PING)\" = PONG${c.mode === "cluster" ? ` && timeout 30 redis-cli --cluster check ${host}:6379 && timeout 10 redis-cli -h ${host} CLUSTER INFO | tr -d '\\r' | grep -qx 'cluster_state:ok' && timeout 10 redis-cli -h ${host} CLUSTER INFO | tr -d '\\r' | grep -qx 'cluster_slots_assigned:16384'` : ""}`;
     // Service endpoints can lag pod readiness. Retry only these read-only
     // protocol checks, within a bounded Job; never recreate the database.
     const command = [
@@ -762,13 +893,15 @@ export class ClusterDatabaseAdapter {
   }
 
   async remove(deleteData: boolean, log: (message: string) => Promise<void> = async () => {}) {
-    await this.removeProbes();
     const namespace = await clusterObject(
       this.api,
       `/api/v1/namespaces/${this.namespace}`,
       this.signal,
     );
     if (!namespace) return;
+    await this.assertNoApplicationReferences();
+    await this.dataTasks.assertRemovable();
+    await this.removeProbes();
     if (namespace.metadata.deletionTimestamp) {
       if (!deleteData)
         throw conflict(
@@ -778,8 +911,7 @@ export class ClusterDatabaseAdapter {
       return;
     }
     this.assertOwned(namespace);
-    if (this.target.config.engine === "postgres" && this.target.config.backup)
-      await this.archive.suspend();
+    if (this.target.config.backup) await this.archive.suspend();
     const claims = await this.api.request<{ items: KubernetesObject[] }>(
       "GET",
       `${this.base()}/persistentvolumeclaims`,
@@ -925,6 +1057,7 @@ export class ClusterDatabaseAdapter {
       "PodDisruptionBudget",
       "Backup",
       "ScheduledBackup",
+      "CronJob",
     ]);
     const accepted = new Set<string>();
     for (const object of objects) {
@@ -963,6 +1096,65 @@ export class ClusterDatabaseAdapter {
       this.signal,
     );
     await this.waitForNamespaceRemoval(log);
+  }
+
+  private async assertNoApplicationReferences() {
+    const appNamespace = kubernetesProjectNamespace(this.target.projectId);
+    if (!(await clusterObject(this.api, `/api/v1/namespaces/${appNamespace}`, this.signal))) return;
+    const [deployments, secrets, pods] = await Promise.all([
+      this.api.request<{ items: KubernetesObject[] }>(
+        "GET",
+        `/apis/apps/v1/namespaces/${appNamespace}/deployments`,
+        undefined,
+        this.signal,
+      ),
+      this.api.request<{ items: KubernetesObject[] }>(
+        "GET",
+        `/api/v1/namespaces/${appNamespace}/secrets`,
+        undefined,
+        this.signal,
+      ),
+      this.api.request<{ items: KubernetesObject[] }>(
+        "GET",
+        `/api/v1/namespaces/${appNamespace}/pods`,
+        undefined,
+        this.signal,
+      ),
+    ]);
+    const hosts = Object.values(clusterDatabaseHosts(this.target.id, this.target.config)).filter(
+      Boolean,
+    ) as string[];
+    const referenced = new Set(
+      secrets.items
+        .filter((secret) =>
+          Object.values(secret.data ?? {}).some((value) =>
+            hosts.some((host) => Buffer.from(String(value), "base64").toString().includes(host)),
+          ),
+        )
+        .map((secret) => secret.metadata.name),
+    );
+    const usesDatabase = (spec: any) =>
+      spec?.containers?.some(
+        (container: any) =>
+          container.envFrom?.some((source: any) => referenced.has(source.secretRef?.name)) ||
+          container.env?.some(
+            (env: any) =>
+              referenced.has(env.valueFrom?.secretKeyRef?.name) ||
+              hosts.some((host) => String(env.value ?? "").includes(host)),
+          ),
+      );
+    if (
+      deployments.items.some(
+        (deployment) =>
+          deployment.spec?.replicas > 0 && usesDatabase(deployment.spec?.template?.spec),
+      ) ||
+      (pods.items ?? []).some(
+        (pod) => !["Succeeded", "Failed"].includes(pod.status?.phase) && usesDatabase(pod.spec),
+      )
+    )
+      throw conflict(
+        "An application release still uses this database. Deploy its new connection, or stop the application and wait for its instances to exit, before removing the database.",
+      );
   }
 
   private async waitForNamespaceRemoval(log: (message: string) => Promise<void>) {

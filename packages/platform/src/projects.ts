@@ -1,11 +1,31 @@
 import {
-  AppError, CreateProjectBody, EnsureProjectBody, UpdateProjectBody, ListProjectsSchema,
-  ResourceIdSchema, RuntimeLogsInputSchema, ServerLogsInputSchema, parseInput, isProject, isProjectHome,
+  AppError,
+  CreateProjectBody,
+  EnsureProjectBody,
+  UpdateProjectBody,
+  ListProjectsSchema,
+  ResourceIdSchema,
+  RuntimeLogsInputSchema,
+  ServerLogsInputSchema,
+  parseInput,
+  isProject,
+  isProjectHome,
   ProjectControlSchemas,
-  ImportLocalProjectBody, ScanLocalProjectBody, isLocalProjectScan,
-  type LocalProjectScan, type ImportLocalProjectInput,
-  type Project, type ProjectOperations, type CreateProjectInput, type EnsureProjectInput,
-  type EnsureProjectResult, type UpdateProjectInput, type ListProjectsInput, type ProjectLogStreams, type ProjectRoutingStreams, type ServerLogsInput,
+  ImportLocalProjectBody,
+  ScanLocalProjectBody,
+  isLocalProjectScan,
+  type LocalProjectScan,
+  type ImportLocalProjectInput,
+  type Project,
+  type ProjectOperations,
+  type CreateProjectInput,
+  type EnsureProjectInput,
+  type EnsureProjectResult,
+  type UpdateProjectInput,
+  type ListProjectsInput,
+  type ProjectLogStreams,
+  type ProjectRoutingStreams,
+  type ServerLogsInput,
 } from "@repo/contracts";
 import type { Authorization } from "./authorization";
 import type { ExecutionContext } from "./context";
@@ -19,33 +39,80 @@ export type PlatformProjectOperations = {
     ...args: Parameters<ProjectOperations[K]>
   ) => Promise<OperationResult<Awaited<ReturnType<ProjectOperations[K]>>>>;
 } & {
-  streamClusterDatabaseEvents(ctx: ExecutionContext, ...args: Parameters<ProjectLogStreams["streamClusterDatabaseEvents"]>): ReturnType<ProjectLogStreams["streamClusterDatabaseEvents"]>;
+  streamClusterVolumeEvents(
+    ctx: ExecutionContext,
+    ...args: Parameters<ProjectLogStreams["streamClusterVolumeEvents"]>
+  ): ReturnType<ProjectLogStreams["streamClusterVolumeEvents"]>;
+  streamClusterDatabaseEvents(
+    ctx: ExecutionContext,
+    ...args: Parameters<ProjectLogStreams["streamClusterDatabaseEvents"]>
+  ): ReturnType<ProjectLogStreams["streamClusterDatabaseEvents"]>;
   retryRoutingStream(
     ctx: ExecutionContext,
     ...args: Parameters<ProjectRoutingStreams["retryRoutingStream"]>
   ): ReturnType<ProjectRoutingStreams["retryRoutingStream"]>;
-  streamRuntimeLogs(ctx: ExecutionContext, ...args: Parameters<ProjectLogStreams["streamRuntimeLogs"]>): ReturnType<ProjectLogStreams["streamRuntimeLogs"]>;
+  streamRuntimeLogs(
+    ctx: ExecutionContext,
+    ...args: Parameters<ProjectLogStreams["streamRuntimeLogs"]>
+  ): ReturnType<ProjectLogStreams["streamRuntimeLogs"]>;
   /** Raw provider bytes keep HTTP relay framing intact; SDK facades decode them with the shared SSE codec. */
-  openServerLogStream(ctx: ExecutionContext, id: string, input?: ServerLogsInput, options?: { signal?: AbortSignal }): Promise<OperationResult<AsyncIterable<Uint8Array>>>;
+  openServerLogStream(
+    ctx: ExecutionContext,
+    id: string,
+    input?: ServerLogsInput,
+    options?: { signal?: AbortSignal },
+  ): Promise<OperationResult<AsyncIterable<Uint8Array>>>;
 };
 export interface ProjectDependencies {
-  databaseEvents?(ctx: ExecutionContext, id: string, signal?: AbortSignal): ReturnType<ProjectLogStreams["streamClusterDatabaseEvents"]>;
+  volumeEvents?(
+    ctx: ExecutionContext,
+    id: string,
+    signal?: AbortSignal,
+  ): ReturnType<ProjectLogStreams["streamClusterVolumeEvents"]>;
+  databaseEvents?(
+    ctx: ExecutionContext,
+    id: string,
+    signal?: AbortSignal,
+  ): ReturnType<ProjectLogStreams["streamClusterDatabaseEvents"]>;
   controls?: ResourceServices<typeof ProjectControlSchemas>;
   home?(ctx: ExecutionContext): Promise<unknown>;
   subscribeLogs?(ctx: ExecutionContext, id: string, input: { tail?: number }): EventSubscription;
   subscribeRoutingRetry?(ctx: ExecutionContext, id: string): EventSubscription;
-  openServerLogs?(ctx: ExecutionContext, id: string, input: ServerLogsInput, options: { signal?: AbortSignal }): Promise<AsyncIterable<Uint8Array>>;
+  openServerLogs?(
+    ctx: ExecutionContext,
+    id: string,
+    input: ServerLogsInput,
+    options: { signal?: AbortSignal },
+  ): Promise<AsyncIterable<Uint8Array>>;
   create(ctx: ExecutionContext, input: CreateProjectInput): Promise<unknown>;
   ensure(ctx: ExecutionContext, input: EnsureProjectInput): Promise<EnsureProjectResult>;
-  list(ctx: ExecutionContext, input: ListProjectsInput): Promise<{ rows: unknown[]; total: number; page: number; perPage: number }>;
+  list(
+    ctx: ExecutionContext,
+    input: ListProjectsInput,
+  ): Promise<{ rows: unknown[]; total: number; page: number; perPage: number }>;
   get(ctx: ExecutionContext, id: string): Promise<unknown>;
   update(ctx: ExecutionContext, id: string, input: UpdateProjectInput): Promise<unknown>;
   local?: {
-    scan(ctx: ExecutionContext, input: Parameters<ProjectOperations["scanLocal"]>[0]): Promise<LocalProjectScan>;
-    import(ctx: ExecutionContext, input: ImportLocalProjectInput): Promise<{ project: unknown; serviceCount: number }>;
+    scan(
+      ctx: ExecutionContext,
+      input: Parameters<ProjectOperations["scanLocal"]>[0],
+    ): Promise<LocalProjectScan>;
+    import(
+      ctx: ExecutionContext,
+      input: ImportLocalProjectInput,
+    ): Promise<{ project: unknown; serviceCount: number }>;
     list(ctx: ExecutionContext): Promise<unknown[]>;
   };
-  recordAudit(ctx: ExecutionContext, event: { eventType: string; resourceType: "project"; resourceId: string; before?: unknown; after?: unknown }): void;
+  recordAudit(
+    ctx: ExecutionContext,
+    event: {
+      eventType: string;
+      resourceType: "project";
+      resourceId: string;
+      before?: unknown;
+      after?: unknown;
+    },
+  ): void;
 }
 
 /** One public presentation for HTTP, native and remote project operations. */
@@ -53,32 +120,75 @@ export function presentProject(row: unknown): Project {
   const data = JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
   delete data.cloneTokenEncrypted;
   delete data.webhookSecret;
-  if (!isProject(data)) throw new AppError("Invalid project presentation", 500, "INVALID_PROJECT_RESPONSE");
+  if (!isProject(data))
+    throw new AppError("Invalid project presentation", 500, "INVALID_PROJECT_RESPONSE");
   return data;
 }
 
-export function createProjectOperations(authorization: Authorization, dependencies?: ProjectDependencies): PlatformProjectOperations {
+export function createProjectOperations(
+  authorization: Authorization,
+  dependencies?: ProjectDependencies,
+): PlatformProjectOperations {
   const resources = () => {
-    if (!dependencies) throw new AppError("Project operations are not configured", 501, "CAPABILITY_UNAVAILABLE");
+    if (!dependencies)
+      throw new AppError("Project operations are not configured", 501, "CAPABILITY_UNAVAILABLE");
     return dependencies;
   };
-  const authorize = (ctx: ExecutionContext, id: string, action: "read" | "write", projectCreate = false) =>
-    authorization.authorize(ctx, { resourceType: "project", resourceId: id, action, projectCreate });
+  const authorize = (
+    ctx: ExecutionContext,
+    id: string,
+    action: "read" | "write",
+    projectCreate = false,
+  ) =>
+    authorization.authorize(ctx, {
+      resourceType: "project",
+      resourceId: id,
+      action,
+      projectCreate,
+    });
   function audit(ctx: ExecutionContext, id: string, created: boolean, after: unknown) {
-    resources().recordAudit(ctx, { eventType: created ? "project.created" : "project.updated", resourceType: "project", resourceId: id, after });
+    resources().recordAudit(ctx, {
+      eventType: created ? "project.created" : "project.updated",
+      resourceType: "project",
+      resourceId: id,
+      after,
+    });
   }
   const local = () => {
     const implementation = resources().local;
-    if (!implementation) throw new AppError("Local project operations are not configured", 501, "CAPABILITY_UNAVAILABLE");
+    if (!implementation)
+      throw new AppError(
+        "Local project operations are not configured",
+        501,
+        "CAPABILITY_UNAVAILABLE",
+      );
     return implementation;
   };
   return Object.freeze({
-    ...createResourceOperations(ProjectControlSchemas, authorization, "project", dependencies?.controls),
+    ...createResourceOperations(
+      ProjectControlSchemas,
+      authorization,
+      "project",
+      dependencies?.controls,
+    ),
+    async *streamClusterVolumeEvents(ctx, value, options = {}) {
+      const id = parseInput(ResourceIdSchema, value);
+      const context = await authorize(ctx, id, "read");
+      const events = resources().volumeEvents;
+      if (!events)
+        throw new AppError("Storage progress is not configured", 501, "CAPABILITY_UNAVAILABLE");
+      for await (const event of events(context, id, options.signal)) {
+        options.signal?.throwIfAborted();
+        await authorize(context, id, "read");
+        yield event;
+      }
+    },
     async *streamClusterDatabaseEvents(ctx, value, options = {}) {
       const id = parseInput(ResourceIdSchema, value);
       const context = await authorize(ctx, id, "read");
       const events = resources().databaseEvents;
-      if (!events) throw new AppError("Database progress is not configured", 501, "CAPABILITY_UNAVAILABLE");
+      if (!events)
+        throw new AppError("Database progress is not configured", 501, "CAPABILITY_UNAVAILABLE");
       for await (const event of events(context, id, options.signal)) {
         options.signal?.throwIfAborted();
         await authorize(context, id, "read");
@@ -102,11 +212,18 @@ export function createProjectOperations(authorization: Authorization, dependenci
       }
     },
     async getHome(ctx) {
-      const context = await authorization.authorize(ctx, { resourceType: "project", resourceId: "*", action: "read", scope: "list" });
+      const context = await authorization.authorize(ctx, {
+        resourceType: "project",
+        resourceId: "*",
+        action: "read",
+        scope: "list",
+      });
       const home = resources().home;
-      if (!home) throw new AppError("Project overview is not configured", 501, "CAPABILITY_UNAVAILABLE");
+      if (!home)
+        throw new AppError("Project overview is not configured", 501, "CAPABILITY_UNAVAILABLE");
       const data: unknown = JSON.parse(JSON.stringify(await home(context)));
-      if (!isProjectHome(data)) throw new AppError("Invalid project overview response", 500, "INVALID_PROJECT_RESPONSE");
+      if (!isProjectHome(data))
+        throw new AppError("Invalid project overview response", 500, "INVALID_PROJECT_RESPONSE");
       // Apply the same secret projection even to custom platform compositions.
       return { context, data: { ...data, projects: data.projects.map(presentProject) } };
     },
@@ -115,7 +232,12 @@ export function createProjectOperations(authorization: Authorization, dependenci
       const input = parseInput(RuntimeLogsInputSchema, command);
       const context = await authorize(ctx, id, "read");
       const subscribe = resources().subscribeLogs;
-      if (!subscribe) throw new AppError("Project log streaming is not configured", 501, "CAPABILITY_UNAVAILABLE");
+      if (!subscribe)
+        throw new AppError(
+          "Project log streaming is not configured",
+          501,
+          "CAPABILITY_UNAVAILABLE",
+        );
       for await (const event of subscriptionEvents(subscribe(context, id, input), options.signal)) {
         await authorize(context, id, "read");
         yield event;
@@ -127,22 +249,40 @@ export function createProjectOperations(authorization: Authorization, dependenci
       options.signal?.throwIfAborted();
       const context = await authorize(ctx, id, "read");
       const open = resources().openServerLogs;
-      if (!open) throw new AppError("Project traffic streaming is not configured", 501, "CAPABILITY_UNAVAILABLE");
+      if (!open)
+        throw new AppError(
+          "Project traffic streaming is not configured",
+          501,
+          "CAPABILITY_UNAVAILABLE",
+        );
       const source = await open(context, id, input, options);
-      return { context, data: (async function* () {
-        for await (const chunk of source) {
-          options.signal?.throwIfAborted();
-          await authorize(context, id, "read");
-          yield chunk;
-        }
-      })() };
+      return {
+        context,
+        data: (async function* () {
+          for await (const chunk of source) {
+            options.signal?.throwIfAborted();
+            await authorize(context, id, "read");
+            yield chunk;
+          }
+        })(),
+      };
     },
     async scanLocal(ctx, value) {
       const input = parseInput(ScanLocalProjectBody, value);
       const context = await authorize(ctx, "*", "write");
       const data = await local().scan(context, input);
-      if (!isLocalProjectScan(data)) throw new AppError("Invalid local scan response", 500, "INVALID_SOURCE_RESPONSE");
-      resources().recordAudit(context, { eventType: "project:write", resourceType: "project", resourceId: "*", after: { operation: "local.scan", path: input.path, ...(input.includeEnv && { includeEnv: true }) } });
+      if (!isLocalProjectScan(data))
+        throw new AppError("Invalid local scan response", 500, "INVALID_SOURCE_RESPONSE");
+      resources().recordAudit(context, {
+        eventType: "project:write",
+        resourceType: "project",
+        resourceId: "*",
+        after: {
+          operation: "local.scan",
+          path: input.path,
+          ...(input.includeEnv && { includeEnv: true }),
+        },
+      });
       return { context, data };
     },
     async importLocal(ctx, value) {
@@ -150,18 +290,38 @@ export function createProjectOperations(authorization: Authorization, dependenci
       const context = await authorize(ctx, "*", "write", true);
       const result = await local().import(context, input);
       const data = presentProject(result.project);
-      audit(context, data.id, true, { source: "local", localPath: input.localPath, serviceCount: result.serviceCount });
+      audit(context, data.id, true, {
+        source: "local",
+        localPath: input.localPath,
+        serviceCount: result.serviceCount,
+      });
       return { context, data };
     },
     async listLocal(ctx) {
-      const context = await authorization.authorize(ctx, { resourceType: "project", resourceId: "*", action: "read", scope: "list" });
-      return { context, data: { success: true, projects: (await local().list(context)).map(presentProject) } };
+      const context = await authorization.authorize(ctx, {
+        resourceType: "project",
+        resourceId: "*",
+        action: "read",
+        scope: "list",
+      });
+      return {
+        context,
+        data: { success: true, projects: (await local().list(context)).map(presentProject) },
+      };
     },
     async create(ctx, value) {
       const input = parseInput(CreateProjectBody, value);
       const context = await authorize(ctx, "*", "write", true);
       const data = presentProject(await resources().create(context, input));
-      audit(context, data.id, true, { name: data.name, slug: data.slug, framework: data.framework ?? null, gitProvider: data.gitProvider ?? null, gitOwner: data.gitOwner ?? null, gitRepo: data.gitRepo ?? null, gitBranch: data.gitBranch ?? null });
+      audit(context, data.id, true, {
+        name: data.name,
+        slug: data.slug,
+        framework: data.framework ?? null,
+        gitProvider: data.gitProvider ?? null,
+        gitOwner: data.gitOwner ?? null,
+        gitRepo: data.gitRepo ?? null,
+        gitBranch: data.gitBranch ?? null,
+      });
       return { context, data };
     },
     async ensure(ctx, value) {
@@ -170,14 +330,32 @@ export function createProjectOperations(authorization: Authorization, dependenci
       // deliberately insufficient; callers can use create then deploy its id.
       const context = await authorize(ctx, input.projectId ?? "*", "write");
       const data = await resources().ensure(context, input);
-      audit(context, data.project_id, data.created, { name: input.name, slug: input.slug ?? null, gitBranch: input.gitBranch ?? null, port: input.port ?? null });
+      audit(context, data.project_id, data.created, {
+        name: input.name,
+        slug: input.slug ?? null,
+        gitBranch: input.gitBranch ?? null,
+        port: input.port ?? null,
+      });
       return { context, data };
     },
     async list(ctx, value = {}) {
       const input = parseInput(ListProjectsSchema, value);
-      const context = await authorization.authorize(ctx, { resourceType: "project", resourceId: "*", action: "read", scope: "list" });
+      const context = await authorization.authorize(ctx, {
+        resourceType: "project",
+        resourceId: "*",
+        action: "read",
+        scope: "list",
+      });
       const result = await resources().list(context, input);
-      return { context, data: { data: result.rows.map(presentProject), total: result.total, page: result.page, perPage: result.perPage } };
+      return {
+        context,
+        data: {
+          data: result.rows.map(presentProject),
+          total: result.total,
+          page: result.page,
+          perPage: result.perPage,
+        },
+      };
     },
     async get(ctx, value) {
       const id = parseInput(ResourceIdSchema, value);
@@ -189,7 +367,13 @@ export function createProjectOperations(authorization: Authorization, dependenci
       const input = parseInput(UpdateProjectBody, command);
       const context = await authorize(ctx, id, "write");
       const data = presentProject(await resources().update(context, id, input));
-      audit(context, id, false, { name: data.name, slug: data.slug, gitOwner: data.gitOwner ?? null, gitRepo: data.gitRepo ?? null, gitBranch: data.gitBranch ?? null });
+      audit(context, id, false, {
+        name: data.name,
+        slug: data.slug,
+        gitOwner: data.gitOwner ?? null,
+        gitRepo: data.gitRepo ?? null,
+        gitBranch: data.gitBranch ?? null,
+      });
       return { context, data };
     },
   } satisfies PlatformProjectOperations);

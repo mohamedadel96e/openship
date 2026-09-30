@@ -5,16 +5,25 @@
  */
 
 import { Hono } from "hono";
+import {
+  ListDeploymentsSchema,
+  DeploymentLogsSchema,
+  PinSchema,
+  SkipPortCheckSchema,
+  RedeploySchema,
+  TriggerDeployBody,
+  BuildAccessBody,
+  PrepareDeployBody,
+  BuildRespondBody,
+} from "@repo/contracts";
 import { secureRouter } from "../../lib/secure-router";
 import { cloudDeploymentProxy, cloudProjectProxyByQuery } from "../../lib/cloud/project-router";
 import * as ctrl from "./deployment.controller";
-import { TriggerDeployBody, BuildAccessBody, PrepareDeployBody, BuildRespondBody } from "@repo/contracts";
 
 const r = secureRouter(new Hono(), {
   module: "deployments",
   basePath: "/api/deployments",
 });
-
 
 /* ── CRUD + operations ─────────────────────────────────────────────── */
 // ?projectId=<cloud project> proxies to the SaaS; org-wide list stays local.
@@ -22,7 +31,9 @@ r.get(
   "/",
   {
     tag: "deployment:list",
-    mcp: { description: "List deployments in the org (optionally filter with query.projectId)." },
+     mcp: { description: "List deployments in the org (optionally filter with query.projectId).",
+   },
+    query: ListDeploymentsSchema,
   },
   cloudProjectProxyByQuery,
   ctrl.list,
@@ -57,7 +68,8 @@ r.post(
     collection: true,
     body: PrepareDeployBody,
     auditHandledByOperation: true,
-    mcp: { description: "Detect stack/build config for a git repo or local path before deploying." },
+     mcp: { description: "Detect stack/build config for a git repo or local path before deploying.",
+   },
   },
   ctrl.prepare,
 );
@@ -85,8 +97,8 @@ r.post(
 // Side-effect-free SSL status probe — uses POST only to carry hostname
 // in body. Permission required is "read"; readOnly tells the scanner
 // the POST + read combination is intentional.
-r.post("/ssl/status", { tag: "deployment:read", readOnly: true, collection: true }, ctrl.sslStatus);
-r.post("/ssl/renew", { tag: "deployment:write", collection: true, auditHandledByOperation: true }, ctrl.sslRenew);
+r.post("/ssl/status", { tag: "deployment:read", readOnly: true, collection: true, mcpExcluded: "Legacy hostname probe; use the managed domain detail/status tools for scoped routing and certificate evidence." }, ctrl.sslStatus);
+r.post("/ssl/renew", { tag: "deployment:write", collection: true, auditHandledByOperation: true, mcpExcluded: "Legacy hostname renewal; use POST /api/domains/:id/renew for managed domain identity and ownership." }, ctrl.sslRenew);
 
 /* ── Deployment by ID ──────────────────────────────────────────────── */
 // cloudDeploymentProxy (after the permission middleware) forwards the request
@@ -96,18 +108,19 @@ r.get(
   "/:id",
   {
     tag: "deployment:read",
-    mcp: { description: "Get a deployment by id — status, urls, timing, error summary." },
+     mcp: { description: "Get a deployment by id — status, urls, timing, error summary.",
+   },
   },
   cloudDeploymentProxy,
   ctrl.getById,
 );
 r.get(
   "/:id/logs",
-  { tag: "deployment:read", mcp: { description: "Fetch a deployment's build/runtime logs." } },
+  { tag: "deployment:read", mcp: { description: "Fetch a deployment's build/runtime logs." }, query: DeploymentLogsSchema },
   cloudDeploymentProxy,
   ctrl.logs,
 );
-r.get("/:id/stream", { tag: "deployment:read" }, cloudDeploymentProxy, ctrl.stream);
+r.get("/:id/stream", { tag: "deployment:read", mcpExcluded: "SSE transport for live progress. Use the resource’s JSON status/log tools over MCP, or an authenticated HTTP client for streaming." }, cloudDeploymentProxy, ctrl.stream);
 r.get(
   "/:id/build",
   {
@@ -132,10 +145,10 @@ r.get(
   cloudDeploymentProxy,
   ctrl.pendingActions,
 );
-r.post("/:id/build", { tag: "deployment:write", auditHandledByOperation: true }, cloudDeploymentProxy, ctrl.buildStart);
+r.post("/:id/build", { tag: "deployment:write", auditHandledByOperation: true, mcpExcluded: "Legacy start-by-deployment-ID adapter. Start or redeploy through /api/deployments or /api/deployments/build/access." }, cloudDeploymentProxy, ctrl.buildStart);
 r.post(
   "/:id/redeploy",
-  { tag: "deployment:write", mcp: { description: "Re-run the latest deployment for this project." }, auditHandledByOperation: true },
+  { tag: "deployment:write", mcp: { description: "Re-run the latest deployment for this project." }, auditHandledByOperation: true, body: RedeploySchema, bodyValidatedByOperation: true },
   cloudDeploymentProxy,
   ctrl.buildRedeploy,
 );
@@ -157,7 +170,7 @@ r.post(
   cloudDeploymentProxy,
   ctrl.rollback,
 );
-r.post("/:id/pin", { tag: "deployment:write", auditHandledByOperation: true }, cloudDeploymentProxy, ctrl.pin);
+r.post("/:id/pin", { tag: "deployment:write", auditHandledByOperation: true, mcp: { description: "Pin or unpin a retained deployment image for rollback using body.pinned. Read restore-plan to confirm whether that image is still available." }, body: PinSchema, bodyValidatedByOperation: true }, cloudDeploymentProxy, ctrl.pin);
 r.post("/:id/reject", { tag: "deployment:write", mcp: { description: "Reject a partial-failure deployment awaiting a decision (roll back the changed services)." }, auditHandledByOperation: true }, cloudDeploymentProxy, ctrl.reject);
 r.post("/:id/keep", { tag: "deployment:write", mcp: { description: "Keep a partial-failure deployment awaiting a decision (accept the succeeded services)." }, auditHandledByOperation: true }, cloudDeploymentProxy, ctrl.keep);
 r.post(
@@ -166,7 +179,7 @@ r.post(
     mcp: {
       description:
         "Dismiss the advisory 'nothing is listening on this port' warning for a target (service id, or the port as a string). Advisory-only — it never changes the deployment's status. Use when the app legitimately listens elsewhere.",
-    }, auditHandledByOperation: true },
+    }, auditHandledByOperation: true, body: SkipPortCheckSchema },
   cloudDeploymentProxy,
   ctrl.skipPortCheck,
 );
@@ -176,7 +189,7 @@ r.post(
   cloudDeploymentProxy,
   ctrl.cancel,
 );
-r.delete("/:id", { tag: "deployment:admin", auditHandledByOperation: true }, cloudDeploymentProxy, ctrl.remove);
+r.delete("/:id", { tag: "deployment:admin", auditHandledByOperation: true, mcp: { description: "Delete an inactive deployment record and its releasable resources. The active deployment is protected; inspect status before deletion." } }, cloudDeploymentProxy, ctrl.remove);
 r.post("/:id/restart", { tag: "deployment:write", mcp: { description: "Restart the running container(s) for this deployment." }, auditHandledByOperation: true }, cloudDeploymentProxy, ctrl.restart);
 r.post(
   "/:id/build/respond",

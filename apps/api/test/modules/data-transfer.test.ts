@@ -136,7 +136,7 @@ describe("passphrase-crypto", () => {
     expect(() => openSecretBundle(sealed, "wrong")).toThrow(WrongPassphraseError);
   });
 
-  it("requires a transfer secret whenever the export contains credentials", () => {
+  it("requires a password when the export contains sealed credentials", () => {
     const sealed = sealSecretBundle(bundle, "correct horse");
     expect(() => openTransferSecrets(sealed)).toThrow(WrongPassphraseError);
     expect(openTransferSecrets(null)).toBeNull();
@@ -613,6 +613,19 @@ describe("one-time direct instance transfer", () => {
 });
 
 describe("secret-codec round-trips (extract → seal → decrypt)", () => {
+  it("protects repository grants during transfer with the same cipher as their writer", async () => {
+    const registered = SECRET_COLUMNS.find((entry) => entry.sqlName === "user_settings" && entry.column === "githubAuthorizationEncrypted")!;
+    const grant = JSON.stringify({ accessToken: "repository-access", refreshToken: "repository-refresh", accessExpiresAt: null, refreshExpiresAt: null });
+    const ciphertext = encrypt(grant);
+    const entry = extractPlaintext(registered, "settings", ciphertext);
+    expect(entry?.value).toBe(grant);
+    expect(decrypt(sealForInstance(registered, entry!) as string)).toBe(grant);
+    const { stripEncryptedInPlace } = await import("@repo/db");
+    const tables = { user_settings: [{ id: "settings", userId: "user", githubAuthorizationEncrypted: ciphertext }] };
+    stripEncryptedInPlace(tables);
+    expect(tables.user_settings[0]!.githubAuthorizationEncrypted).toBeNull();
+  });
+
   it.each(["secretEncrypted", "envValueEncrypted"])("transfers cluster database %s with the same cipher as its writer", (column) => {
     const registered = SECRET_COLUMNS.find((entry) => entry.sqlName === "cluster_database" && entry.column === column)!;
     expect(registered.scheme).toBe("scalar");
@@ -667,9 +680,24 @@ describe("secret-codec round-trips (extract → seal → decrypt)", () => {
     expect(decrypt(sealedCell.hmacSecret as string)).toBe("sig");
   });
 
-  it("returns null for empty/absent cells", () => {
-    expect(extractPlaintext(spec("scalar", "value"), "id1", null)).toBeNull();
-    expect(extractPlaintext(spec("scalar", "value"), "id1", "")).toBeNull();
+  it.each(["scalar", "enc1", "plaintext", "map", "notification-config", "json"] as const)(
+    "preserves explicit clears while leaving absent %s columns untouched",
+    (scheme) => {
+      const column = spec(scheme, "value");
+      expect(extractPlaintext(column, "id1", undefined)).toBeNull();
+      const cleared = extractPlaintext(column, "id1", null);
+      expect(cleared).not.toBeNull();
+      expect(sealForInstance(column, cleared!, { old: "stale" })).toBeNull();
+    },
+  );
+
+  it("restores empty values instead of keeping destination credentials", () => {
+    const scalar = spec("scalar", "value");
+    expect(decrypt(sealForInstance(scalar, extractPlaintext(scalar, "id1", "")!) as string)).toBe("");
+    const credential = spec("enc1", "sshPassword");
+    expect(sealForInstance(credential, extractPlaintext(credential, "id1", "")!)).toBe("");
+    const map = spec("map", "envVars");
+    expect(sealForInstance(map, extractPlaintext(map, "id1", {})!)).toEqual({});
   });
 });
 

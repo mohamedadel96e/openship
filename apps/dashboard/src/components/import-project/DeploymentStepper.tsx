@@ -51,24 +51,24 @@ export function DeploymentStepper() {
               {index < steps.length - 1 && (
                 <span
                   aria-hidden="true"
-                  className={`absolute start-1/2 top-4 h-0.5 w-[calc(100%+0.5rem)] ${completed ? "bg-primary" : "bg-border/70"}`}
+                  className={`absolute start-1/2 top-1/2 h-0.5 w-[calc(100%+0.5rem)] -translate-y-1/2 ${completed ? "bg-primary" : "bg-border/70"}`}
                 />
               )}
               {/* An opaque ring cuts the track away from the icon in every theme. */}
               <span
                 aria-hidden="true"
-                className={`relative z-10 inline-flex size-8 shrink-0 items-center justify-center rounded-full ring-4 ring-[var(--th-card-on-page)] ${tone}`}
+                className={`relative z-10 inline-flex size-6 shrink-0 items-center justify-center rounded-full ring-2 ring-[var(--th-card-on-page)] ${tone}`}
               >
                 {completed ? (
-                  <UiIcon name="check" className="size-5" />
+                  <UiIcon name="check" className="size-3.5" />
                 ) : failed ? (
-                  <UiIcon name="close" className="size-5" />
+                  <UiIcon name="close" className="size-3.5" />
                 ) : cancelled ? (
-                  <UiIcon name="minus" className="size-5" />
+                  <UiIcon name="minus" className="size-3.5" />
                 ) : active ? (
-                  <UiIcon name="spinner" className="size-5 motion-safe:animate-spin" />
+                  <UiIcon name="spinner" className="size-3.5 motion-safe:animate-spin" />
                 ) : (
-                  <UiIcon name={step.icon} className="size-4.5" />
+                  <UiIcon name={step.icon} className="size-3.5" />
                 )}
               </span>
             </li>

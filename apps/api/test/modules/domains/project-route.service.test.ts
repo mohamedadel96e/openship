@@ -51,6 +51,10 @@ vi.mock("@repo/platform/engine/lib/route-apply.service", () => ({
   reconcileProjectRoutes: reconcile,
 }));
 
+vi.mock("@repo/platform/engine/lib/platform-config", () => ({
+  platform: () => ({ target: "selfhosted" }),
+}));
+
 vi.mock("@repo/platform/engine/modules/route-rules/route-rule.service", () => ({
   pushProjectRules: vi.fn().mockResolvedValue(undefined),
 }));
@@ -109,6 +113,54 @@ beforeEach(() => {
   listServicesByProject.mockReset().mockResolvedValue([]);
   syncManagedEdge.mockReset().mockResolvedValue({ failures: [] });
   deregisterManagedEdge.mockReset().mockResolvedValue({ failures: [] });
+});
+
+describe("provider-managed native Cloud routes", () => {
+  it("updates and removes through the Cloud provider without a public-server edge registration", async () => {
+    const project = {
+      id: "project-1",
+      slug: "app",
+      port: 3000,
+      organizationId: "org-1",
+      cloudWorkspaceId: null,
+      activeDeploymentId: "deployment-1",
+      webhookDomain: null,
+    } as Parameters<typeof reapplyProjectLiveRoutes>[0];
+    findDeployment.mockReset().mockResolvedValue({
+      id: "deployment-1",
+      projectId: project.id,
+      organizationId: project.organizationId,
+      containerId: "workspace-one",
+      meta: { deployTarget: "cloud", workspaceId: "workspace-one" },
+    });
+    listByProject
+      .mockReset()
+      .mockResolvedValue([
+        domainRow({ id: "current", hostname: "app.opsh.io", targetPort: 3000, domainType: "free" }),
+      ]);
+    resolveRuntime.mockReset();
+    reconcile.mockReset().mockResolvedValue(undefined);
+
+    await reapplyProjectLiveRoutes(project, ["previous.opsh.io"]);
+
+    expect(reconcile).toHaveBeenCalledExactlyOnceWith(
+      project,
+      expect.objectContaining({
+        deployment: expect.objectContaining({
+          id: "deployment-1",
+          projectId: project.id,
+          organizationId: project.organizationId,
+          containerId: "workspace-one",
+        }),
+        registers: [
+          { hostname: "app.opsh.io", port: 3000, isCustomDomain: false },
+        ],
+        removes: [{ hostname: "previous.opsh.io", isCustomDomain: false }],
+      }),
+    );
+    expect(syncManagedEdge).not.toHaveBeenCalled();
+    expect(deregisterManagedEdge).not.toHaveBeenCalled();
+  });
 });
 
 describe("shouldRefuseLoopbackRoute", () => {
@@ -572,7 +624,8 @@ describe("container-served static project routes (#879)", () => {
     listByProject.mockReset().mockResolvedValue([route()]);
     findDeployment.mockReset().mockResolvedValue({
       id: "dep-site",
-      projectId: project.id, organizationId: project.organizationId,
+      projectId: project.id,
+      organizationId: project.organizationId,
       containerId,
       imageRef: null,
       meta: { workload: "static", runtimeMode: "docker", staticServeOutputDir: null },
@@ -919,6 +972,53 @@ describe("reapplyProjectLiveRoutes multi-service project-level routes (issue #61
       },
     ]);
   });
+
+  it.each(["compose", "c-web"])(
+    "uses a provisional service identity for project routes with deployment handle %s",
+    async (handle) => {
+      listByProject.mockResolvedValue([projectDomain(3000)]);
+      findDeployment.mockResolvedValue({
+        id: "dep-1",
+        projectId: project.id,
+        containerId: handle,
+        meta: { deployTarget: "server", serverId: "srv-1", runtimeMode: "docker" },
+        organizationId: "org-1",
+      });
+      const getContainerInfo = vi.fn(async (id: string) => ({
+        containerId: id,
+        status: id === "new-web" ? "running" : "stopped",
+        ip: "10.0.0.9",
+      }));
+      resolveRuntime.mockResolvedValue({
+        routing: { provider: "docker" },
+        effectiveTarget: "server",
+        serverId: "srv-1",
+        runtime: {
+          name: "docker",
+          supports: () => true,
+          getContainerInfo,
+          getContainerIp: async (id: string) => (id === "new-web" ? "10.0.0.9" : null),
+        },
+      });
+      await reapplyProjectLiveRoutes(project, [], {
+        serviceRuntime: {
+          serviceId: "svc-web",
+          containerId: "new-web",
+          ip: "10.0.0.9",
+        },
+        managedEdgeSyncedByCaller: true,
+      });
+      expect(reconcile.mock.calls[0]![1].registers).toContainEqual(
+        expect.objectContaining({
+          hostname: "app.example.com",
+          targetUrl: "http://10.0.0.9:3000",
+        }),
+      );
+      expect(getContainerInfo.mock.calls.every(([id]) => id === "new-web")).toBe(true);
+      expect(liveRows[1]!.containerId).toBe("c-web");
+      expect(syncManagedEdge).not.toHaveBeenCalled();
+    },
+  );
 
   it("leaves a fan-out hostname to its complete topology writer without removing the existing route", async () => {
     listByProject.mockResolvedValue([projectDomain(3000)]);

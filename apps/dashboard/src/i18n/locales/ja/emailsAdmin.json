@@ -300,8 +300,19 @@
       "notListeningHint": "このポートで待ち受けているプロセスはありません。",
       "notExposedHint": "ループバックのみで待ち受けているため、外部クライアントは接続できません。",
       "unknownHint": "公開到達性を確認できませんでした。",
-      "ports": { "smtp": "受信 SMTP", "smtps": "SMTP 送信 (TLS)", "submission": "SMTP 送信 (STARTTLS)", "imaps": "IMAP 受信 (TLS)" },
-      "status": { "reachable": "接続可能", "blocked": "ブロック", "not_listening": "待受なし", "not_exposed": "未公開", "unknown": "不明" }
+      "ports": {
+        "smtp": "受信 SMTP",
+        "smtps": "SMTP 送信 (TLS)",
+        "submission": "SMTP 送信 (STARTTLS)",
+        "imaps": "IMAP 受信 (TLS)"
+      },
+      "status": {
+        "reachable": "接続可能",
+        "blocked": "ブロック",
+        "not_listening": "待受なし",
+        "not_exposed": "未公開",
+        "unknown": "不明"
+      }
     },
     "delivery": {
       "title": "送信の状態",
@@ -411,7 +422,8 @@
       "partSignatures": "{names} が動作していません - ウイルス定義が更新されなくなるため、古くなっていく定義でスキャンされます",
       "partAdvisory": "{names} が動作していません",
       "almostSubQueueOne": "{count} 件のメールが送信待ちです - 下の「送信の状態」を確認してください。",
-      "almostSubQueueOther": "{count} 件のメールが送信待ちです - 下の「送信の状態」を確認してください。"
+      "almostSubQueueOther": "{count} 件のメールが送信待ちです - 下の「送信の状態」を確認してください。",
+      "partCertificate": "メール証明書の確認が必要です"
     },
     "time": {
       "secondsAgo": "{n} 秒前",
@@ -647,5 +659,28 @@
     "loadingLogs": "ログを読み込み中…",
     "noLogLines": "このコンポーネントのログ行はまだありません。",
     "rowActions": "{name} の操作"
+  },
+  "certificate": {
+    "title": "メール証明書",
+    "manage": "証明書を管理",
+    "check": "証明書を確認",
+    "checking": "確認中…",
+    "renew": "証明書を更新",
+    "renewing": "更新中…",
+    "autoRenew": "自動更新",
+    "autoRenewHint": "有効期限前に更新し、メールサービスを再読み込みします。",
+    "desktopHint": "自動更新には Openship を起動したままにしてください。",
+    "jobDisabled": "共通の SSL 更新ジョブが無効です。",
+    "manageJob": "更新ジョブを開く",
+    "failed": "メール証明書を更新できませんでした。",
+    "notChecked": "未確認",
+    "expires": "有効期限：{date}",
+    "checked": "確認日時：{time}",
+    "status": {
+      "ok": "有効",
+      "warn": "更新が必要",
+      "fail": "対応が必要",
+      "unknown": "未検証"
+    }
   }
 }

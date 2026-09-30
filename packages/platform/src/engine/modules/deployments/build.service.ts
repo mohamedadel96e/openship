@@ -119,6 +119,7 @@ import {
 } from "../../lib/release-resolver";
 import { commitSourceKey, projectBranch } from "../projects/project-crud.service";
 import { env } from "../../config/index";
+import { ensureDraftAppResourceDefaults } from "../apps/app-resource-defaults";
 
 function throwPreflightFailure(preflight: PreflightResult): never {
   const failedChecks = preflight.checks.filter((check) => check.status === "fail");
@@ -178,10 +179,8 @@ export async function runDeploymentPreflight(
     /** Project id — passed to the remote-clone-token preflight check so
      *  project-scoped clone tokens are considered. */
     projectId?: string;
-    /** Catalog app this project instantiates + whether it has ever been live, so
-     *  the app's declared host minimum is matched against the target machine. */
+    /** Catalog app whose recommendations are checked against the target machine. */
     appTemplateId?: string | null;
-    firstDeploy?: boolean;
   },
 ): Promise<void> {
   const preflight = await runPreflightChecks(snapshot, {
@@ -199,7 +198,6 @@ export async function runDeploymentPreflight(
     ...(opts.gitRepo !== undefined ? { gitRepo: opts.gitRepo } : {}),
     ...(opts.projectId !== undefined ? { projectId: opts.projectId } : {}),
     ...(opts.appTemplateId !== undefined ? { appTemplateId: opts.appTemplateId } : {}),
-    ...(opts.firstDeploy !== undefined ? { firstDeploy: opts.firstDeploy } : {}),
     buildStrategy: snapshot.buildStrategy as "local" | "server" | undefined,
   });
   if (!preflight.ok) {
@@ -232,6 +230,14 @@ export interface DeploymentConfigSnapshot {
   rootDirectory: string;
   port: number;
   startCommand: string;
+  /**
+   * Commands run once between this deployment's build and its cutover. Frozen
+   * here for the same reason `volumes` is: a redeploy of an OLD deployment must
+   * replay the commands THAT release declared, not what the project says today.
+   * Absent on every row written before the field existed — and absent means no
+   * release phase, so those redeploy exactly as they always did.
+   */
+  releaseCommands?: string[];
   resources: ResourceConfig | null;
   buildResources: ResourceConfig | null;
   /** Whether the project needs a running server (false = static, deploy via Pages) */
@@ -462,6 +468,11 @@ export function buildConfigSnapshot(project: Project, branch?: string): Deployme
     rootDirectory: project.rootDirectory || "",
     port: project.port ?? 3000,
     startCommand: project.startCommand!,
+    // Only carried when the project declared some: an absent key keeps the
+    // snapshot byte-identical to a pre-release-phase one.
+    ...(Array.isArray(project.releaseCommands) && project.releaseCommands.length > 0
+      ? { releaseCommands: project.releaseCommands as string[] }
+      : {}),
     resources: (project.resources as ResourceConfig) || null,
     buildResources: (project.buildResources as ResourceConfig) || null,
     hasServer: project.hasServer ?? !!project.startCommand?.trim(),
@@ -770,12 +781,11 @@ function sameComposeBuildSource(a: DeployableService[], b: DeployableService[]):
 
 /**
  * Re-parse the project's current docker-compose source and 3-way reconcile it against the
- * stored service rows (repos.service.reconcileFromCompose): services the user
- * hasn't edited auto-update to the repo; edited services are preserved and flagged
- * (`driftSpec`) for review. Existing rows reconcile best-effort. Bootstrapping an
- * explicitly compose-shaped project is strict: a bad/empty declared file must
- * block instead of silently falling through to the generic single-app builder.
- * Non-compose projects are unchanged. GitHub and local-path sources converge on
+ * stored service rows (repos.service.reconcileFromCompose): source-owned fields
+ * follow the repo while explicit service overrides are preserved. Declared or
+ * previously imported Compose sources must remain valid before deployment.
+ * Independently attached services do not require Compose in an app's repository.
+ * GitHub and local-path sources converge on
  * resolveProjectInfo, so deploy has one parser and one 3-way merge policy.
  *
  * `changedPaths` (webhook only) is an optimization: when we have a definite,
@@ -891,6 +901,15 @@ async function reconcileComposeSource(
         });
     const services = info.services ?? [];
     if (services.length === 0) {
+      // `kind: compose` also represents independently added image services.
+      // An app scan can legitimately have no Compose services (#959). Keep its
+      // source env, leave the attached services alone, and require a nonempty
+      // source only when the project, scan, or imported baseline declares one.
+      const expectsComposeServices =
+        isMultiServiceProject(project) ||
+        info.projectType === "services" ||
+        composeRows.some((service) => service.kind === "compose" && service.importedSpec != null);
+      if (!expectsComposeServices) return info;
       throw new ComposeConfigurationError(
         `The configured compose path "${project.composePath ?? "repository root"}" contains no services.`,
       );
@@ -1284,6 +1303,8 @@ export async function createQueuedDeployment(opts: Parameters<typeof createQueue
 }
 
 async function createQueuedDeploymentUnlocked(opts: {
+  /** Attribution only; ownership/authorization still comes from organizationId. */
+  analyticsActor?: Pick<RequestContext, "userId" | "source">;
   projectId: string;
   /** Org that owns this deployment. Pass project.organizationId — the
    *  scoping key for the row. (Actor attribution lives on the audit
@@ -1373,6 +1394,7 @@ async function createQueuedDeploymentUnlocked(opts: {
       const project = await repos.project.findByIdInOrganization(opts.projectId, opts.organizationId);
       if (!project) throw new AppError("Project not found", 404, "PROJECT_NOT_FOUND");
       const mode = await resolveServicePipelineMode(project, meta);
+      const { usesCloudDockerWorkspace } = await import("../../lib/cloud-docker-workspace");
       meta = {
         ...meta,
         cloudApplicationSlot: !mode.useServicePipeline && snapshotToClass(meta).workload !== "static",
@@ -1385,6 +1407,9 @@ async function createQueuedDeploymentUnlocked(opts: {
         resources: meta.resources, buildResources: meta.buildResources,
         runsApplication: snapshotToClass(meta).workload !== "static",
         services: mode.useServicePipeline ? mode.servicePreflightServices : undefined,
+        dockerWorkspace:
+          mode.useServicePipeline &&
+          (await usesCloudDockerWorkspace(project, meta.serviceDeploymentMode)),
       });
     }
 
@@ -1468,6 +1493,8 @@ async function createQueuedDeploymentUnlocked(opts: {
       console.warn(`[build] supersede pending decisions for ${opts.projectId} failed:`, err),
     );
 
+  const { cloudAnalytics } = await import("../cloud-analytics");
+  await cloudAnalytics.record({ ...opts.analyticsActor, organizationId: opts.organizationId }, "cloud_deployment_started", { project_id: opts.projectId, deployment_id: dep.id }, `deployment-started:${dep.id}`);
   return dep;
 }
 
@@ -2055,10 +2082,8 @@ export async function requestBuildAccess(
     gitOwner: project.gitOwner,
     gitRepo: project.gitRepo,
     projectId: project.id,
-    // An app project carries its catalog id; a never-deployed one is the only
-    // deploy a host-capacity shortfall is allowed to refuse.
+    // Catalog apps receive an advisory host-capacity check.
     appTemplateId: project.appTemplateId,
-    firstDeploy: !project.activeDeploymentId,
   });
   const env = deployEnvironment;
 
@@ -2072,6 +2097,7 @@ export async function requestBuildAccess(
   );
 
   const dep = await createQueuedDeployment({
+    analyticsActor: { userId: ctx.userId, source: ctx.source },
     projectId: project.id,
     organizationId: project.organizationId,
     branch: snapshot.branch,
@@ -2401,6 +2427,12 @@ export async function redeployBuildSession(
     await repos.project.mergeEnvVars(project.id, oldDep.environment, sourceEnv.additions, []);
   }
 
+  // A retry freezes these rows before the pipeline runs. Seed missing catalog
+  // defaults here too, otherwise older failed installs keep the fallback limits
+  // from before resource profiles existed. Explicit settings remain untouched.
+  if (meta.serviceDeploymentMode !== "single" && (env.CLOUD_MODE || meta.deployTarget === "cloud")) {
+    await ensureDraftAppResourceDefaults(project);
+  }
   const currentComposeRows = await listProjectComposeServices(project.id).catch(() => []);
   const currentComposeServices = projectServicesToDeployableServices(
     currentComposeRows.filter((s) => s.enabled),
@@ -2424,6 +2456,7 @@ export async function redeployBuildSession(
   // Service-scoped rows stay out of this flat capture: the compose deployer
   // reads them live per service and applies them after compose inline env.
   const dep = await createQueuedDeployment({
+    analyticsActor: { userId: ctx.userId, source: ctx.source },
     projectId: project.id,
     organizationId: project.organizationId,
     branch,
@@ -2830,10 +2863,8 @@ export async function triggerDeployment(
     gitOwner: project.gitOwner,
     gitRepo: project.gitRepo,
     projectId: project.id,
-    // An app project carries its catalog id; a never-deployed one is the only
-    // deploy a host-capacity shortfall is allowed to refuse.
+    // Catalog apps receive an advisory host-capacity check.
     appTemplateId: project.appTemplateId,
-    firstDeploy: !project.activeDeploymentId,
   });
 
   // ── Resolve commit info: fetch HEAD from GitHub if not provided ────
@@ -2946,6 +2977,7 @@ export async function triggerDeployment(
   }
 
   const dep = await createQueuedDeployment({
+    analyticsActor: { userId: ctx.userId, source: ctx.source },
     projectId: project.id,
     organizationId: project.organizationId,
     branch,

@@ -12,7 +12,12 @@ import {
   SetReleaseSourceBody,
   SetAutoDeployBody,
 } from "./project-inputs";
-import { DeploymentHistoryFilters, DeploymentLogsSchema, DeploymentPageSchema, LogEntrySchema } from "./deployment-resources";
+import {
+  DeploymentHistoryFilters,
+  DeploymentLogsSchema,
+  DeploymentPageSchema,
+  LogEntrySchema,
+} from "./deployment-resources";
 import { AppError } from "@repo/core";
 import { ProjectSchema } from "./projects";
 import type { ResourceOperationSchema, ResourceOperations } from "./resource-operations";
@@ -23,6 +28,7 @@ import { ProjectTransferSchemas } from "./project-transfer";
 import { AppProjectSchemas } from "./apps";
 import { ProjectClusterSchemas } from "./project-cluster";
 import { ProjectDatabaseSchemas } from "./cluster-database";
+import { ProjectVolumeSchemas } from "./cluster-storage";
 import { BranchPageInput, BranchPaginationSchema } from "./github";
 
 const nullableString = Type.Union([Type.String(), Type.Null()]);
@@ -298,6 +304,7 @@ export const ProjectDriftSchema = Type.Union([
 
 export const ProjectControlSchemas = {
   ...ProjectDatabaseSchemas,
+  ...ProjectVolumeSchemas,
   ...AppProjectSchemas,
   ...ProjectTransferSchemas,
   ...ProjectLogSchemas,
@@ -316,7 +323,9 @@ export const ProjectControlSchemas = {
     input: BranchPageInput,
     optionalInput: true,
     output: Type.Object({
-      data: Type.Array(Type.Object({ name: Type.String(), sha: Type.String(), protected: Type.Boolean() })),
+      data: Type.Array(
+        Type.Object({ name: Type.String(), sha: Type.String(), protected: Type.Boolean() }),
+      ),
       pagination: BranchPaginationSchema,
     }),
   },
@@ -449,7 +458,11 @@ export const ProjectControlSchemas = {
   mergeEnvVars: {
     action: "write",
     input: MergeEnvVarsBody,
-    output: Type.Object({ upserted: Type.Integer(), deleted: Type.Integer(), warnings: Type.Optional(Type.Array(Type.String())) }),
+    output: Type.Object({
+      upserted: Type.Integer(),
+      deleted: Type.Integer(),
+      warnings: Type.Optional(Type.Array(Type.String())),
+    }),
   },
   getResources: { action: "read", output: ProjectResourcesSchema },
   ...ProjectClusterSchemas,

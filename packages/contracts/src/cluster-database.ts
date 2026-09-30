@@ -3,9 +3,18 @@ import type { ResourceOperationSchema } from "./resource-operations";
 
 const nullable = Type.Union([Type.String(), Type.Null()]);
 const stepId = Type.Union(
-  (["connect", "operators", "storage", "database", "verify", "remove", "backup"] as const).map(
-    (id) => Type.Literal(id),
-  ),
+  (
+    [
+      "connect",
+      "operators",
+      "storage",
+      "database",
+      "verify",
+      "remove",
+      "backup",
+      "restore",
+    ] as const
+  ).map((id) => Type.Literal(id)),
 );
 export const ClusterDatabaseProgressSchema = Type.Object({
   steps: Type.Array(
@@ -73,6 +82,7 @@ export const ClusterDatabaseObservationSchema = Type.Object({
 export const ClusterDatabaseConfigSchema = Type.Object(
   {
     engine: Type.Union([Type.Literal("postgres"), Type.Literal("redis")]),
+    version: Type.Optional(Type.Union([Type.Literal("17"), Type.Literal("18")])),
     mode: Type.Union([Type.Literal("standalone"), Type.Literal("cluster")]),
     instances: Type.Integer({ minimum: 1, maximum: 9 }),
     storageGiB: Type.Integer({ minimum: 1, maximum: 16384 }),
@@ -117,6 +127,7 @@ export const ClusterDatabaseSchema = Type.Object({
   internalHost: Type.String(),
   readOnlyHost: nullable,
   envKey: nullable,
+  sourceDatabaseId: Type.Optional(nullable),
   updatedAt: Type.String(),
   createdAt: Type.String(),
 });
@@ -129,6 +140,19 @@ const mutation = <T extends import("@sinclair/typebox").TProperties>(fields: T) 
   Type.Object({ ...identity, ...fields }, { additionalProperties: false });
 export const ProjectDatabaseSchemas = {
   listClusterDatabases: { action: "read", output: Type.Array(ClusterDatabaseSchema) },
+  listClusterDatabaseImports: {
+    action: "read",
+    output: Type.Array(
+      Type.Object({
+        runId: Type.String(),
+        artifactName: Type.String(),
+        engine: Type.Union([Type.Literal("postgres"), Type.Literal("redis")]),
+        sourceName: Type.String(),
+        completedAt: nullable,
+        sizeBytes: Type.Number(),
+      }),
+    ),
+  },
   getClusterDatabase: {
     action: "read",
     input: Type.Object(
@@ -150,6 +174,25 @@ export const ProjectDatabaseSchemas = {
           pattern: "^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$",
         }),
         config: ClusterDatabaseConfigSchema,
+        clusterId: Type.Optional(Type.String({ minLength: 1 })),
+        importFrom: Type.Optional(
+          Type.Object(
+            {
+              runId: Type.String({ minLength: 1 }),
+              artifactName: Type.String({ minLength: 1, maxLength: 255 }),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+        copyFrom: Type.Optional(
+          Type.Object(
+            {
+              databaseId: Type.String({ minLength: 1 }),
+              expectedSequence: Type.Integer({ minimum: 1 }),
+            },
+            { additionalProperties: false },
+          ),
+        ),
         clusterAwareClient: Type.Optional(Type.Literal(true)),
         restoreFrom: Type.Optional(
           Type.Object(
@@ -167,7 +210,10 @@ export const ProjectDatabaseSchemas = {
   },
   updateClusterDatabase: {
     action: "write",
-    input: mutation({ config: ClusterDatabaseConfigSchema }),
+    input: mutation({
+      config: ClusterDatabaseConfigSchema,
+      confirmRedisRebalance: Type.Optional(Type.Literal(true)),
+    }),
     output: ClusterDatabaseSchema,
   },
   retryClusterDatabase: { action: "write", input: mutation({}), output: ClusterDatabaseSchema },
@@ -181,6 +227,15 @@ export const ProjectDatabaseSchemas = {
     action: "write",
     input: mutation({
       envKey: Type.Union([Type.String({ pattern: "^[A-Za-z_][A-Za-z0-9_]{0,127}$" }), Type.Null()]),
+      replace: Type.Optional(
+        Type.Object(
+          {
+            databaseId: Type.String({ minLength: 1 }),
+            expectedSequence: Type.Integer({ minimum: 1 }),
+          },
+          { additionalProperties: false },
+        ),
+      ),
     }),
     output: ClusterDatabaseSchema,
   },

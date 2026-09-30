@@ -17,6 +17,9 @@ const h = vi.hoisted(() => ({
   deploy: vi.fn(),
 }));
 vi.mock("@/lib/api/cluster-databases", () => ({ clusterDatabasesApi: h }));
+vi.mock("@/lib/api/cluster-storage", () => ({
+  clusterStorageApi: { get: vi.fn(async () => null) },
+}));
 vi.mock("@/lib/api/backups", () => ({
   backupDestinationsApi: { list: vi.fn(async () => ({ data: [] })) },
 }));
@@ -74,12 +77,14 @@ afterEach(async () => {
 const button = (text: string) =>
   [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === text)!;
 const click = (target: HTMLElement) => act(async () => target.click());
-async function render(database?: ClusterDatabase) {
+async function render(database?: ClusterDatabase, databases: ClusterDatabase[] = []) {
   await act(async () =>
     root.render(
       <ClusterDatabasePanel
         projectId="project"
+        clusterId="cluster"
         database={database}
+        databases={databases}
         onSaved={h.saved}
         onDeploy={h.deploy}
         onClose={() => {}}
@@ -96,6 +101,58 @@ async function input(element: HTMLInputElement, value: string) {
 }
 
 describe("project database controls", () => {
+  it("requires an explicit review before switching an existing application connection", async () => {
+    const original = row({
+      id: "original",
+      name: "original",
+      envKey: "DATABASE_URL",
+      sequence: 12,
+    });
+    const copy = row({ id: "upgraded", name: "upgraded", sourceDatabaseId: original.id });
+    h.connect.mockResolvedValue({ ...copy, envKey: "DATABASE_URL" });
+    await render(copy, [original, copy]);
+    expect(button("Connect application").disabled).toBe(true);
+    expect(host.textContent).toContain("Use upgraded instead of original");
+    const review = [...host.querySelectorAll("label")].find((label) =>
+      label.textContent?.includes("Use upgraded instead of original"),
+    )!;
+    await click(review.querySelector<HTMLElement>('[role="checkbox"]')!);
+    await click(button("Connect application"));
+    expect(h.connect).toHaveBeenCalledWith("project", copy, "DATABASE_URL", {
+      databaseId: "original",
+      expectedSequence: 12,
+    });
+    expect(h.deploy).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Review application deployment");
+  });
+  it("makes a database upgrade a reviewed copy with the existing setup handled automatically", async () => {
+    const database = row({
+      config: {
+        ...row().config,
+        backup: { destinationId: "backups", schedule: "daily", retentionDays: 30 },
+      },
+    });
+    await render(database);
+    const details = [...host.querySelectorAll("details")].find(
+      (item) => item.querySelector("summary")?.textContent === "Create an upgraded copy",
+    )!;
+    await click(details.querySelector("summary")!);
+    expect(button("Create database copy").disabled).toBe(true);
+    await click(details.querySelector<HTMLElement>('[role="checkbox"]')!);
+    await act(async () =>
+      details
+        .querySelector("form")!
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+    );
+    expect(h.create).toHaveBeenCalledWith(
+      "project",
+      expect.objectContaining({
+        config: expect.objectContaining({ version: "18" }),
+        copyFrom: { databaseId: database.id, expectedSequence: database.sequence },
+      }),
+    );
+    expect(h.deploy).not.toHaveBeenCalled();
+  });
   it("keeps the catalog simple and locks a create until its saved record returns", async () => {
     let complete!: (row: ClusterDatabase) => void;
     h.create.mockReturnValue(

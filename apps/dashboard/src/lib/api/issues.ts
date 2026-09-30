@@ -28,10 +28,12 @@ export type IssueKind =
   | "workload_crash_loop"
   | "workload_down"
   | "server_unreachable"
+  | "monitoring_offline"
   // Managed components
   | "edge_down"
   | "edge_absent"
   | "mail_down"
+  | "mail_certificate"
   // Version drift
   | "update_available"
   | "component_behind";
@@ -138,6 +140,8 @@ export interface HealthCheckSummary {
   resolved: number;
   stale: number;
   unreachable: number;
+  /** Missing on APIs predating desktop connectivity detection. */
+  offline?: number;
   unresolved: number;
   skipped: number;
   indeterminate: number;
@@ -206,6 +210,6 @@ export const issuesApi = {
     }),
 
   /** Run the scheduled checkers behind the feed now. Self-hosted only (404s on cloud). */
-  rescan: () => api.post<{ data: MonitoringScanSession }>(endpoints.issues.rescan),
-  rescanStatus: () => api.get<{ data: MonitoringScanSession | null }>(endpoints.issues.rescanStatus),
+  rescan: (options?: { healthOnly?: boolean }) => api.post<{ data: MonitoringScanSession }>(endpoints.issues.rescan, options),
+  rescanStatus: () => api.get<{ data: MonitoringScanSession | null }>(endpoints.issues.rescanStatus, { dedupe: false }),
 };

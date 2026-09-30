@@ -307,6 +307,7 @@ const TABLES: ReadonlyArray<TableSpec> = [
   { sqlName: "compute_cluster", table: schema.computeCluster, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: true },
   { sqlName: "compute_cluster_member", table: schema.computeClusterMember, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: false },
   { sqlName: "cluster_runtime", table: schema.clusterRuntime, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: true },
+  { sqlName: "cluster_storage", table: schema.clusterStorage, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: true },
   { sqlName: "cluster_database", table: schema.clusterDatabase, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: true },
   { sqlName: "private_network", table: schema.serverCluster, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: true },
   { sqlName: "managed_network_operation", table: schema.managedNetworkOperation, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: true },
@@ -755,6 +756,11 @@ const TABLES: ReadonlyArray<TableSpec> = [
  * whole-instance export that claims to carry "every migration-managed table".
  */
 export const EXCLUDED_TABLES: Record<string, string> = {
+  cloud_support_ticket: "Private Cloud support requests; never export one customer's correspondence to another installation",
+  cloud_support_message: "Private Cloud support correspondence and mail delivery state",
+  cloud_analytics_event: "Cloud-only telemetry delivery and deduplication; never migrate into a local installation",
+  cloud_analytics_checkout: "Cloud-only analytics checkout correlation",
+  cloud_analytics_workspace: "Cloud-only analytics subscription snapshots",
   platform_instance: "the receiving installation retains its own identity and encryption-key binding",
   // Ephemeral / in-flight — re-created on demand, meaningless on another host.
   build_session: "in-flight build state; a migration never resumes a build mid-flight",
@@ -762,7 +768,9 @@ export const EXCLUDED_TABLES: Record<string, string> = {
   terminal_sessions: "SSH session audit bound to a live WS; open rows are swept at boot",
   service_terminal_sessions: "as terminal_sessions, for container shells",
   verification: "Better Auth one-shot nonces, all short-TTL",
-  github_install_state: "one-shot install nonce, deleted on callback",
+  domain_dns_challenge: "temporary ACME order and worker lease; start a new TXT challenge after an instance transfer",
+  acme_account: "instance-bound ACME account signing keys; the destination registers its own account without changing installed certificates",
+  github_install_state: "short-lived GitHub connection attempts, purged after expiry",
   cloud_handoff_code: "60s one-time cloud-connect codes",
   data_transfer_session: "short-lived whole-instance transfer capability and upload lease",
   data_transfer_chunk: "short-lived chunk staging for a whole-instance transfer",
@@ -941,6 +949,7 @@ export const ENCRYPTED_COLUMNS: ReadonlyArray<EncryptedColumnSpec> = [
   { table: "cluster_database", column: "envValueEncrypted" },
   { table: "user_settings", column: "cloudSessionToken" },
   { table: "user_settings", column: "cloneTokenEncrypted" },
+  { table: "user_settings", column: "githubAuthorizationEncrypted" },
   { table: "project", column: "cloneTokenEncrypted" },
   { table: "project", column: "webhookSecret" },
   { table: "cloud_webhook_binding", column: "webhookSecret" },
@@ -1378,6 +1387,27 @@ export function assertActiveDeploymentOwnership(tables: DatabaseDump["tables"]):
   }
 }
 
+const LEGACY_NETWORK_TABLES: Record<string, string> = {
+  server_cluster: "private_network",
+  cluster_network: "private_network_config",
+  cluster_member: "network_member",
+};
+
+/** File imports must never silently discard data from a newer schema. */
+export function assertDumpSchemaCompatible(dump: DatabaseDump): void {
+  for (const [name, rows] of Object.entries(dump.tables)) {
+    const table = TABLE_BY_SQL_NAME.get(LEGACY_NETWORK_TABLES[name] ?? name);
+    if (!table) {
+      throw new Error(`This export contains an unsupported table (${name}). Update the destination before importing.`);
+    }
+    const columns = new Set(Object.keys(getTableColumns(table)));
+    const unknown = new Set(rows.flatMap((row) => Object.keys(row).filter((key) => !columns.has(key))));
+    if (unknown.size) {
+      throw new Error(`This export contains unsupported fields in ${name}: ${[...unknown].join(", ")}. Update the destination before importing.`);
+    }
+  }
+}
+
 /**
  * Restore using a caller-owned transaction. This is the composition point for
  * workflows that must commit follow-up writes (for example credential
@@ -1396,9 +1426,8 @@ export async function restoreSubgraphInTransaction(
 
   // Older instance archives used the original network aggregate's cluster names.
   // Row property names and approved journal payloads are unchanged.
-  const legacyNetworks: Record<string, string> = { server_cluster: "private_network", cluster_network: "private_network_config", cluster_member: "network_member" };
   const tables = { ...dump.tables };
-  for (const [legacy, current] of Object.entries(legacyNetworks)) {
+  for (const [legacy, current] of Object.entries(LEGACY_NETWORK_TABLES)) {
     if (!tables[legacy]?.length) continue;
     if (tables[current]?.length) throw new Error(`Archive contains both ${legacy} and ${current}.`);
     tables[current] = tables[legacy];

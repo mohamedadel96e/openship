@@ -11,7 +11,9 @@
  * filters and DO NOT cross-check membership themselves.
  */
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { user } from "../schema/auth";
+import { and, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { generateId } from "@repo/core";
 import type { Database } from "../client";
 import {
@@ -44,6 +46,32 @@ export type DeliveryStatus = "queued" | "sending" | "sent" | "failed" | "seen";
 
 export function createNotificationChannelRepo(db: Database) {
   return {
+    /** Seed only authenticated account destinations; never re-enable an opt-out. */
+    async ensureAccountChannels(userId: string): Promise<void> {
+      const [account] = await db.select().from(user).where(eq(user.id, userId)).limit(1);
+      if (!account) return;
+      const existing = await db.select().from(notificationChannel)
+        .where(eq(notificationChannel.userId, userId));
+      const key = (kind: string, address = "") => `nch_account_${kind}_${createHash("sha256").update(JSON.stringify([userId, address])).digest("hex")}`;
+      // Settings channels may predate these deterministic defaults. Reuse their
+      // destinations, including disabled/unverified rows, without changing the
+      // user's verification or delivery preferences.
+      const channels: NewNotificationChannel[] = [];
+      if (!existing.some(channel => channel.kind === "in_app")) channels.push({
+        id: key("in_app"), userId, kind: "in_app", label: "In-app", config: {}, verified: true, enabled: true,
+      });
+      const hasAccountEmail = existing.some(channel => {
+        const address = (channel.config as { address?: unknown } | null)?.address;
+        return channel.kind === "email" && typeof address === "string" &&
+          address.trim().toLowerCase() === account.email.trim().toLowerCase();
+      });
+      if (account.emailVerified && account.email && !hasAccountEmail) channels.push({
+        id: key("email", account.email), userId, kind: "email", label: "Account email",
+        config: { address: account.email, accountEmail: true }, verified: true, enabled: true,
+      });
+      if (channels.length) await db.insert(notificationChannel).values(channels).onConflictDoNothing();
+    },
+
     /** List channels for a user — newest first. Includes disabled rows
      *  so the Settings UI can show their enabled toggle. */
     async listByUser(userId: string): Promise<NotificationChannel[]> {
@@ -340,6 +368,12 @@ export function createNotificationDefaultRepo(db: Database) {
 
 export function createNotificationDeliveryRepo(db: Database) {
   return {
+    /** One delivery per verified source event, recipient and channel, including retries. */
+    async createOnce(key: string, data: Omit<NewNotificationDelivery, "id" | "createdAt">): Promise<void> {
+      const id = `nde_${createHash("sha256").update(JSON.stringify([data.organizationId, key, data.userId, data.channelId])).digest("hex")}`;
+      await db.insert(notificationDelivery).values({ id, ...data }).onConflictDoNothing();
+    },
+
     /** Dashboard inbox — newest deliveries for one user in one org. */
     async listForUser(
       userId: string,
@@ -386,35 +420,57 @@ export function createNotificationDeliveryRepo(db: Database) {
     /** Atomically claim rows; concurrent workers cannot send the same queued row. */
     async claimQueued(limit = 25): Promise<NotificationDelivery[]> {
       return db.transaction(async tx => {
-        const rows = await tx.select().from(notificationDelivery).where(eq(notificationDelivery.status, "queued"))
+        const rows = await tx.select().from(notificationDelivery).where(or(
+          and(eq(notificationDelivery.status, "queued"), lte(notificationDelivery.nextAttemptAt, new Date())),
+          and(eq(notificationDelivery.status, "sending"), sql`${notificationDelivery.payload}->>'durable' = 'true'`,
+            sql`(${notificationDelivery.leaseUntil} IS NULL OR ${notificationDelivery.leaseUntil} <= NOW())`),
+        ))
           .orderBy(notificationDelivery.createdAt).limit(limit).for("update", { skipLocked: true });
         if (rows.length) await tx.update(notificationDelivery)
-          .set({ status: "sending", attempts: sql`${notificationDelivery.attempts} + 1` })
+          .set({ status: "sending", attempts: sql`${notificationDelivery.attempts} + 1`, leaseUntil: sql`NOW() + INTERVAL '60 seconds'` })
           .where(inArray(notificationDelivery.id, rows.map(row => row.id)));
         return rows;
       });
     },
 
-    /** Exclusive owner recovery never blindly repeats an uncertain external send. */
-    async failInterrupted(reason: string): Promise<void> {
-      await db.update(notificationDelivery).set({ status: "failed", lastError: reason }).where(eq(notificationDelivery.status, "sending"));
+    /** The claim attempt fences stale workers from changing a replacement's outcome. */
+    async renewLease(id: string, attempt: number): Promise<boolean> {
+      const rows = await db.update(notificationDelivery).set({ leaseUntil: sql`NOW() + INTERVAL '60 seconds'` })
+        .where(and(eq(notificationDelivery.id, id), eq(notificationDelivery.status, "sending"),
+          eq(notificationDelivery.attempts, attempt), sql`${notificationDelivery.leaseUntil} > NOW()`))
+        .returning();
+      return rows.length === 1;
     },
 
-    async markSent(id: string): Promise<void> {
+    /** Critical billing alerts use at-least-once delivery, retaining the same delivery ID. */
+    async failInterrupted(reason: string): Promise<void> {
+      await db.update(notificationDelivery).set({
+        status: sql`CASE WHEN ${notificationDelivery.payload}->>'durable' = 'true' THEN 'queued' ELSE 'failed' END`,
+        nextAttemptAt: new Date(), leaseUntil: null, lastError: reason,
+      }).where(eq(notificationDelivery.status, "sending"));
+    },
+
+    async markSent(id: string, attempt?: number): Promise<void> {
       await db
         .update(notificationDelivery)
-        .set({ status: "sent", sentAt: new Date() })
-        .where(eq(notificationDelivery.id, id));
+        .set({ status: "sent", sentAt: new Date(), leaseUntil: null })
+        .where(and(eq(notificationDelivery.id, id), attempt === undefined ? undefined :
+          and(eq(notificationDelivery.status, "sending"), eq(notificationDelivery.attempts, attempt))));
     },
 
-    async markFailed(id: string, error: string, retry: boolean): Promise<void> {
+    async markFailed(id: string, error: string, retry: boolean, attempt?: number): Promise<void> {
       await db
         .update(notificationDelivery)
         .set({
           status: retry ? "queued" : "failed",
+          leaseUntil: null,
           lastError: error,
+          nextAttemptAt: sql`CASE WHEN ${notificationDelivery.payload}->>'durable' = 'true'
+            THEN NOW() + LEAST(3600, POWER(2, LEAST(${notificationDelivery.attempts}, 12))) * INTERVAL '1 second'
+            ELSE NOW() END`,
         })
-        .where(eq(notificationDelivery.id, id));
+        .where(and(eq(notificationDelivery.id, id), attempt === undefined ? undefined :
+          and(eq(notificationDelivery.status, "sending"), eq(notificationDelivery.attempts, attempt))));
     },
 
     /** User clicks the in-app bell row. */

@@ -347,6 +347,8 @@ export function categoryForEventType(eventType: string): string | undefined {
  * two-direction categories: anything else belongs in `CATEGORIES` as its own row.
  */
 export const EVENT_HEADLINES: Record<string, { title: string; description: string }> = {
+  "billing.credit_low": { title: "Cloud credits running low", description: "Review your remaining allowance before Cloud workloads are interrupted." },
+  "billing.credit_exhausted": { title: "Cloud credits exhausted", description: "Open billing to add credits or review your plan." },
   "server.reachable": {
     title: "Server reachable",
     description: "A server's Docker daemon is answering again, with how long it was gone.",

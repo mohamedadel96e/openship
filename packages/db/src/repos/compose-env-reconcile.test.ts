@@ -63,10 +63,13 @@ function harness(initial = existingService(), hasScopedEnvironment = false) {
     },
     update: () => ({
       set: (data: Record<string, unknown>) => ({
-        where: async () => {
-          writes.push(configuration.openService(data));
-          stored = { ...stored, ...data };
-        },
+        where: () => ({
+          returning: async () => {
+            writes.push(configuration.openService(data));
+            stored = { ...stored, ...data };
+            return [stored];
+          },
+        }),
       }),
     }),
   } as unknown as Database;

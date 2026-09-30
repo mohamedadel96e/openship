@@ -33,6 +33,73 @@ const adapter = (
     vi.fn(),
   );
 describe("operator database manifests", () => {
+  it("uses a fresh newer database for a logical upgrade instead of physical recovery across major versions", () => {
+    const original = adapter();
+    const upgraded = new ClusterDatabaseAdapter(
+      original.api,
+      {
+        ...original.target,
+        config: { ...config, version: "18" },
+        restoreSource: {
+          format: "postgres-logical",
+          databaseId: "original",
+          backupName: "copy",
+          backupId: "snapshot/manifest.json",
+          destinationId: "destination",
+          destinationPath: "s3://backups/archives",
+          serverName: "original",
+          endpoint: null,
+        },
+      },
+      original.signal,
+      async () => {},
+    );
+    const spec = upgraded.manifest().spec;
+    expect(spec.imageName).toContain("postgresql:18.4@sha256:");
+    expect(spec.bootstrap.initdb).toMatchObject({ database: "app", owner: "app" });
+    expect(spec.bootstrap.recovery).toBeUndefined();
+    expect(spec.externalClusters).toBeUndefined();
+  });
+  it("keeps a database used by a running application release even after its desired connection was changed", async () => {
+    const instance = adapter();
+    const request = vi.mocked(instance.api.request);
+    request.mockImplementation(async (_method, path) => {
+      if (path.endsWith("/deployments"))
+        return {
+          items: [
+            {
+              spec: {
+                replicas: 1,
+                template: {
+                  spec: { containers: [{ envFrom: [{ secretRef: { name: "old-release-env" } }] }] },
+                },
+              },
+            },
+          ],
+        } as any;
+      if (path.endsWith("/secrets"))
+        return {
+          items: [
+            {
+              metadata: { name: "old-release-env" },
+              data: {
+                DATABASE_URL: Buffer.from(clusterDatabaseUrl("db", config, "password")).toString(
+                  "base64",
+                ),
+              },
+            },
+          ],
+        } as any;
+      return {
+        metadata: {
+          name: "namespace",
+          labels: { "openship.io/database": "db", "openship.io/runtime": "runtime" },
+        },
+      } as any;
+    });
+    await expect(instance.remove(true)).rejects.toThrow(/application release still uses/);
+    expect(request.mock.calls.every(([method]) => method === "GET")).toBe(true);
+  });
   it("uses the same valid project identity as application namespaces", () => {
     const projectId = "proj_database_";
     const database = adapter({}, undefined, projectId).manifest();
@@ -67,13 +134,14 @@ describe("operator database manifests", () => {
       persistenceEnabled: true,
       storage: { keepAfterDelete: true, nodeConfVolume: true },
       kubernetesConfig: {
+        ignoreAnnotations: ["openship.io/generation"],
         persistentVolumeClaimRetentionPolicy: { whenDeleted: "Retain", whenScaled: "Retain" },
       },
     });
     expect(
       manifest.spec.redisLeader.affinity.podAntiAffinity
         .requiredDuringSchedulingIgnoredDuringExecution[0].labelSelector.matchLabels,
-    ).toEqual({ "openship.io/database": "db" });
+    ).toEqual({ "openship.io/database": "db", redis_setup_type: "cluster" });
     expect(manifest.spec.redisFollower.affinity).toEqual(manifest.spec.redisLeader.affinity);
   });
   it("does not describe standalone Redis as a sharded cluster", () => {

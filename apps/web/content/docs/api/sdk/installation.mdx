@@ -1,13 +1,31 @@
 ---
 title: Install the SDK
-description: Install the preview package and use its JavaScript, TypeScript, and CLI entry points.
+description: Install Ship SDK from npm and use its JavaScript, TypeScript, and CLI entry points.
 ---
 
 Requires **Node.js 22 or later**. ESM, CommonJS, and TypeScript declarations are included.
 
-## Install the preview
+## Install from npm
 
-The published `openship@0.7.2` package is CLI-only. To use the SDK from this checkout:
+The `openship` package includes Ship SDK and the CLI starting with **0.8.0**:
+
+```bash
+npm install openship
+```
+
+If your project has an older CLI-only version, upgrade the local dependency:
+
+```bash
+npm install openship@latest
+npm ls openship
+```
+
+Versions before 0.8.0 do not include the SDK entry points. Upgrading the package does not upgrade
+a remote OpenShip server; see [server compatibility](/docs/api/sdk/compatibility#fixed-organization-scopes).
+
+## Test changes from source
+
+Contributors can build and install a local package without publishing it:
 
 1. Build the public package from the repository root:
 
@@ -26,11 +44,10 @@ The published `openship@0.7.2` package is CLI-only. To use the SDK from this che
 3. Install that tarball in your Node project:
 
    ```bash
-   npm install /absolute/path/to/openship-0.7.2.tgz
+   npm install /absolute/path/to/openship-0.8.0.tgz
    ```
 
-After an SDK-enabled release is published, this becomes `npm install openship`. A local tarball and
-the existing npm release can share a version number while containing different exports.
+Use the actual tarball filename printed by `npm pack`; it follows the checkout's package version.
 
 ## Choose an import
 

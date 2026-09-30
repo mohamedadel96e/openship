@@ -317,14 +317,14 @@ export const DeployTargetSummary: React.FC<CompactSummaryProps> = ({
   const { t } = useI18n();
   const { selfHosted } = usePlatform();
   const targetLabels: Record<DeployTarget, { label: string; icon: React.ReactNode }> = {
-    local: { label: t.deploy.summary.targetLocal, icon: <UiIcon name="cpu" className="size-3.5" /> },
-    server: { label: t.deploy.summary.targetServer, icon: <UiIcon name="server" className="size-3.5" /> },
-    cloud: { label: t.deploy.summary.targetCloud, icon: <UiIcon name="cloud" className="size-3.5" /> },
-    cluster: { label: "Server cluster", icon: <UiIcon name="cluster" className="size-3.5" /> },
+    local: { label: t.deploy.summary.targetLocal, icon: <UiIcon name="cpu" className="size-4" /> },
+    server: { label: t.deploy.summary.targetServer, icon: <UiIcon name="server" className="size-4" /> },
+    cloud: { label: t.deploy.summary.targetCloud, icon: <UiIcon name="cloud" className="size-4" /> },
+    cluster: { label: "Server cluster", icon: <UiIcon name="cluster" className="size-4" /> },
   };
   const buildLabels: Record<BuildStrategy, { label: string; icon: React.ReactNode }> = {
-    local: { label: t.deploy.summary.buildLocal, icon: <UiIcon name="cpu" className="size-3.5" /> },
-    server: { label: t.deploy.summary.buildRemote, icon: <UiIcon name="cloud" className="size-3.5" /> },
+    local: { label: t.deploy.summary.buildLocal, icon: <UiIcon name="cpu" className="size-4" /> },
+    server: { label: t.deploy.summary.buildRemote, icon: <UiIcon name="cloud" className="size-4" /> },
   };
   const tierLabels: Record<string, string> = {
     micro: t.deploy.power.tierMicroLabel,
@@ -343,7 +343,7 @@ export const DeployTargetSummary: React.FC<CompactSummaryProps> = ({
     buildStrategy === "local"
       ? buildLabels.local
       : deployTarget === "cloud"
-        ? { label: t.deploy.summary.targetCloud, icon: <UiIcon name="cloud" className="size-3.5" /> }
+        ? { label: t.deploy.summary.targetCloud, icon: <UiIcon name="cloud" className="size-4" /> }
         : buildLabels.server;
   const deployLabel = deployTarget === "server" && serverName
     ? serverName
@@ -371,39 +371,39 @@ export const DeployTargetSummary: React.FC<CompactSummaryProps> = ({
     // edge-served files — regardless of the project-level hasServer/framework
     // (which are unset for compose). Show the tier on cloud, else Sandboxed.
     deployTarget === "cloud" && cloudResourceTier ? (
-      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground shrink-0">
-        <UiIcon name="bolt" className="size-3" />
+      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground shrink-0">
+        <UiIcon name="bolt" className="size-4" />
         <span>{tierLabels[cloudResourceTier] ?? cloudResourceTier}</span>
       </span>
     ) : (
-      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground shrink-0">
-        <UiIcon name="shield-check" className="size-3" />
+      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground shrink-0">
+        <UiIcon name="shield-check" className="size-4" />
         {t.deploy.summary.runtimeSandboxed}
       </span>
     )
   ) : !hasServer ? (
-    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground shrink-0">
-      <UiIcon name="globe" className="size-3" />
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground shrink-0">
+      <UiIcon name="globe" className="size-4" />
       {t.deploy.summary.runtimeStatic}
     </span>
   ) : deployTarget === "cloud" ? (
     cloudResourceTier ? (
-      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground shrink-0">
-        <UiIcon name="bolt" className="size-3" />
+      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground shrink-0">
+        <UiIcon name="bolt" className="size-4" />
         <span>{tierLabels[cloudResourceTier] ?? cloudResourceTier}</span>
       </span>
     ) : null
   ) : deployTarget === "server" && runtimeMode === "bare" ? (
     <span
-      className="inline-flex items-center gap-1 text-[11px] font-medium text-warning shrink-0"
+      className="inline-flex items-center gap-1.5 text-xs font-medium text-warning shrink-0"
       title={t.deploy.summary.runtimeDirectHint}
     >
-      <UiIcon name="shield-alert" className="size-3" />
+      <UiIcon name="shield-alert" className="size-4" />
       {t.deploy.summary.runtimeDirectWarning}
     </span>
   ) : deployTarget === "server" && runtimeMode === "docker" ? (
-    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground shrink-0">
-      <UiIcon name="shield-check" className="size-3" />
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground shrink-0">
+      <UiIcon name="shield-check" className="size-4" />
       {t.deploy.summary.runtimeSandboxed}
     </span>
   ) : null;
@@ -416,14 +416,14 @@ export const DeployTargetSummary: React.FC<CompactSummaryProps> = ({
   // advertise a control the operator can't reach.
   const rollbackChip = !selfHosted ? null : (
     <span
-      className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground shrink-0"
+      className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground shrink-0"
       title={
         rollbackStrategy === "snapshot"
           ? t.deploy.summary.rollbackSnapshotHint
           : t.deploy.summary.rollbackGitHint
       }
     >
-      <UiIcon name="rotate-left" className="size-3" />
+      <UiIcon name="rotate-left" className="size-4" />
       {rollbackWindow == null
         ? t.deploy.summary.rollbackAuto
         : interpolate(
@@ -439,17 +439,17 @@ export const DeployTargetSummary: React.FC<CompactSummaryProps> = ({
     <button
       type="button"
       onClick={onEdit}
-      className="w-full flex items-center gap-3 px-4 py-3 bg-card rounded-xl border border-border/50 hover:border-primary/30 transition-all group"
+      className="w-full flex flex-wrap items-center gap-3 px-4 py-3 bg-card rounded-xl border border-border/50 hover:border-primary/30 transition-all group"
     >
       <div className="flex items-center gap-3 flex-1 min-w-0">
         {sameDestination ? (
           // Merged view — single line, two icons with a + between to
           // signal "both build and deploy go here", followed by one
           // label. Saves horizontal space vs the two-section layout.
-          <div className="flex items-center gap-1.5 text-sm min-w-0">
-            <div className="flex items-center gap-0.5 text-muted-foreground shrink-0">
+          <div className="flex items-center gap-2 text-xs min-w-0">
+            <div className="flex items-center gap-1 text-muted-foreground shrink-0">
               {build.icon}
-              <UiIcon name="plus" className="size-2.5" />
+              <UiIcon name="plus" className="size-3" />
               {target.icon}
             </div>
             <span className="text-muted-foreground">{t.deploy.summary.buildAndDeploy}</span>
@@ -459,15 +459,15 @@ export const DeployTargetSummary: React.FC<CompactSummaryProps> = ({
           <>
             {showBuildStrategy && (
               <>
-                <div className="flex items-center gap-1.5 text-sm shrink-0">
+                <div className="flex items-center gap-2 text-xs shrink-0">
                   {build.icon}
                   <span className="text-muted-foreground">{t.deploy.summary.build}</span>
                   <span className="font-medium text-foreground">{build.label}</span>
                 </div>
-                <UiIcon name="arrow-right" className="size-3 text-muted-foreground/50 shrink-0 rtl:rotate-180" />
+                <UiIcon name="arrow-right" className="size-3.5 text-muted-foreground/50 shrink-0 rtl:rotate-180" />
               </>
             )}
-            <div className="flex items-center gap-1.5 text-sm min-w-0">
+            <div className="flex items-center gap-2 text-xs min-w-0">
               {target.icon}
               <span className="text-muted-foreground">{t.deploy.summary.deploy}</span>
               <span className="font-medium text-foreground truncate">{deployLabel}</span>
@@ -477,7 +477,7 @@ export const DeployTargetSummary: React.FC<CompactSummaryProps> = ({
       </div>
       {runtimeChip}
       {rollbackChip}
-      <UiIcon name="edit" className="size-3.5 text-muted-foreground transition-opacity" />
+      <UiIcon name="edit" className="size-4 shrink-0 text-muted-foreground transition-opacity" />
     </button>
   );
 };

@@ -2,7 +2,8 @@
 
 import { Icon as UiIcon } from "@repo/ui/icons";
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { useI18n } from "@/components/i18n-provider";
 import { billingApi, type BillingState } from "@/lib/api/billing";
 import { ApiError } from "@/lib/api/client";
@@ -18,7 +19,7 @@ export function CloudDeployPlanModal({ restriction, onClose }: {
   const copy = t.billing.deployGate;
   const titleId = useId();
   const descriptionId = useId();
-  const dialog = useRef<HTMLDivElement>(null);
+  const { dialog, onKeyDown } = useDialogFocus(onClose);
   const initialTier = useRef<BillingState["tier"] | null>(null);
   const mounted = useRef(false);
   const busy = useRef(false);
@@ -51,34 +52,11 @@ export function CloudDeployPlanModal({ restriction, onClose }: {
 
   useEffect(() => {
     mounted.current = true;
-    const previousFocus = document.activeElement as HTMLElement | null;
-    dialog.current?.focus();
     void refresh();
     return () => {
       mounted.current = false;
-      previousFocus?.focus();
     };
   }, [refresh]);
-
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-    }
-    if (event.key !== "Tab") return;
-    const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), a[href], input:not([disabled]), summary, [tabindex="0"]',
-    ) ?? []).filter((element) => !element.closest("[hidden]"));
-    const first = focusable[0];
-    const last = focusable.at(-1);
-    if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) {
-      event.preventDefault();
-      last?.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first?.focus();
-    }
-  };
 
   const recovery = state ? cloudDeployRecovery(state, restriction) : "subscribe";
   const planChanged = recovery === "upgrade" && state && !state.overQuota && state.tier !== initialTier.current;
@@ -126,6 +104,7 @@ export function CloudDeployPlanModal({ restriction, onClose }: {
           {showPlans && <CloudPlanPicker
             currentPlan={state.tier}
             subscription={state.subscription}
+            complimentary={state.complimentary}
             billingEnabled={state.billing?.enabled === true}
             canChangeSubscription={state.capabilities?.subscriptionChange === true}
             preserveProject

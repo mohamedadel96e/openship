@@ -211,6 +211,7 @@ export function validateReturnTo(input: string | null): string | null {
   const ALLOWED_PREFIXES = ["/cloud-authorize", "/mcp/authorize", "/"];
   const isAllowed =
     isInvitationClaim ||
+    pathOnly === "/cloud-billing" ||
     ALLOWED_PREFIXES.some((prefix) => {
       if (prefix === "/") return pathOnly === "/";
       return pathOnly === prefix || pathOnly.startsWith(prefix + "/");

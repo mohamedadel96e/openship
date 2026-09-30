@@ -116,8 +116,8 @@ export async function handleMcpMessage(
     }
 
     case "prompts/list":
-      // The guided-flow catalog (see mcp-prompts). Static and identical for every
-      // caller — prompts are documentation, not privileged actions.
+      // The guided-flow catalog follows instance mode (see mcp-prompts).
+      // Prompts are documentation; their tools still enforce caller permissions.
       return result(msg.id, { prompts: listPrompts() });
 
     case "prompts/get": {

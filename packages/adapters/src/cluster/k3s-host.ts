@@ -122,7 +122,8 @@ def inspect():
         ids = run(['docker', 'network', 'ls', '-q']).split()
         if ids:
             for net in json.loads(run(['docker', 'network', 'inspect'] + ids)):
-                ranges.extend(cfg['Subnet'] for cfg in net.get('IPAM', {}).get('Config', []) if cfg.get('Subnet') and ':' not in cfg['Subnet'])
+                # Docker's host/none networks report Config: null, not an empty list.
+                ranges.extend(cfg['Subnet'] for cfg in (net.get('IPAM', {}).get('Config') or []) if cfg.get('Subnet') and ':' not in cfg['Subnet'])
     return {'interfaceName': matched[0]['ifname'], 'ranges': sorted(set(ranges)), 'installed': value is not None}
 
 def fetch(url, max_bytes):

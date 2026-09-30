@@ -57,14 +57,14 @@ function labelClass(status: StepStatus): string {
   return "text-foreground";
 }
 
-export function InstallStepper({ steps }: { steps: StepItem[] }) {
+export function InstallStepper({ steps, columns = 1 }: { steps: StepItem[]; columns?: 1 | 2 }) {
   return (
-    <div className="space-y-1">
+    <div className={columns === 2 ? "grid grid-cols-2 gap-x-4 gap-y-1" : "space-y-1"}>
       {steps.map((s) => (
-        <div key={s.id}>
-          <div className="flex items-center gap-2 text-[13px]">
+        <div key={s.id} className="min-w-0">
+          <div className="flex items-center gap-2 py-1 text-sm">
             <StepIcon status={s.status} />
-            <span className={labelClass(s.status)}>{s.label}</span>
+            <span className={`min-w-0 break-words ${labelClass(s.status)}`}>{s.label}</span>
           </div>
           {/* Logical margin, not `ml-`: the indent has to land under the icon
               column, which is on the right in Arabic. */}

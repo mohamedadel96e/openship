@@ -28,6 +28,7 @@ import { livePrimaryContainerId } from "../services/service-container";
 import { assertCloudRuntimeLimits, assertCloudServiceAllowance } from "../../lib/plan-guard";
 import { env } from "../../config/env";
 import { createProvisionLock } from "../../lib/provision-lock";
+import { resolveProjectLiveDeployTarget } from "./project-deploy-target";
 
 // ─── Runtime logs ────────────────────────────────────────────────────────────
 
@@ -430,15 +431,22 @@ async function retryLiveProjectRouting(
   };
 
   // Cloud manages its own ingress — there is no server edge to repair here.
-  if (p.cloudWorkspaceId) {
-    if (!(dep?.meta as { cloudDockerWorkspace?: unknown } | null)?.cloudDockerWorkspace)
-      return finish();
+  if ((await resolveProjectLiveDeployTarget(p, dep)).deployTarget === "cloud") {
     const warnings: string[] = [];
+    const onWarning = (message: string) => {
+      if (!warnings.includes(message)) warnings.push(message);
+      log(message);
+    };
     log("Applying cloud routes…");
+    await reapplyProjectLiveRoutes(p, [], {
+      onLog: options.onLog,
+      onWarning,
+      managedEdgeSyncedByCaller: true,
+    }).catch((error) => onWarning(safeErrorMessage(error)));
     await applyProjectRouting(projectId, {
       onLog: options.onLog,
-      onWarning: (message) => warnings.push(message),
-    });
+      onWarning,
+    }).catch((error) => onWarning(safeErrorMessage(error)));
     if (warnings.length) {
       const warning = warnings.join("\n");
       await markRoutingWarning(dep, warning);
@@ -696,6 +704,12 @@ export async function syncProjectManagedEdge(
   const dep = project.activeDeploymentId
     ? await findActiveDeployment(project)
     : null;
+  // Cloud Pages/workspaces already own these hostnames internally. The external
+  // server proxy API must never point them back at the control plane. This pass
+  // also cannot clear a warning from a failed Cloud route-table update.
+  if ((await resolveProjectLiveDeployTarget(project, dep)).deployTarget === "cloud") {
+    return { ok: true, failures: [] };
+  }
   const serverId = (dep?.meta as { serverId?: string } | null)?.serverId ?? undefined;
 
   const targets = (await repos.domain.listByProject(project.id))
@@ -736,7 +750,7 @@ async function clearRoutingWarning(
 
 /** Set the routing-unsynced markers so the project reads "Action Required" and
  *  the dashboard exposes "Retry routing" (see `routingUnsynced` in enrichProject). */
-async function markRoutingWarning(
+export async function markRoutingWarning(
   dep: Awaited<ReturnType<typeof repos.deployment.findById>> | null,
   warning: string,
 ): Promise<void> {

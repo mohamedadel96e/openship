@@ -32,6 +32,130 @@ async function service(id: string, options: { enabled?: boolean; project?: strin
 }
 
 describe("customer service quota accounting", () => {
+  it("does not consume service slots for an undeployed draft or its failed deployment", async () => {
+    await db
+      .update(schema.project)
+      .set({ activeDeploymentId: null })
+      .where(eq(schema.project.id, "project-a"));
+    await service("database");
+    await service("api");
+    expect(await repo.countRunningForOrg("org-a")).toBe(0);
+    await db.insert(schema.deployment).values({
+      id: "failed-draft",
+      projectId: "project-a",
+      organizationId: "org-a",
+      branch: "main",
+      status: "failed",
+      meta: { cloudApplicationSlot: false, cloudServiceSlots: ["database", "api"] },
+    });
+    expect(await repo.countRunningForOrg("org-a")).toBe(0);
+    expect(await repo.listByProject("project-a")).toHaveLength(2);
+  });
+  it("reserves only a draft's accepted deployment and releases it after cancellation", async () => {
+    await db
+      .update(schema.project)
+      .set({ activeDeploymentId: null })
+      .where(eq(schema.project.id, "project-a"));
+    await service("saved");
+    await service("not-in-this-deployment");
+    await db.insert(schema.deployment).values({
+      id: "queued-draft",
+      projectId: "project-a",
+      organizationId: "org-a",
+      branch: "main",
+      status: "queued",
+      meta: { cloudApplicationSlot: false, cloudServiceSlots: ["saved", "new"] },
+    });
+    expect(await repo.countRunningForOrg("org-a")).toBe(2);
+    await service("new");
+    expect(await repo.countRunningForOrg("org-a")).toBe(2);
+    expect(
+      await repo.countRunningForOrg("org-a", [], undefined, {
+        projectId: "project-a",
+        serviceNames: ["saved", "new"],
+      }),
+    ).toBe(2);
+    await db
+      .update(schema.deployment)
+      .set({ status: "cancelled" })
+      .where(eq(schema.deployment.id, "queued-draft"));
+    expect(await repo.countRunningForOrg("org-a")).toBe(0);
+  });
+  it.each(["services", "native"])(
+    "keeps %s slots reserved while the worker publishes its first active release",
+    async (kind) => {
+      await db
+        .update(schema.project)
+        .set({ activeDeploymentId: null })
+        .where(eq(schema.project.id, "project-a"));
+      if (kind === "services") await service("app");
+      await db.insert(schema.deployment).values({
+        id: "first-release",
+        projectId: "project-a",
+        organizationId: "org-a",
+        branch: "main",
+        status: "deploying",
+        containerId: kind === "native" ? "native-vm" : null,
+        meta: {
+          cloudApplicationSlot: kind === "native",
+          cloudServiceSlots: kind === "services" ? ["app"] : [],
+        },
+      });
+      await db.insert(schema.buildSession).values({
+        id: "release-worker",
+        projectId: "project-a",
+        deploymentId: "first-release",
+        startedAt: new Date(),
+      });
+      expect(await repo.countRunningForOrg("org-a")).toBe(1);
+      // The lifecycle records the outcome before moving the active pointer.
+      await db
+        .update(schema.deployment)
+        .set({ status: "ready" })
+        .where(eq(schema.deployment.id, "first-release"));
+      expect(await repo.countRunningForOrg("org-a")).toBe(1);
+      await db
+        .update(schema.project)
+        .set({ activeDeploymentId: "first-release" })
+        .where(eq(schema.project.id, "project-a"));
+      await db
+        .update(schema.buildSession)
+        .set({ finishedAt: new Date() })
+        .where(eq(schema.buildSession.id, "release-worker"));
+      expect(await repo.countRunningForOrg("org-a")).toBe(1);
+    },
+  );
+  it.each(["failed", "cancelled"])(
+    "releases a %s draft only after its worker finishes",
+    async (status) => {
+      await db
+        .update(schema.project)
+        .set({ activeDeploymentId: null })
+        .where(eq(schema.project.id, "project-a"));
+      await service("app");
+      await db.insert(schema.deployment).values({
+        id: "draft-worker",
+        projectId: "project-a",
+        organizationId: "org-a",
+        branch: "main",
+        status,
+        meta: { cloudApplicationSlot: false, cloudServiceSlots: ["app"] },
+      });
+      await db.insert(schema.buildSession).values({
+        id: "finishing-worker",
+        projectId: "project-a",
+        deploymentId: "draft-worker",
+        startedAt: new Date(),
+      });
+      expect(await repo.countRunningForOrg("org-a")).toBe(1);
+      await db
+        .update(schema.buildSession)
+        .set({ finishedAt: new Date() })
+        .where(eq(schema.buildSession.id, "finishing-worker"));
+      expect(await repo.countRunningForOrg("org-a")).toBe(0);
+    },
+  );
+
   it("reserves enabled definitions and excludes other organizations", async () => {
     await service("one"); await service("two"); await service("foreign", { project: "b" });
     expect(await repo.countRunningForOrg("org-a")).toBe(2);

@@ -1052,10 +1052,19 @@ export async function stepRequestSSL(
       target.serverId,
       target.organizationId,
     );
-    const result = await platform.ssl.provisionCert(mailDomain, {
-      onLog: (line) => log(stepId, "info", line),
-    });
-    if (!result.verified) {
+    const { createProvisionLock } = await import("../../lib/provision-lock");
+    const { sslIssueLockKey, acmeIssueLockKey, certComfortablyValid } = await import("../../lib/domain-ssl");
+    const result = await createProvisionLock(sslIssueLockKey(mailDomain)).run(() =>
+      createProvisionLock(acmeIssueLockKey(target.serverId)).run(async () => {
+        const existing = await platform!.ssl.verifyCert(mailDomain).catch(() => null);
+        if (existing && certComfortablyValid(existing)) return existing;
+        return platform!.ssl.provisionCert(mailDomain, {
+          force: true,
+          onLog: (line) => log(stepId, "info", line),
+        });
+      }),
+    );
+    if (!result.verified || !result.expiresAt || new Date(result.expiresAt).getTime() <= Date.now()) {
       return {
         stepId,
         success: false,
@@ -1101,33 +1110,13 @@ export async function stepConfigureSSL(
   const stepId = 8;
   const mailDomain = mailHostname(domain);
 
-  let flavor: MailEngineFlavor;
   try {
-    ({ flavor } = await requireMailEngine(exec));
-  } catch (err) {
-    return { stepId, success: false, message: errMsg(err) };
+    const { configureMailCertificate } = await import("./mail-certificate-probe");
+    log(stepId, "info", "Linking the certificate and reloading Postfix and Dovecot...");
+    await configureMailCertificate(exec, mailDomain);
+  } catch (error) {
+    return { stepId, success: false, message: errMsg(error) };
   }
-
-  // /etc/letsencrypt is the shared HOST bind mount the edge's certbot writes and
-  // the mail container reads; loosen live/archive so the container can traverse.
-  log(stepId, "info", "Setting Let's Encrypt directory permissions...");
-  await exec.exec("chmod 0755 /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null || true");
-
-  // The iRedMail cert symlinks live at /etc/ssl (baked into the image, not bind-
-  // mounted) and point at the shared /etc/letsencrypt mount — so link + reload run
-  // wherever the daemons read from.
-  const inMail = (cmd: string) => mailEngineCommand(flavor, cmd);
-  log(stepId, "info", "Backing up existing iRedMail self-signed certificates...");
-  await exec.exec(inMail("mv /etc/ssl/certs/iRedMail.crt /etc/ssl/certs/iRedMail.crt.bak 2>/dev/null || true"));
-  await exec.exec(inMail("mv /etc/ssl/private/iRedMail.key /etc/ssl/private/iRedMail.key.bak 2>/dev/null || true"));
-
-  log(stepId, "info", "Linking Let's Encrypt certificates into mail daemon paths...");
-  await exec.exec(inMail(`ln -sf /etc/letsencrypt/live/${mailDomain}/fullchain.pem /etc/ssl/certs/iRedMail.crt`));
-  await exec.exec(inMail(`ln -sf /etc/letsencrypt/live/${mailDomain}/privkey.pem /etc/ssl/private/iRedMail.key`));
-
-  log(stepId, "info", "Reloading mail daemons to pick up new certificates...");
-  await exec.exec(inMail("postfix reload 2>/dev/null || true"));
-  await exec.exec(inMail("doveadm reload 2>/dev/null || true"));
 
   log(stepId, "info", "Mail setup complete!");
   return {

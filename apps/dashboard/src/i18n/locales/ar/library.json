@@ -10,16 +10,17 @@
   },
   "page": {
     "title": "مشروع جديد",
-    "subtitle": "استورد مستودعًا، أو الصق رابطًا، أو ابدأ من قالب",
+    "subtitle": "انشر تطبيقًا أو استورد مشروعك.",
     "tabs": {
       "folder": "مجلد",
       "github": "GitHub",
-      "url": "رابط Git",
-      "template": "قالب"
+      "templates": "القوالب",
+      "gitUrl": "رابط Git"
     }
   },
   "connect": {
     "connectGithub": "الاتصال بـ GitHub",
+    "deployApp": "نشر تطبيق",
     "manageInSettings": "الإدارة من الإعدادات",
     "terminal": {
       "title": "الاتصال بـ GitHub",
@@ -45,6 +46,20 @@
       "ghCliDesc": "استخدم تسجيل دخول GitHub على جهازك. لا حاجة إلى السحابة.",
       "useGhCli": "استخدم gh CLI",
       "connecting": "جارٍ الاتصال…"
+    },
+    "installationPicker": {
+      "title": "اختر الوصول إلى GitHub",
+      "description": "اختر تثبيتًا حاليًا للتطبيق لمساحة العمل هذه.",
+      "sharedHint": "استخدامه هنا لا يغيّر اتصالاتك الأخرى في Openship.",
+      "connect": "استخدم هذا الحساب",
+      "connected": "متصل بالفعل",
+      "installAnother": "ثبّت التطبيق على حساب GitHub آخر",
+      "failed": "تعذّر ربط هذا التثبيت.",
+      "tryAgain": "ابدأ من جديد",
+      "successTitle": "تم الاتصال بـ GitHub",
+      "successDescription": "الوصول إلى المستودعات جاهز. يمكنك العودة إلى Openship.",
+      "errorTitle": "اتصال GitHub يحتاج إلى مراجعة",
+      "returnToApp": "العودة إلى المكتبة"
     }
   },
   "folderUpload": {
@@ -124,8 +139,6 @@
     "noMatchingDesc": "جرّب مصطلح بحث مختلفًا أو عدّل عوامل التصفية",
     "noReposDesc": "لا يحتوي هذا الحساب على أي مستودعات بعد",
     "privateBadge": "خاص",
-    "localOnly": "محلي فقط",
-    "localOnlyTooltip": "تطبيق Openship غير مثبّت على {owner}. عمليات بناء محلية فقط — ثبّت التطبيق على هذا المالك لتمكين النشر عن بُعد.",
     "repoCountSingular": "مستودع واحد",
     "repoCountPlural": "{count} مستودع",
     "matching": "المطابقة لـ \"{query}\"",
@@ -159,7 +172,7 @@
     "checking": "جارٍ التحقق…",
     "notConnectedManage": "غير متصل — الإدارة من الإعدادات",
     "optional": "اختياري",
-    "footnote": "‏gh CLI يشغّل المكتبة محليًا. للنشر عن بُعد، يُصدر تطبيق Openship السحابي رموزًا قصيرة الأجل —",
+    "footnote": "إدارة اتصالات GitHub المستخدمة لتصفح المستودعات ونشرها.",
     "manageGithubSettings": "إدارة GitHub من الإعدادات"
   },
   "urlImport": {

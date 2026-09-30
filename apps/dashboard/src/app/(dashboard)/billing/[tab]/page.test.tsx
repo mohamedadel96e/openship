@@ -23,6 +23,7 @@ import { ServerApiError } from "@/lib/server/api";
 import { I18nProvider } from "@/components/i18n-provider";
 import { BillingOverview } from "@/components/billing/BillingOverview";
 import { BillingUnavailable } from "../_components/BillingUnavailable";
+import { BillingPlansRoute } from "../_components/BillingPlansRoute";
 
 function loadPage() {
   return BillingTabPage({ params: Promise.resolve({ tab: "overview" }), searchParams: Promise.resolve({}) });
@@ -78,6 +79,16 @@ describe("billing page failure recovery", () => {
 
     expect(overview.props.state).toBe(state);
     expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it("passes the complimentary entitlement through to the plan comparison", async () => {
+    const complimentary = { id: "grant-scale", expiresAt: null };
+    mocks.get.mockResolvedValue({ data: { tier: "team", subscription: null, complimentary, billing: { enabled: true }, capabilities: { subscriptionChange: false } } });
+
+    const page = await BillingTabPage({ params: Promise.resolve({ tab: "plans" }), searchParams: Promise.resolve({}) });
+    const plans = page.props.children.find((child: unknown) => isValidElement(child) && child.type === BillingPlansRoute) as ReactElement<Record<string, unknown>>;
+
+    expect(plans.props).toMatchObject({ currentPlan: "team", subscription: null, complimentary, canChangeSubscription: false });
   });
 
   it.each([

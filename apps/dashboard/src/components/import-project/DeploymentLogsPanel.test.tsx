@@ -88,6 +88,7 @@ async function render(active: "api" | "web" | null = "api") {
       <Surface terminal={web.terminal} active={active === "web"} />
     </DeploymentLogsPanel>,
   ));
+  await act(async () => vi.dynamicImportSettled());
 }
 function button(label: string) {
   return host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;

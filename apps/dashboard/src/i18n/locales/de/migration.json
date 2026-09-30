@@ -5,5 +5,8 @@
       "handoff": "Prüfe die zugeordneten Domains unten. Bei der Migration wird der Edge-Proxy des Zielservers eingerichtet. Falls ein vorhandener Proxy ersetzt werden muss, wirst du um Bestätigung gebeten.",
       "warnings": "{count} Hinweise zur Erkennung prüfen"
     }
+  },
+  "entry": {
+    "tab": "Bestehendes Projekt importieren"
   }
 }

@@ -218,6 +218,15 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     });
   });
 
+  if (env.CLOUD_MODE) {
+    try {
+      const { cloudAnalytics } = await import("@repo/platform/engine/modules/cloud-analytics/index");
+      await cloudAnalytics.drain();
+      await cloudAnalytics.flush();
+    } catch {
+      console.warn("[cloud-analytics] Pending deliveries will resume after restart.");
+    }
+  }
   // Close the DB after the HTTP server and jobs (both use it) have drained.
   // For embedded PGlite this frees the single-instance lock so the next start
   // opens the data dir cleanly instead of racing a not-yet-released lock.

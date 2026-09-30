@@ -10,16 +10,17 @@
   },
   "page": {
     "title": "New Project",
-    "subtitle": "Import a repository, paste a URL, or start from a template",
+    "subtitle": "Deploy an app or import your own project.",
     "tabs": {
       "folder": "Folder",
       "github": "GitHub",
-      "url": "Git URL",
-      "template": "Template"
+      "templates": "Templates",
+      "gitUrl": "Git URL"
     }
   },
   "connect": {
     "connectGithub": "Connect GitHub",
+    "deployApp": "Deploy app",
     "manageInSettings": "Other connection methods",
     "terminal": {
       "title": "Connect GitHub",
@@ -59,6 +60,20 @@
       "connect": "Connect",
       "create": "Create a token on GitHub",
       "failed": "Could not save the token."
+    },
+    "installationPicker": {
+      "title": "Choose GitHub access",
+      "description": "Select an existing App installation for this workspace.",
+      "sharedHint": "Using it here keeps your other Openship connections intact.",
+      "connect": "Use this account",
+      "connected": "Already connected",
+      "installAnother": "Install on another GitHub account",
+      "failed": "Could not connect this installation.",
+      "tryAgain": "Start again",
+      "successTitle": "GitHub connected",
+      "successDescription": "Repository access is ready. You can return to Openship.",
+      "errorTitle": "GitHub connection needs attention",
+      "returnToApp": "Back to Library"
     }
   },
   "folderUpload": {
@@ -138,8 +153,6 @@
     "noMatchingDesc": "Try a different search term or adjust your filters",
     "noReposDesc": "This account doesn’t have any repositories yet",
     "privateBadge": "Private",
-    "localOnly": "Local only",
-    "localOnlyTooltip": "The Openship App isn't installed on {owner}. Local builds only — install the App on this owner to enable remote deploys.",
     "repoCountSingular": "{count} repository",
     "repoCountPlural": "{count} repositories",
     "matching": "matching \"{query}\"",
@@ -173,7 +186,7 @@
     "checking": "Checking…",
     "notConnectedManage": "Not connected — manage in Settings",
     "optional": "Optional",
-    "footnote": "Local library via gh CLI; remote deploys use short-lived tokens —",
+    "footnote": "Manage the GitHub connections used to browse and deploy repositories.",
     "manageGithubSettings": "manage GitHub in Settings",
     "methodToken": "GitHub token",
     "methodDevice": "GitHub sign-in"

@@ -197,6 +197,38 @@ describe("cloudflareDnsProvider", () => {
   });
 
   describe("upsertRecord", () => {
+    it.each(["token", '"token"'])("creates a quoted TXT value from %s", async (content) => {
+      let posted: Record<string, unknown> | null = null;
+      global.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          posted = JSON.parse(init.body as string) as Record<string, unknown>;
+          return cfOk(record({ type: "TXT", ...posted }));
+        }
+        return cfOk([]);
+      });
+      await cloudflareDnsProvider.upsertRecord({ apiToken: "t" }, "zone_123", {
+        type: "TXT", name: "_openship-challenge.app.example.com", content,
+      });
+      expect(posted).toMatchObject({ content: '"token"', comment: OPENSHIP_RECORD_COMMENT });
+    });
+
+    it("repairs an unquoted TXT record once and leaves the resulting record in sync", async () => {
+      let current = record({ type: "TXT", name: "_openship-challenge.app.example.com", content: "token" });
+      const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+        if (init?.method === "PUT") {
+          current = { ...current, ...JSON.parse(init.body as string) };
+          return cfOk(current);
+        }
+        return cfOk([current]);
+      });
+      global.fetch = fetchMock;
+      const input = { type: "TXT" as const, name: current.name, content: "token" };
+      await cloudflareDnsProvider.upsertRecord({ apiToken: "t" }, "zone_123", input);
+      await cloudflareDnsProvider.upsertRecord({ apiToken: "t" }, "zone_123", input);
+      expect(current.content).toBe('"token"');
+      expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(1);
+    });
+
     it("creates when nothing exists, stamping the ownership marker", async () => {
       let posted: Record<string, unknown> | null = null;
       global.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {

@@ -50,12 +50,26 @@ reacts to the `flow` field:
 
 - `{ connected: true }` — already connected, nothing to do.
 - `{ connected: false, flow: "redirect", url }` — open `url` (OAuth handoff or GitHub App install).
+- `{ connected: false, flow: "installations", state, installations, installUrl }` — let the user select an existing installation, or open `installUrl` to install on another account.
 - `{ connected: false, flow: "device_code", userCode, verificationUri, ... }` — self-hosted device login.
+- `{ connected: false, flow: "token", message }` — collect a personal token using the method's declared credential scope.
 - `{ connected: false, flow: "terminal", command, message }` — run `command` (e.g. `gh auth login`) yourself.
 
 The optional body field `source` (`"oauth"` | `"cli"`) forces a specific path when the dashboard shows both
 the "Connect Openship App" and "Use gh CLI" buttons; omit it to let the server pick based on the instance's
 auth mode.
+
+On Openship Cloud, repository authorization is separate from the GitHub identity used to sign in.
+The same GitHub user can authorize repository access for multiple Openship accounts. This never moves
+or disconnects another account's sign-in link. Existing installations are discovered through that user's
+GitHub authorization and verified again when selected.
+
+For a redirect with `completion: "attempt"`, poll `github.pollConnect({ state })` using the returned
+state until it completes or reports an error. An existing connected installation does not mean a new
+attempt succeeded. A `flow: "installations"` response is completed with
+`github.claimInstallation({ state, installationId: String(id) })` after the user selects it.
+Cloud also supports a personal token in **Settings → Git**; the Library's **Other connection methods**
+link opens that page.
 
 <Tabs items={['SDK', 'REST API']} groupId="api-transport" persist>
 <Tab value="SDK">
@@ -89,6 +103,9 @@ POST /api/github/disconnect
 Body (or `?source=`): `source` is `"oauth"`, `"cli"`, or `"all"` (default `"all"`). This drops Openship's
 stored credentials for that source; it does **not** uninstall the GitHub App — that happens only when you
 remove it from github.com (Openship reacts to the uninstall webhook).
+
+On Cloud, disconnecting `oauth` clears repository authorization and cancels its pending connection
+attempts. It preserves the account's GitHub sign-in method and any separately saved personal token.
 
 This endpoint does not delete a workspace-owned source. Use `DELETE /api/github/sources/:id` for that
 explicit owner-only operation.
@@ -283,10 +300,10 @@ does not exist). Confirm the repo appears in `GET /api/github/home` first.
 | --- | --- | --- |
 | Read GitHub connection status. | `github.getStatus(input?)` | `GET /api/github/status`<br />`github:read` |
 | Read the GitHub overview for the current identity. | `github.getHome()` | `GET /api/github/home`<br />`github:read` |
-| Start a supported GitHub connection flow. | `github.connect(input?)` | `POST /api/github/connect`<br />`github:write` |
-| Claim an authorized GitHub App installation. | `github.claimInstallation(input)` | `POST /api/github/installations/claim`<br />`github:write` · Self-hosted |
+| Start GitHub authorization or select an accessible App installation. Repository access is separate from Cloud sign-in. | `github.connect(input?)` | `POST /api/github/connect`<br />`github:write` |
+| Claim an authorized GitHub App installation. | `github.claimInstallation(input)` | `POST /api/github/installations/claim`<br />`github:write` |
 | Read local Git identity availability. | `github.getLocalStatus()` | `GET /api/github/local-status`<br />`github:read` · Self-hosted |
-| Poll an in-progress connection flow. | `github.pollConnect()` | `GET /api/github/connect/poll`<br />`github:read` · Self-hosted |
+| Poll the returned state for one connection attempt, or omit state for a self-hosted device flow. | `github.pollConnect(input?)` | `GET /api/github/connect/poll`<br />`github:read` |
 | Configure the installation’s GitHub token. | `github.setInstanceToken(input)` | `POST /api/github/instance-token`<br />`github:admin` · Self-hosted |
 | Disconnect a GitHub identity or source association. | `github.disconnect(input?)` | `POST /api/github/disconnect`<br />`github:admin` |
 

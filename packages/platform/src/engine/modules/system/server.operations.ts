@@ -1,4 +1,8 @@
-import { networkCollection, computeClusterCollection, infrastructureResources } from "./infrastructure-resources.operations";
+import {
+  networkCollection,
+  computeClusterCollection,
+  infrastructureResources,
+} from "./infrastructure-resources.operations";
 /**
  * Shared server operations — retained CRUD, teardown, execution and audit.
  *
@@ -7,7 +11,12 @@ import { networkCollection, computeClusterCollection, infrastructureResources } 
 
 import type { ExecutionContext } from "../../../context";
 import type { ServerDependencies } from "../../../servers";
-import { OperationError, type CreateServerInput, type UpdateServerInput, type ServerOperations } from "@repo/contracts";
+import {
+  OperationError,
+  type CreateServerInput,
+  type UpdateServerInput,
+  type ServerOperations,
+} from "@repo/contracts";
 import { repos } from "@repo/db";
 import { hostControlDisabled } from "@repo/adapters";
 import { assertSshSettings, normalizeSshTransport, safeErrorMessage } from "@repo/core";
@@ -20,7 +29,11 @@ import { ensureLocalServer, localServerHostChannel } from "../../lib/startup/sel
 import { encryptSecretField } from "../../lib/credential-encryption";
 import { audit, operationAuditContext } from "../../lib/audit-emitter";
 import { assertSelfHosted, assertServerExecution, assertNativeSshSettings } from "./server-access";
-import { serverContainerCollection, serverContainerResources, serverContainerStreams } from "./server-containers.operations";
+import {
+  serverContainerCollection,
+  serverContainerResources,
+  serverContainerStreams,
+} from "./server-containers.operations";
 import { primeGeo, countryForIp } from "../../lib/geo-ip";
 import { execOnHost } from "../../lib/agent-exec";
 import { serverMaintenanceResources } from "./server-maintenance.operations";
@@ -34,12 +47,16 @@ import { networkPreparationCollection } from "./network-preparation.operations";
 import { networkSetupMemberCollection } from "./network-setup-member.operations";
 import { networkSetupStreams } from "./network-setup.events";
 import { clusterRuntimeCollection } from "./cluster-runtime.operations";
+import { clusterStorageCollection } from "./cluster-storage.operations";
 import { withServerInventoryLock } from "../../lib/server-inventory-lock";
 import { authorization } from "../../lib/authorization";
 
 function validateConnectionOptions(settings: Parameters<typeof assertSshSettings>[0]): void {
-  try { assertSshSettings(settings); }
-  catch (error) { failServer({ error: safeErrorMessage(error) }, 400); }
+  try {
+    assertSshSettings(settings);
+  } catch (error) {
+    failServer({ error: safeErrorMessage(error) }, 400);
+  }
 }
 
 /** Public shape - what the controller returns to clients (no SSH secrets). */
@@ -90,7 +107,7 @@ async function listServers(ctx: ExecutionContext) {
   // Projects currently deployed to each server (active deployment → meta.serverId).
   const projectCounts = await repos.project
     .countActiveByServer(ctx.organizationId)
-    .catch(() => ({} as Record<string, number>));
+    .catch(() => ({}) as Record<string, number>);
   // The local row's container→host channel, as an ANNOTATION (#509). Never a filter:
   // ordinary container deploys run over the mounted Docker socket and survive a dead
   // channel, so hiding the row would break them — only `hostControlDisabled()` above
@@ -101,10 +118,10 @@ async function listServers(ctx: ExecutionContext) {
     all.map((s) => (s.isLocal ? localServerHostChannel(s.id).catch(() => null) : null)),
   );
   return all.map((s, i) => ({
-      ...serializeServer(s),
-      projectCount: projectCounts[s.id] ?? 0,
-      hostChannel: channels[i] ?? null,
-    }));
+    ...serializeServer(s),
+    projectCount: projectCounts[s.id] ?? 0,
+    hostChannel: channels[i] ?? null,
+  }));
 }
 
 /** GET /servers/:id - get a single server. */
@@ -130,9 +147,7 @@ async function getServer(ctx: ExecutionContext, id: string) {
   return {
     ...serializeServer(server),
     projectCount: projectCounts[id] ?? 0,
-    hostChannel: server.isLocal
-      ? await localServerHostChannel(server.id).catch(() => null)
-      : null,
+    hostChannel: server.isLocal ? await localServerHostChannel(server.id).catch(() => null) : null,
   };
 }
 
@@ -171,23 +186,31 @@ async function probeReachability(ctx: ExecutionContext, id: string) {
 async function createServer(ctx: ExecutionContext, body: CreateServerInput) {
   assertSelfHosted();
 
-
   const host = (body.sshHost as string)?.trim();
   if (!host) return failServer({ error: "SSH host is required" }, 400);
   validateConnectionOptions({ ...body, sshHost: host });
-
 
   // Adding THIS host as a server (loopback / the box's own SERVER_IP on a
   // server-host) must NOT create a plain SSH row — deploys/probes would dial the
   // API's own loopback (the container's, when compose-deployed) where there is no
   // sshd → the "Can't reach 127.0.0.1" failure.
-  if (resolvesToLocalHost({ sshHost: host, sshPort: body.sshPort, sshJumpHost: body.sshJumpHost, sshTransport: body.sshTransport })) {
+  if (
+    resolvesToLocalHost({
+      sshHost: host,
+      sshPort: body.sshPort,
+      sshJumpHost: body.sshJumpHost,
+      sshTransport: body.sshTransport,
+    })
+  ) {
     // Only the box-owning org may register the local host — running on it is
     // code execution on the control plane (host executor + mounted docker socket,
     // DooD ≈ root). A teammate's org (any member can POST /servers) is refused so
     // it can't mint itself a host-root deploy target.
     if (ctx.organizationId !== (await boxOwningOrgId())) {
-      return failServer({ error: "The local host can't be added as a server in this workspace." }, 400);
+      return failServer(
+        { error: "The local host can't be added as a server in this workspace." },
+        400,
+      );
     }
     // Adopt the canonical isLocal "This Server" row (create it if nothing has yet)
     // so the box is a first-class, working deploy target with the right transport —
@@ -198,10 +221,18 @@ async function createServer(ctx: ExecutionContext, body: CreateServerInput) {
       // Only reachable with host control off (`--no-host-control`): every host
       // operation refuses and listServers hides the row, so creating one would hand
       // back a server that cannot work. Say so instead.
-      return failServer({ error: "Host control is disabled on this instance, so the local host can't be a deploy target." }, 400);
+      return failServer(
+        {
+          error:
+            "Host control is disabled on this instance, so the local host can't be a deploy target.",
+        },
+        400,
+      );
     }
     audit.recordAsync(operationAuditContext(ctx), {
-      eventType: "server.added", resourceType: "server", resourceId: local.id,
+      eventType: "server.added",
+      resourceType: "server",
+      resourceId: local.id,
       after: { name: local.name, sshHost: local.sshHost, isLocal: local.isLocal },
     });
     return serializeServer(local);
@@ -282,7 +313,6 @@ async function updateServer(ctx: ExecutionContext, id: string, body: UpdateServe
   const existing = await repos.server.getInOrganization(id, ctx.organizationId);
   if (!existing) return failServer({ error: "Server not found" }, 404);
 
-
   // #527: an isLocal row's ssh* fields are DISPLAY-ONLY. Every operation on this box goes
   // through the container→host channel, whose credentials come from OPENSHIP_HOST_SSH_*
   // and never from this row (see lib/startup/self-server.ts). Accepting them stored a
@@ -296,20 +326,27 @@ async function updateServer(ctx: ExecutionContext, id: string, body: UpdateServe
   if (existing.isLocal) {
     const attempted = LOCAL_ROW_READONLY_FIELDS.filter((f) => body[f] !== undefined);
     if (attempted.length > 0) {
-      return failServer({
+      return failServer(
+        {
           error:
             "This row is the machine Openship runs on, so its SSH details are display-only " +
             "— the connection to this host uses the channel key provisioned by " +
             "`openship up`, not credentials stored here. Re-run `openship up` to change it.",
           fields: attempted,
-        }, 400);
+        },
+        400,
+      );
     }
   }
 
-  if (LOCAL_ROW_READONLY_FIELDS.some(field => body[field] !== undefined))
+  if (LOCAL_ROW_READONLY_FIELDS.some((field) => body[field] !== undefined))
     assertNativeSshSettings({ ...existing, ...body });
-  if (LOCAL_ROW_READONLY_FIELDS.some(field => body[field] !== undefined))
-    validateConnectionOptions({ ...existing, ...body, sshHost: body.sshHost?.trim() || existing.sshHost });
+  if (LOCAL_ROW_READONLY_FIELDS.some((field) => body[field] !== undefined))
+    validateConnectionOptions({
+      ...existing,
+      ...body,
+      sshHost: body.sshHost?.trim() || existing.sshHost,
+    });
 
   const patch: Record<string, unknown> = {};
 
@@ -321,10 +358,13 @@ async function updateServer(ctx: ExecutionContext, id: string, body: UpdateServe
   // Sensitive fields are encrypted at rest; see lib/credential-encryption.
   if (body.sshPassword !== undefined) patch.sshPassword = encryptSecretField(body.sshPassword);
   if (body.sshKeyPath !== undefined) patch.sshKeyPath = body.sshKeyPath || null;
-  if (body.sshPrivateKey !== undefined) patch.sshPrivateKey = encryptSecretField(body.sshPrivateKey);
-  if (body.sshKeyPassphrase !== undefined) patch.sshKeyPassphrase = encryptSecretField(body.sshKeyPassphrase);
+  if (body.sshPrivateKey !== undefined)
+    patch.sshPrivateKey = encryptSecretField(body.sshPrivateKey);
+  if (body.sshKeyPassphrase !== undefined)
+    patch.sshKeyPassphrase = encryptSecretField(body.sshKeyPassphrase);
   if (body.sshJumpHost !== undefined) patch.sshJumpHost = body.sshJumpHost?.trim() || null;
-  if (body.sshTransport !== undefined) patch.sshTransport = normalizeSshTransport(body.sshTransport);
+  if (body.sshTransport !== undefined)
+    patch.sshTransport = normalizeSshTransport(body.sshTransport);
   if (body.sshArgs !== undefined) patch.sshArgs = body.sshArgs?.trim() || null;
 
   if (Object.keys(patch).length === 0) {
@@ -464,12 +504,20 @@ async function serverDeletionPreview(ctx: ExecutionContext, id: string) {
  * `reclaimOrphan` resolves its platform from the server row, so deleting that row
  * while orphans exist strands them permanently.
  */
-async function deleteServer(ctx: ExecutionContext, id: string, input: Parameters<ServerOperations["remove"]>[1] = {}) {
+async function deleteServer(
+  ctx: ExecutionContext,
+  id: string,
+  input: Parameters<ServerOperations["remove"]>[1] = {},
+) {
   assertSelfHosted();
   return withServerInventoryLock(ctx.organizationId, () => deleteServerUnderLock(ctx, id, input));
 }
 
-async function deleteServerUnderLock(ctx: ExecutionContext, id: string, input: NonNullable<Parameters<ServerOperations["remove"]>[1]>) {
+async function deleteServerUnderLock(
+  ctx: ExecutionContext,
+  id: string,
+  input: NonNullable<Parameters<ServerOperations["remove"]>[1]>,
+) {
   // A queued operation must recheck access after acquiring the shared lock.
   assertSelfHosted();
   await authorization.authorize(ctx, { resourceType: "server", resourceId: id, action: "admin" });
@@ -488,7 +536,14 @@ async function deleteServerUnderLock(ctx: ExecutionContext, id: string, input: N
   const destroyOnSource = input.destroyOnSource === true;
 
   if (await repos.serverCluster.membership(id)) {
-    return failServer({ error: "Detach this server in Networking before deleting it. Clear any cluster dependencies and finish pending network cleanup first.", code: "SERVER_IN_CLUSTER" }, 409);
+    return failServer(
+      {
+        error:
+          "Detach this server in Networking before deleting it. Clear any cluster dependencies and finish pending network cleanup first.",
+        code: "SERVER_IN_CLUSTER",
+      },
+      409,
+    );
   }
 
   // Same coalesce the fleet chip and the preview use, so the set torn down here is
@@ -534,7 +589,9 @@ async function deleteServerUnderLock(ctx: ExecutionContext, id: string, input: N
     }).catch((err: unknown) => ({
       ok: false,
       rowDeleted: false,
-      unrecoverable: [{ step: "teardown", status: "failed" as const, error: safeErrorMessage(err) }],
+      unrecoverable: [
+        { step: "teardown", status: "failed" as const, error: safeErrorMessage(err) },
+      ],
       orphaned: [],
     }));
 
@@ -571,17 +628,17 @@ async function deleteServerUnderLock(ctx: ExecutionContext, id: string, input: N
       },
     });
     return {
-        ok: false,
-        code: "SERVER_WORKLOAD_TEARDOWN_FAILED",
-        error:
-          failed[0]?.error ??
-          "Some resources could not be destroyed on the server and were recorded for cleanup — the server was kept so they can still be reclaimed.",
-        // The server row survives, so the operator retries rather than inheriting a
-        // fleet where some projects are gone and some point at nothing.
-        serverRemoved: false,
-        destroyOnSource,
-        workloads: results,
-      };
+      ok: false,
+      code: "SERVER_WORKLOAD_TEARDOWN_FAILED",
+      error:
+        failed[0]?.error ??
+        "Some resources could not be destroyed on the server and were recorded for cleanup — the server was kept so they can still be reclaimed.",
+      // The server row survives, so the operator retries rather than inheriting a
+      // fleet where some projects are gone and some point at nothing.
+      serverRemoved: false,
+      destroyOnSource,
+      workloads: results,
+    };
   }
 
   await repos.server.delete(id);
@@ -590,9 +647,7 @@ async function deleteServerUnderLock(ctx: ExecutionContext, id: string, input: N
   // id need cleanup too since they share the server's id.
   await repos.resourceGrant
     .deleteForResource(ctx.organizationId, "server", id)
-    .catch((err: unknown) =>
-      console.error("[server.delete] grant cleanup failed:", err),
-    );
+    .catch((err: unknown) => console.error("[server.delete] grant cleanup failed:", err));
   await repos.resourceGrant
     .deleteForResource(ctx.organizationId, "mail_server", id)
     .catch((err: unknown) =>
@@ -646,7 +701,11 @@ async function deleteServerUnderLock(ctx: ExecutionContext, id: string, input: N
  * route can do. It is the same tier `/api/system/install` asserts, which is the
  * closest existing capability.
  */
-async function execOnServer(ctx: ExecutionContext, id: string, body: Parameters<ServerOperations["exec"]>[1]) {
+async function execOnServer(
+  ctx: ExecutionContext,
+  id: string,
+  body: Parameters<ServerOperations["exec"]>[1],
+) {
   assertSelfHosted();
 
   // Primary gate: permission resolver (404 on deny, IDOR-safe). Asserted BEFORE the
@@ -674,7 +733,10 @@ async function execOnServer(ctx: ExecutionContext, id: string, body: Parameters<
     });
 
   if ("transportError" in result) {
-    return failServer({ error: `Could not reach the server: ${result.transportError}`, code: "SERVER_UNREACHABLE" }, 502);
+    return failServer(
+      { error: `Could not reach the server: ${result.transportError}`, code: "SERVER_UNREACHABLE" },
+      502,
+    );
   }
 
   // The command IS recorded, unlike the counts-only audit used elsewhere: an exec
@@ -700,17 +762,38 @@ async function execOnServer(ctx: ExecutionContext, id: string, body: Parameters<
 }
 
 function failServer(details: Record<string, unknown>, status: number): never {
-  throw new OperationError(String(details.error ?? "Server operation failed"), status,
-    typeof details.code === "string" ? details.code : "SERVER_OPERATION_FAILED", details);
+  throw new OperationError(
+    String(details.error ?? "Server operation failed"),
+    status,
+    typeof details.code === "string" ? details.code : "SERVER_OPERATION_FAILED",
+    details,
+  );
 }
 
 export const serverDependencies: ServerDependencies = {
   networks: networkSetupStreams,
-  collection: { list: listServers, create: createServer, testConnection, ...serverContainerCollection, ...serverClusterCollection, ...networkCollection, ...computeClusterCollection, ...clusterRuntimeCollection, ...managedNetworkCollection, ...networkPreparationCollection, ...networkSetupMemberCollection },
+  collection: {
+    list: listServers,
+    create: createServer,
+    testConnection,
+    ...serverContainerCollection,
+    ...serverClusterCollection,
+    ...networkCollection,
+    ...computeClusterCollection,
+    ...clusterRuntimeCollection,
+    ...clusterStorageCollection,
+    ...managedNetworkCollection,
+    ...networkPreparationCollection,
+    ...networkSetupMemberCollection,
+  },
   resources: {
     ...infrastructureResources,
-    get: getServer, reachability: probeReachability, update: updateServer,
-    deletionPreview: serverDeletionPreview, remove: deleteServer, exec: execOnServer,
+    get: getServer,
+    reachability: probeReachability,
+    update: updateServer,
+    deletionPreview: serverDeletionPreview,
+    remove: deleteServer,
+    exec: execOnServer,
     ...serverMaintenanceResources,
     ...serverCheckResources,
     ...serverContainerResources,

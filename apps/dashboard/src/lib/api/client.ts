@@ -236,10 +236,17 @@ async function request<T = unknown>(
 // API falls back to the session cookie — same as before.
 
 let _currentOrgId: string | null = null;
+const organizationListeners = new Set<() => void>();
+export function subscribeActiveOrganization(listener: () => void): () => void {
+  organizationListeners.add(listener);
+  return () => { organizationListeners.delete(listener); };
+}
 
 /** Set the org id that subsequent API requests should declare. */
 export function setActiveOrganizationId(orgId: string | null) {
+  const changed = _currentOrgId !== orgId;
   _currentOrgId = orgId;
+  if (changed) organizationListeners.forEach(listener => listener());
   if (typeof window !== "undefined") {
     if (orgId) {
       window.localStorage.setItem("openship.activeOrgId", orgId);

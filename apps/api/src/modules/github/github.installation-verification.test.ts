@@ -12,7 +12,10 @@ vi.mock("@repo/platform/engine/modules/github/github.auth", () => ({
 }));
 vi.mock("@repo/platform/engine/modules/github/github.http", () => ({ ghFetch: h.ghFetch }));
 
-import { verifyGitHubInstallationForUser } from "@repo/platform/engine/modules/github/github.installation-verification";
+import {
+  listGitHubInstallationsForUser,
+  verifyGitHubInstallationForUser,
+} from "@repo/platform/engine/modules/github/github.installation-verification";
 
 const installation = {
   id: 42,
@@ -38,8 +41,24 @@ describe("verifyGitHubInstallationForUser", () => {
       kind: "forbidden",
       reason: "missing-user-token",
     });
+    await expect(listGitHubInstallationsForUser("user_1")).resolves.toBeNull();
     expect(h.ghFetch).not.toHaveBeenCalled();
     expect(h.appFetch).not.toHaveBeenCalled();
+  });
+
+  it("offers accounts from every page of the user's installation catalog", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      ...installation,
+      id: index + 1_000,
+    }));
+    h.ghFetch
+      .mockResolvedValueOnce({ total_count: 101, installations: firstPage })
+      .mockResolvedValueOnce({ total_count: 101, installations: [installation] });
+
+    await expect(listGitHubInstallationsForUser("user_1")).resolves.toEqual([
+      ...firstPage,
+      installation,
+    ]);
   });
 
   it("rejects an installation id the initiating user cannot access", async () => {

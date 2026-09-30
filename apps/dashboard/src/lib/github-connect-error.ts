@@ -24,10 +24,11 @@ function browserStorage(): ConnectErrorStorage | null {
 export function storeGitHubConnectError(
   error: string,
   storage: ConnectErrorStorage | null = browserStorage(),
+  state?: string,
 ): void {
   if (!error || !storage) return;
   try {
-    storage.setItem(GITHUB_CONNECT_ERROR_KEY, error);
+    storage.setItem(state ? `${GITHUB_CONNECT_ERROR_KEY}.${state}` : GITHUB_CONNECT_ERROR_KEY, error);
   } catch {
     /* storage unavailable */
   }
@@ -36,11 +37,13 @@ export function storeGitHubConnectError(
 /** Read and clear the callback error so it cannot leak into a later attempt. */
 export function consumeGitHubConnectError(
   storage: ConnectErrorStorage | null = browserStorage(),
+  state?: string,
 ): string | null {
   if (!storage) return null;
   try {
-    const error = storage.getItem(GITHUB_CONNECT_ERROR_KEY);
-    if (error !== null) storage.removeItem(GITHUB_CONNECT_ERROR_KEY);
+    const key = state ? `${GITHUB_CONNECT_ERROR_KEY}.${state}` : GITHUB_CONNECT_ERROR_KEY;
+    const error = storage.getItem(key);
+    if (error !== null) storage.removeItem(key);
     return error;
   } catch {
     return null;

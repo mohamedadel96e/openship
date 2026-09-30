@@ -348,7 +348,8 @@ function exactQuarantineClaim(claim: HostPortClaim): boolean {
  * {@link withHostPortTargetLock}.
  *
  * Desired mappings are reserved before any read or release. A forced fresh edge
- * scan then proves which old ports are still dialled. If that scan or any
+ * scan then proves which old ports are still dialled. An empty desired set with
+ * no owned or quarantine claims needs no edge inventory. If a required scan or any
  * database read fails, no claim is released. Other projects are never touched;
  * legacy aliases are removed only when this project's canonical desired claim
  * already protects the same physical port.
@@ -368,12 +369,20 @@ export async function convergeTargetHostPortClaimsUnlocked(
     });
   }
 
+  const knownTargetKeys = targetKeys(input.target);
+  const readClaims = async () => (await Promise.all(knownTargetKeys.map(listClaimsByKey))).flat();
+  // Unrouted workloads can run on a host without an edge. There is nothing to
+  // converge unless this project owns claims or the host has quarantine rows.
+  // Read all aliases under the target lock, and reuse that snapshot below.
+  const preloadedClaims = desiredPublishes.length === 0 ? await readClaims() : undefined;
+  if (preloadedClaims && !preloadedClaims.some(claim => claim.projectId === input.projectId || isQuarantineClaim(claim))) {
+    return { released: 0, retained: [] };
+  }
+
   // Convergence runs after route writes, so the allocation-time memoized scan is
   // not authoritative here. A failed refresh rejects and releases nothing.
   const observedPorts = await input.edgeProxy.listLoopbackUpstreamPortsStrict({ refresh: true });
-  const knownTargetKeys = targetKeys(input.target);
-  const claimSets = await Promise.all(knownTargetKeys.map(listClaimsByKey));
-  const allClaims = claimSets.flat();
+  const allClaims = preloadedClaims ?? await readClaims();
   const desiredByPort = new Map(desiredPublishes.map((publish) => [publish.hostPort, publish]));
   const desiredCanonicalPorts = new Set<number>();
   for (const publish of desiredPublishes) {

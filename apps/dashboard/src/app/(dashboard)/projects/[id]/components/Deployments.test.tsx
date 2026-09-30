@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { baseDictionary } from "@/i18n";
 import type { Service } from "@/lib/api/services";
+import type { ProjectUpdateStatus } from "@/lib/api/projects";
 import { ApiError } from "@/lib/api/client";
 import { Deployments } from "./Deployments";
 
@@ -16,7 +17,8 @@ const mocks = vi.hoisted(() => ({
   setActiveTab: vi.fn(),
   openBuild: vi.fn(),
   showToast: vi.fn(),
-  commitStatus: vi.fn(),
+  applyUpdate: vi.fn(),
+  refreshUpdate: vi.fn(),
 }));
 vi.mock("@/context/ProjectSettingsContext", () => ({ useProjectSettings: mocks.context }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => ({ showToast: mocks.showToast }) }));
@@ -27,11 +29,12 @@ vi.mock("@/lib/api", async () => {
   const { getApiErrorMessage } = await import("@/lib/api/client");
   return {
     deployApi: { trigger: mocks.trigger },
-    projectsApi: { getCommitStatus: mocks.commitStatus },
+    projectsApi: {},
     isAbortError: () => false,
     getApiErrorMessage,
   };
 });
+vi.mock("@/lib/api/updates", () => ({ updatesApi: { apply: mocks.applyUpdate } }));
 vi.mock("@/lib/deploy-nav", () => ({ openTriggeredBuild: mocks.openBuild }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/components/i18n-provider", () => ({
@@ -74,6 +77,8 @@ let context: {
   domainsData: { domains: Array<{ hostname: string; serviceId?: string; targetPort?: number }> };
   refreshServices: ReturnType<typeof vi.fn>;
   setActiveTab: typeof mocks.setActiveTab;
+  availableUpdate: ProjectUpdateStatus | null;
+  refreshUpdateStatus: typeof mocks.refreshUpdate;
 };
 
 beforeEach(() => {
@@ -90,10 +95,13 @@ beforeEach(() => {
     domainsData: { domains: [] },
     refreshServices: vi.fn().mockResolvedValue([service]),
     setActiveTab: mocks.setActiveTab,
+    availableUpdate: null,
+    refreshUpdateStatus: mocks.refreshUpdate,
   };
   mocks.context.mockImplementation(() => context);
   mocks.trigger.mockResolvedValue({ data: { deploymentId: "deployment" } });
-  mocks.commitStatus.mockResolvedValue({ data: { supported: false } });
+  mocks.applyUpdate.mockResolvedValue({ data: { deployment_id: "image-update" } });
+  mocks.refreshUpdate.mockResolvedValue(undefined);
   mocks.showModal.mockReturnValue("warning");
 });
 
@@ -120,16 +128,16 @@ it.each(["project", "new-commit"])(
     context.hasMultipleServices = false;
     const reason = "Compose environment needs review (postgres: POSTGRES_PASSWORD).";
     mocks.trigger.mockRejectedValue(new ApiError(409, "Conflict", { error: reason }));
-    mocks.commitStatus.mockResolvedValue({
-      data: {
-        supported: true,
-        behind: true,
-        mode: "commit",
-        latestSha: "803526d",
-        deployedSha: "1d4bfc0",
-        branch: "main",
-      },
-    });
+    context.availableUpdate = {
+      supported: true,
+      behind: true,
+      latestInProgress: false,
+      mode: "commit",
+      latestSha: "803526d",
+      latestMessage: null,
+      deployedSha: "1d4bfc0",
+      branch: "main",
+    };
 
     await act(async () => root.render(<Deployments />));
     await act(async () =>
@@ -149,6 +157,38 @@ it.each(["project", "new-commit"])(
     expect(button(baseDictionary.projects.redeploy.redeployProject).disabled).toBe(false);
   },
 );
+
+it("shows the shared release update and clears the banner when that result clears", async () => {
+  context.availableUpdate = {
+    supported: true, mode: "release", behind: true, latestInProgress: false, pinned: false, currentVersion: "1.0.0", latestVersion: "1.1.0",
+  };
+  await act(async () => root.render(<Deployments />));
+  expect(mocks.refreshUpdate).toHaveBeenCalledOnce();
+  expect(container.textContent).toContain(baseDictionary.projects.redeploy.newVersionTitle);
+  expect(container.textContent).toContain("v1.1.0");
+  context.availableUpdate = null;
+  await act(async () => root.render(<Deployments />));
+  expect(container.textContent).not.toContain(baseDictionary.projects.redeploy.newVersionTitle);
+});
+
+it("makes a detected image update actionable through the shared update operation", async () => {
+  context.availableUpdate = {
+    supported: true, mode: "image", behind: true, latestInProgress: false,
+    services: [
+      { serviceId: "redis", name: "redis", ref: "redis:7", deployedDigest: "old", latestDigest: "new", behind: true },
+      { serviceId: "db", name: "db", ref: "postgres:16", deployedDigest: "same", latestDigest: "same", behind: false },
+    ],
+  };
+  await act(async () => root.render(<Deployments />));
+  expect(container.textContent).toContain("redis (redis:7)");
+  expect(container.textContent).not.toContain("db (postgres:16)");
+  await act(async () => button(baseDictionary.projectSettings.appSource.update).click());
+  expect(mocks.applyUpdate).toHaveBeenCalledExactlyOnceWith("project");
+  expect(mocks.trigger).not.toHaveBeenCalled();
+  expect(mocks.openBuild).toHaveBeenCalledWith(
+    expect.anything(), { data: { deployment: { id: "image-update" } } }, "project",
+  );
+});
 
 it.each([
   { hostname: "app.example.test", serviceId: "web", targetPort: 9000 },

@@ -18,18 +18,37 @@ export const ServerLogStreamTokenSchema = Type.Union([
 
 export const ProjectLogSchemas = {
   getServerLogStreamToken: {
-    action: "read", input: ServerLogsInputSchema, optionalInput: true,
+    action: "read",
+    input: ServerLogsInputSchema,
+    optionalInput: true,
     output: ServerLogStreamTokenSchema,
   },
   recentServerLogs: {
-    action: "read", input: RecentServerLogsInputSchema, optionalInput: true,
+    action: "read",
+    input: RecentServerLogsInputSchema,
+    optionalInput: true,
     output: Type.Object({ logs: Type.Array(Type.Unknown()) }),
   },
 } as const satisfies Record<string, ResourceOperationSchema>;
 export type ProjectLogOperations = ResourceOperations<typeof ProjectLogSchemas>;
 export interface ProjectLogStreams {
-  streamClusterDatabaseEvents(id: string, options?: { signal?: AbortSignal }): AsyncIterable<DeploymentEvent>;
-  streamRuntimeLogs(id: string, input?: { tail?: number }, options?: { signal?: AbortSignal }): AsyncIterable<DeploymentEvent>;
+  streamClusterVolumeEvents(
+    id: string,
+    options?: { signal?: AbortSignal },
+  ): AsyncIterable<DeploymentEvent>;
+  streamClusterDatabaseEvents(
+    id: string,
+    options?: { signal?: AbortSignal },
+  ): AsyncIterable<DeploymentEvent>;
+  streamRuntimeLogs(
+    id: string,
+    input?: { tail?: number },
+    options?: { signal?: AbortSignal },
+  ): AsyncIterable<DeploymentEvent>;
   /** Self-hosted edge events. Cloud callers obtain a provider token through getServerLogStreamToken. */
-  streamServerLogs(id: string, input?: ServerLogsInput, options?: { signal?: AbortSignal }): AsyncIterable<DeploymentEvent>;
+  streamServerLogs(
+    id: string,
+    input?: ServerLogsInput,
+    options?: { signal?: AbortSignal },
+  ): AsyncIterable<DeploymentEvent>;
 }

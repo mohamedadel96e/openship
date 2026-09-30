@@ -1,0 +1,107 @@
+---
+title: Cloud support
+description: Submit Cloud support requests and manage the ticket queue with operator authority.
+---
+
+`https://openship.io/support` and `/contact` use the same ticket intake. The
+website forwards to `POST /api/cloud/support` on the Cloud API; its default is
+`https://api.openship.io`. A development website can select a different Cloud API
+with `OPENSHIP_CLOUD_API_URL`. The website needs no SMTP credentials or operator
+token, and never forwards browser cookies or claimed client IPs.
+
+The API mounts support routes and starts the delivery worker only when
+`CLOUD_MODE=true`. Ticket data is private to Cloud operators and excluded from
+customer, project, and self-hosted instance exports.
+
+## Delivery and mailbox configuration
+
+Provision `support@openship.io` to receive mail. Configure the Cloud API's existing
+`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, and `SMTP_FROM` with a working
+sender. For example, after that mailbox is provisioned:
+
+```dotenv
+SMTP_HOST=mail.oblien.com
+SMTP_PORT=587
+SMTP_USER=support@openship.io
+SMTP_PASS=<mailbox-password>
+SMTP_FROM=Openship Support <support@openship.io>
+```
+
+Use credentials appropriate to the actual mail server; keep them in deployment
+secrets. This is an operator configuration example, not a credential requirement
+for the website. Creating a ticket does not depend on SMTP being available.
+
+Each submission atomically saves a `cloud_support_ticket` and two
+`cloud_support_message` deliveries: a receipt for the customer, and a notification
+to `support@openship.io`. The customer receipt contains a stable reference, no
+reflected message text, and `Reply-To: support@openship.io`. The team notification
+includes the report and sets Reply-To to the requester. Ordinary inbound email
+and email replies arrive in the support mailbox; this API does not ingest IMAP.
+
+The client reuses its request UUID if the response is lost. Identical retries
+return the original receipt; different content under the same key returns 409.
+Intake validates bounded input and rate-limits new submissions by hashed contact
+address across Cloud replicas, in addition to the public per-IP ceiling.
+
+Delivery begins after the database commit. The existing system scheduler runs
+`cloud-support:deliver` every minute and resumes pending deliveries after restart.
+SQL leases prevent concurrent workers from sending the same claimed message.
+Failures back off from one minute to one hour and stop after ten attempts. The
+ticket and error state remain available, and an operator can retry delivery.
+Accepted mail is not resent during ordinary retries. Like other SMTP outboxes,
+delivery is at least once across a crash after SMTP acceptance but before the DB
+acknowledgement; a stable Message-ID is reused in that case.
+
+## Operator API
+
+All routes below require `X-Internal-Token` matching the Cloud API's `INTERNAL_TOKEN`.
+An organization owner, customer cookie, PAT, or arbitrary ticket reference is
+insufficient. Responses are not cached. Do not put this token in client code.
+
+| Method | Path under `/api/cloud/support` | Result                                                                          |
+| ------ | ------------------------------- | ------------------------------------------------------------------------------- |
+| GET    | `/tickets?status=open&limit=25` | Queue, with `nextCursor`; use `before=<nextCursor>` for the next page           |
+| GET    | `/tickets/<reference>`          | Report, replies, delivery attempts, errors and next attempt times               |
+| POST   | `/tickets/<reference>/replies`  | Save and queue a reply; optionally resolve the ticket atomically                |
+| PATCH  | `/tickets/<reference>`          | Set `status` to `open` or `resolved`                                            |
+| POST   | `/tickets/<reference>/retry`    | Retry undelivered mail without stealing active sends or resending accepted mail |
+
+Example listing:
+
+```sh
+curl --fail-with-body 'https://api.openship.io/api/cloud/support/tickets?status=open&limit=25' \
+  -H "X-Internal-Token: $OPENSHIP_INTERNAL_TOKEN"
+```
+
+For replies, send JSON with a fresh UUID in `requestId`, the reply in `message`,
+and `resolve: true` to close the ticket. Reuse the UUID when retrying an uncertain
+response. A 202 response means the reply is saved and queued, not that SMTP has
+delivered it. Read the ticket to check `deliveredAt`, `lastError`, and
+`nextAttemptAt` for each message.
+
+Deploy the API (including migration `0152_cloud_support.sql`) before the website.
+Then submit a test report from `/support`, check its reference through the operator
+API, and verify receipt and team notification in the configured mailboxes.
+
+## Verification
+
+`apps/api/test/modules/cloud-support` covers the website-to-API HTTP request, real
+SQL persistence, the shared SMTP sender, recipient rejection and retry, concurrent
+submission deduplication, worker lease recovery, operator access, replies,
+resolution, pagination, input validation and local-mode isolation. SMTP tests use
+a loopback server; they do not send mail to real customers.
+
+## Operations
+
+{/* api-operations:start */}
+
+| Operation | REST API |
+| --- | --- |
+| Save a Cloud support ticket and queue acknowledgement and team email. Public intake returns only a receipt and deduplicates retries. | `POST /api/cloud/support`<br />`Handler authentication` |
+| List Cloud support tickets with status filtering and cursor pagination. Requires internal operator authority. | `GET /api/cloud/support/tickets`<br />`Internal operator` |
+| Read a Cloud ticket, its replies, and email delivery attempts. Requires internal operator authority. | `GET /api/cloud/support/tickets/:id`<br />`Internal operator` |
+| Open or resolve a Cloud support ticket. Requires internal operator authority. | `PATCH /api/cloud/support/tickets/:id`<br />`Internal operator` |
+| Save and queue an idempotent support reply, optionally resolving the ticket in the same transaction. Requires internal operator authority. | `POST /api/cloud/support/tickets/:id/replies`<br />`Internal operator` |
+| Retry undelivered support email while preserving active delivery leases and already accepted messages. Requires internal operator authority. | `POST /api/cloud/support/tickets/:id/retry`<br />`Internal operator` |
+
+{/* api-operations:end */}

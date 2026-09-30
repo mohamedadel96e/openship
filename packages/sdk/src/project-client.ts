@@ -38,32 +38,86 @@ export function createRemoteProjectOperations(http: HttpClient): ProjectOperatio
   }
   return Object.freeze({
     ...createRemoteResourceOperations(http, ProjectControlSchemas, {
-      getAppSettings: { method: "GET", path: id => path(id) + "/app-settings", envelope: "data" },
-      updateAppSettings: { method: "PATCH", path: id => path(id) + "/app-settings", envelope: "data" },
-      getAppConnection: { method: "GET", path: id => path(id) + "/app-connection", envelope: "data" },
-      transferToCloud: { method: "POST", path: id => path(id) + "/transfer/to-cloud", body: () => ({}) },
-      transferToSelfHosted: { method: "POST", path: id => path(id) + "/transfer/to-self-hosted", body: () => ({}) },
-      getServerLogStreamToken: { method: "GET", path: id => path(id) + "/server-logs/stream-token" },
-      recentServerLogs: { method: "GET", path: id => path(id) + "/server-logs/recent" },
-      listRouteRules: { method: "GET", path: id => path(id) + "/route-rules", envelope: "rules" },
-      createRouteRule: { method: "POST", path: id => path(id) + "/route-rules", envelope: "rule" },
-      updateRouteRule: {
-        method: "PATCH", path: (id, input) => `${path(id)}/route-rules/${encodeURIComponent((input as { ruleId: string }).ruleId)}`,
-        body: (_id, input) => { const { ruleId: _, ...patch } = input as Record<string, unknown>; return patch; }, envelope: "rule",
+      getAppSettings: { method: "GET", path: (id) => path(id) + "/app-settings", envelope: "data" },
+      updateAppSettings: {
+        method: "PATCH",
+        path: (id) => path(id) + "/app-settings",
+        envelope: "data",
       },
-      removeRouteRule: { method: "DELETE", path: (id, input) => `${path(id)}/route-rules/${encodeURIComponent(input as string)}`, inputLocation: "path" },
-      getIncidents: { method: "GET", path: id => path(id) + "/incidents" },
-      connectDomain: { method: "POST", path: id => path(id) + "/connect" },
-      listConnections: { method: "GET", path: id => path(id) + "/connections", envelope: "data" },
-      listConnectionCandidates: { method: "GET", path: id => path(id) + "/connections/candidates", envelope: "data" },
-      listConnectionConsumers: { method: "GET", path: id => path(id) + "/connections/consumers", envelope: "data" },
-      createConnection: { method: "POST", path: id => path(id) + "/connections", envelope: "data" },
-      connectBundle: { method: "POST", path: id => path(id) + "/connections/bundle", envelope: "data" },
-      removeConnection: { method: "DELETE", path: (id, input) => path(id) + "/connections/" + encodeURIComponent(String(input)), inputLocation: "path", envelope: "data" },
-      getStorage: { method: "GET", path: id => path(id) + "/storage", envelope: "data" },
-      bindStorage: { method: "POST", path: id => path(id) + "/storage", envelope: "data" },
-      unbindStorage: { method: "DELETE", path: id => path(id) + "/storage", envelope: "data" },
-      getEdgeConfig: { method: "GET", path: id => path(id) + "/edge-config" },
+      getAppConnection: {
+        method: "GET",
+        path: (id) => path(id) + "/app-connection",
+        envelope: "data",
+      },
+      transferToCloud: {
+        method: "POST",
+        path: (id) => path(id) + "/transfer/to-cloud",
+        body: () => ({}),
+      },
+      transferToSelfHosted: {
+        method: "POST",
+        path: (id) => path(id) + "/transfer/to-self-hosted",
+        body: () => ({}),
+      },
+      getServerLogStreamToken: {
+        method: "GET",
+        path: (id) => path(id) + "/server-logs/stream-token",
+      },
+      recentServerLogs: { method: "GET", path: (id) => path(id) + "/server-logs/recent" },
+      listRouteRules: { method: "GET", path: (id) => path(id) + "/route-rules", envelope: "rules" },
+      createRouteRule: {
+        method: "POST",
+        path: (id) => path(id) + "/route-rules",
+        envelope: "rule",
+      },
+      updateRouteRule: {
+        method: "PATCH",
+        path: (id, input) =>
+          `${path(id)}/route-rules/${encodeURIComponent((input as { ruleId: string }).ruleId)}`,
+        body: (_id, input) => {
+          const { ruleId: _, ...patch } = input as Record<string, unknown>;
+          return patch;
+        },
+        envelope: "rule",
+      },
+      removeRouteRule: {
+        method: "DELETE",
+        path: (id, input) => `${path(id)}/route-rules/${encodeURIComponent(input as string)}`,
+        inputLocation: "path",
+      },
+      getIncidents: { method: "GET", path: (id) => path(id) + "/incidents" },
+      connectDomain: { method: "POST", path: (id) => path(id) + "/connect" },
+      listConnections: { method: "GET", path: (id) => path(id) + "/connections", envelope: "data" },
+      listConnectionCandidates: {
+        method: "GET",
+        path: (id) => path(id) + "/connections/candidates",
+        envelope: "data",
+      },
+      listConnectionConsumers: {
+        method: "GET",
+        path: (id) => path(id) + "/connections/consumers",
+        envelope: "data",
+      },
+      createConnection: {
+        method: "POST",
+        path: (id) => path(id) + "/connections",
+        envelope: "data",
+      },
+      connectBundle: {
+        method: "POST",
+        path: (id) => path(id) + "/connections/bundle",
+        envelope: "data",
+      },
+      removeConnection: {
+        method: "DELETE",
+        path: (id, input) => path(id) + "/connections/" + encodeURIComponent(String(input)),
+        inputLocation: "path",
+        envelope: "data",
+      },
+      getStorage: { method: "GET", path: (id) => path(id) + "/storage", envelope: "data" },
+      bindStorage: { method: "POST", path: (id) => path(id) + "/storage", envelope: "data" },
+      unbindStorage: { method: "DELETE", path: (id) => path(id) + "/storage", envelope: "data" },
+      getEdgeConfig: { method: "GET", path: (id) => path(id) + "/edge-config" },
       remove: { method: "DELETE", path },
       getInfo: { method: "GET", path: (id) => path(id) + "/info", envelope: "data" },
       getGitInfo: { method: "GET", path: (id) => path(id) + "/git" },
@@ -110,16 +164,97 @@ export function createRemoteProjectOperations(http: HttpClient): ProjectOperatio
       mergeEnvVars: { method: "PATCH", path: (id) => path(id) + "/env" },
       getResources: { method: "GET", path: (id) => path(id) + "/resources", envelope: "data" },
       getClusterWorkload: { method: "GET", path: (id) => path(id) + "/cluster", envelope: "data" },
-      listClusterDatabases: { method: "GET", path: (id) => path(id) + "/cluster/databases", envelope: "data" },
-      getClusterDatabase: { method: "POST", path: (id) => path(id) + "/cluster/databases/inspect", envelope: "data" },
-      createClusterDatabase: { method: "POST", path: (id) => path(id) + "/cluster/databases", envelope: "data" },
-      updateClusterDatabase: { method: "PATCH", path: (id) => path(id) + "/cluster/databases", envelope: "data" },
-      retryClusterDatabase: { method: "POST", path: (id) => path(id) + "/cluster/databases/retry", envelope: "data" },
-      backupClusterDatabase: { method: "POST", path: (id) => path(id) + "/cluster/databases/backup", envelope: "data" },
-      removeClusterDatabase: { method: "DELETE", path: (id) => path(id) + "/cluster/databases", envelope: "data" },
-      connectClusterDatabase: { method: "POST", path: (id) => path(id) + "/cluster/databases/connect", envelope: "data" },
+      listClusterDatabases: {
+        method: "GET",
+        path: (id) => path(id) + "/cluster/databases",
+        envelope: "data",
+      },
+      listClusterDatabaseImports: {
+        method: "GET",
+        path: (id) => path(id) + "/cluster/databases/imports",
+        envelope: "data",
+      },
+      listClusterVolumes: {
+        method: "GET",
+        path: (id) => path(id) + "/cluster/volumes",
+        envelope: "data",
+      },
+      listClusterVolumeBackups: {
+        method: "GET",
+        path: (id) => path(id) + "/cluster/volumes/backups",
+        envelope: "data",
+      },
+      scheduleClusterVolumeBackups: {
+        method: "PATCH",
+        path: (id) => path(id) + "/cluster/volumes/backups",
+        envelope: "data",
+      },
+      removeClusterVolumeBackup: {
+        method: "DELETE",
+        path: (id) => path(id) + "/cluster/volumes/backups",
+        envelope: "data",
+      },
+      createClusterVolume: {
+        method: "POST",
+        path: (id) => path(id) + "/cluster/volumes",
+        envelope: "data",
+      },
+      resizeClusterVolume: {
+        method: "PATCH",
+        path: (id) => path(id) + "/cluster/volumes",
+        envelope: "data",
+      },
+      backupClusterVolume: {
+        method: "POST",
+        path: (id) => path(id) + "/cluster/volumes/backup",
+        envelope: "data",
+      },
+      removeClusterVolume: {
+        method: "DELETE",
+        path: (id) => path(id) + "/cluster/volumes",
+        envelope: "data",
+      },
+      getClusterDatabase: {
+        method: "POST",
+        path: (id) => path(id) + "/cluster/databases/inspect",
+        envelope: "data",
+      },
+      createClusterDatabase: {
+        method: "POST",
+        path: (id) => path(id) + "/cluster/databases",
+        envelope: "data",
+      },
+      updateClusterDatabase: {
+        method: "PATCH",
+        path: (id) => path(id) + "/cluster/databases",
+        envelope: "data",
+      },
+      retryClusterDatabase: {
+        method: "POST",
+        path: (id) => path(id) + "/cluster/databases/retry",
+        envelope: "data",
+      },
+      backupClusterDatabase: {
+        method: "POST",
+        path: (id) => path(id) + "/cluster/databases/backup",
+        envelope: "data",
+      },
+      removeClusterDatabase: {
+        method: "DELETE",
+        path: (id) => path(id) + "/cluster/databases",
+        envelope: "data",
+      },
+      connectClusterDatabase: {
+        method: "POST",
+        path: (id) => path(id) + "/cluster/databases/connect",
+        envelope: "data",
+      },
       setClusterTarget: { method: "PATCH", path: (id) => path(id) + "/cluster", envelope: "data" },
-      scaleClusterWorkload: { method: "POST", path: (id) => path(id) + "/cluster/scale", envelope: "data" },
+      scaleClusterWorkload: {
+        method: "POST",
+        path: (id) => path(id) + "/cluster/scale",
+        envelope: "data",
+      },
       updateResources: { method: "PATCH", path: (id) => path(id) + "/resources", envelope: "data" },
       setSleepMode: { method: "POST", path: (id) => path(id) + "/sleep-mode" },
       setOptions: { method: "POST", path: (id) => path(id) + "/options", envelope: "data" },
@@ -136,9 +271,14 @@ export function createRemoteProjectOperations(http: HttpClient): ProjectOperatio
         envelope: "preview",
       },
     }),
-    async getHome() { return checked(await http.request("/projects/home"), isProjectHome); },
+    async getHome() {
+      return checked(await http.request("/projects/home"), isProjectHome);
+    },
     async *streamClusterDatabaseEvents(id, options = {}) {
       yield* http.events(path(id) + "/cluster/databases/stream", { signal: options.signal });
+    },
+    async *streamClusterVolumeEvents(id, options = {}) {
+      yield* http.events(path(id) + "/cluster/volumes/stream", { signal: options.signal });
     },
     async *retryRoutingStream(value, options = {}) {
       const id = parseInput(ResourceIdSchema, value);
@@ -160,11 +300,20 @@ export function createRemoteProjectOperations(http: HttpClient): ProjectOperatio
       yield* http.events(url.href, { signal: options.signal });
     },
     create: async (input) => data("/projects", "POST", parseInput(CreateProjectBody, input)),
-    importLocal: async input => data("/projects/import", "POST", parseInput(ImportLocalProjectBody, input)),
+    importLocal: async (input) =>
+      data("/projects/import", "POST", parseInput(ImportLocalProjectBody, input)),
     async scanLocal(input) {
-      return checked(await http.request("/projects/scan", { method: "POST", body: JSON.stringify(parseInput(ScanLocalProjectBody, input)) }), isLocalProjectScan);
+      return checked(
+        await http.request("/projects/scan", {
+          method: "POST",
+          body: JSON.stringify(parseInput(ScanLocalProjectBody, input)),
+        }),
+        isLocalProjectScan,
+      );
     },
-    async listLocal() { return checked(await http.request("/projects/local"), isLocalProjects); },
+    async listLocal() {
+      return checked(await http.request("/projects/local"), isLocalProjects);
+    },
     get: async (id) => data(path(id)),
     update: async (id, input) => data(path(id), "PATCH", parseInput(UpdateProjectBody, input)),
     async ensure(input) {

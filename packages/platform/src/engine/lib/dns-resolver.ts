@@ -22,6 +22,7 @@
  */
 
 import dns from "node:dns/promises";
+import { dnsTxtValue } from "./dns-txt";
 
 const GOOGLE_DNS = "https://dns.google/resolve";
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -66,7 +67,7 @@ async function resolveViaLocal(name: string, type: DnsRecordType): Promise<strin
       return dns.resolveCname(name);
     case "TXT": {
       const rows = await dns.resolveTxt(name);
-      return rows.flat();
+      return rows.map((chunks) => chunks.join(""));
     }
   }
 }
@@ -92,7 +93,8 @@ export async function resolveRecords(
     });
     if (res.ok) {
       const json = (await res.json()) as { Answer?: GoogleDnsAnswer[] };
-      return (json.Answer ?? []).map((a) => a.data.replace(/^"|"$/g, ""));
+      return (json.Answer ?? []).filter((answer) => answer.type === RRTYPE[type])
+        .map((answer) => type === "TXT" ? dnsTxtValue(answer.data) : answer.data);
     }
   } catch {
     // DoH unreachable / blocked — fall through to node:dns.

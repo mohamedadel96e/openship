@@ -22,12 +22,9 @@ export type GitHubInstallationVerificationResult =
       message: string;
     };
 
-async function findUserInstallation(
-  token: string,
-  installationId: number,
-): Promise<GitHubInstallation | null> {
+async function* userInstallations(token: string): AsyncGenerator<GitHubInstallation> {
   const perPage = 100;
-  for (let page = 1; ; page++) {
+  for (let page = 1; page <= 50; page++) {
     const data = await ghFetch<{
       total_count: number;
       installations?: GitHubInstallation[];
@@ -39,12 +36,34 @@ async function findUserInstallation(
       throw new Error("GitHub returned an invalid installation count.");
     }
     const batch = data.installations ?? [];
-    const match = batch.find((installation) => installation.id === installationId);
-    if (match) return match;
+    yield* batch;
     if (batch.length < perPage || page * perPage >= data.total_count) {
-      return null;
+      return;
     }
   }
+  throw new Error("GitHub returned too many installations. Narrow App access on GitHub and try again.");
+}
+
+/** Read GitHub's live catalog for an explicit connection attempt. This must
+ * never replace the workspace-scoped catalog used by status and repo reads. */
+export async function listGitHubInstallationsForUser(
+  userId: string,
+): Promise<GitHubInstallation[] | null> {
+  const token = await getUserToken(userId);
+  if (!token) return null;
+  const installations: GitHubInstallation[] = [];
+  for await (const installation of userInstallations(token)) installations.push(installation);
+  return installations;
+}
+
+async function findUserInstallation(
+  token: string,
+  installationId: number,
+): Promise<GitHubInstallation | null> {
+  for await (const installation of userInstallations(token)) {
+    if (installation.id === installationId) return installation;
+  }
+  return null;
 }
 
 export async function verifyGitHubInstallationForUser(
@@ -78,6 +97,7 @@ export async function verifyGitHubInstallationForUser(
   );
   if (
     appInstallation.id !== installationId ||
+    appInstallation.suspended_at ||
     appInstallation.account.id !== userInstallation.account.id ||
     appInstallation.app_id !== userInstallation.app_id
   ) {

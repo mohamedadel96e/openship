@@ -5,6 +5,12 @@ const path = (id: string) => `projects/${encodeURIComponent(id)}/cluster/databas
 export const clusterDatabasesApi = {
   list: (id: string) =>
     api.get<{ data: ClusterDatabase[] }>(path(id)).then((response) => response.data),
+  imports: (id: string) =>
+    api
+      .get<{
+        data: Static<typeof ProjectDatabaseSchemas.listClusterDatabaseImports.output>;
+      }>(path(id) + "/imports")
+      .then((response) => response.data),
   inspect: (id: string, databaseId: string) =>
     api
       .post<{
@@ -31,12 +37,24 @@ export const clusterDatabasesApi = {
     api
       .delete<{
         data: ClusterDatabase;
-      }>(path(id), { body: { databaseId: database.id, expectedSequence: database.sequence, name, deleteData } })
+      }>(path(id), {
+        body: { databaseId: database.id, expectedSequence: database.sequence, name, deleteData },
+      })
       .then((response) => response.data),
-  connect: (id: string, database: ClusterDatabase, envKey: string | null) =>
+  connect: (
+    id: string,
+    database: ClusterDatabase,
+    envKey: string | null,
+    replace?: { databaseId: string; expectedSequence: number },
+  ) =>
     api
       .post<{
         data: ClusterDatabase;
-      }>(path(id) + "/connect", { databaseId: database.id, expectedSequence: database.sequence, envKey })
+      }>(path(id) + "/connect", {
+        databaseId: database.id,
+        expectedSequence: database.sequence,
+        envKey,
+        ...(replace ? { replace } : {}),
+      })
       .then((response) => response.data),
 };

@@ -69,6 +69,8 @@ import {
 import {
   startGithubLinkFromBridgeToken,
   buildOrgScopedInstallUrl,
+  getGithubInstallSelection,
+  type GithubInstallSelectionResult,
   attributeGithubInstall,
   listOrgInstallations,
   mintOrgInstallationToken,
@@ -833,81 +835,15 @@ export async function exportSubgraphHandler(c: Context) {
 // already managed by the existing local github code paths, so we just reuse
 // them — this controller is a thin policy/translation layer.
 
-// ─── OAuth bridge (browser-session handoff for linkSocialAccount) ───────────
-//
-// SaaS-only OAuth flow. Self-hosted instances never hold GitHub OAuth
-// credentials — they redirect the user's browser to api.openship.io
-// where the real OAuth round-trip happens against the SaaS's Better
-// Auth instance. The browser starts with no SaaS session cookie (it
-// only has a local session), so we need a 2-hop handoff:
-//
-//   1. Local POSTs /oauth-handoff with its cloud_session_token Bearer.
-//      SaaS resolves the bearer to a Better-Auth session, mints a
-//      one-time bridge token storing (userId, sessionToken), returns
-//      a URL pointing at /oauth-bridge?token=<bridge>.
-//
-//   2. Browser opens /oauth-bridge?token=<>. SaaS consumes the bridge
-//      (single-use), constructs Better-Auth session headers from the
-//      stashed sessionToken, calls auth.api.linkSocialAccount which
-//      returns the GitHub OAuth redirect URL + state cookies. SaaS
-//      forwards the redirect AND sets the user's Better-Auth session
-//      cookie on the browser so when GitHub redirects back to Better
-//      Auth's callback URL, it resolves to the right user and creates
-//      the `account` row with providerId='github'.
-//
-// After this, the SaaS has authoritative knowledge of the user's
-// GitHub identity. findUserByGitHubId in the install webhook will
-// succeed, getUserToken will return the user's OAuth token, and
-// getUserInstallations will work end-to-end.
+// ─── Repository OAuth bridge ───────────────────────────────────────────────
+// Self-hosted clients authenticate to Cloud with their existing session and
+// receive a one-time browser handoff. The shared engine binds repository OAuth
+// to that session and workspace, with PKCE and a browser nonce. No Cloud session
+// cookie is installed in the system browser, and no sign-in identity is linked
+// or transferred. The GitHub App Setup callback separately claims the verified
+// installation into the initiating workspace.
 
-// ─── GitHub Connect flow: architecture overview ─────────────────────────────
-//
-// SaaS-only OAuth + install flow. Local self-hosted instances NEVER hold
-// GitHub OAuth credentials, GitHub App private keys, or the gitInstallation
-// table for the App. Everything flows through api.openship.io.
-//
-// Three independent identity envelopes chain together:
-//
-//   ┌─ Local DB ────────────────┐   ┌─ SaaS process memory ─────┐   ┌─ Browser ─────────────┐
-//   │ user_settings.cloud_      │   │ oauthBridges Map          │   │ Better Auth oauth_     │
-//   │ session_token (AES at     │ → │ {userId, sessionToken}    │ → │ state cookie           │
-//   │ rest with BETTER_AUTH_    │   │ 16 random bytes, 5min TTL │   │ AES-encrypted {link:  │
-//   │ SECRET-derived key)       │   │ single-use                │   │ {email, userId}}      │
-//   └───────────────────────────┘   └───────────────────────────┘   └───────────────────────┘
-//          Step 1: Local→SaaS              Step 2: SaaS→Browser           Step 3: Browser→GitHub→SaaS
-//          Authorization: Bearer            ?token=<bridge> in URL         redirect chain
-//
-// Security invariants:
-//   - The popup browser NEVER receives the SaaS Better Auth session
-//     cookie. Only the oauth_state cookies are forwarded (see the
-//     allowedCookieNames filter in filterForwardableStateCookies). The
-//     state cookie itself carries the {link: {email, userId}} binding all
-//     the way to GitHub's callback, and Better Auth's callback handler
-//     (callback.mjs:102-128) reads userId from the decrypted state — it
-//     never consults c.context.session for link flows.
-//   - The bridge token in /oauth-bridge?token=<> is single-use AND
-//     time-bound. Leaking it via access logs / browser history is bounded
-//     by both: the consumer races first (consumeOauthBridge deletes
-//     before returning), and the 5-min TTL.
-//   - The link binding (userId) lives ONLY inside the encrypted state
-//     cookie. The bridge token itself is opaque randomness — leaking
-//     it from a URL reveals no PII or userId.
-//
-// Do NOT add a session-cookie set on the popup browser response from
-// /oauth-bridge — that would silently log the popup into the SaaS
-// dashboard, conflating identities across the local and SaaS tiers.
-
-/**
- * POST /api/cloud/github/oauth-handoff   (bearer-authed via cloudSessionAuth)
- *
- * Returns a one-time URL the browser opens to start GitHub OAuth on the
- * SaaS. The URL points at the public /oauth-bridge endpoint with a
- * single-use bridge token. The bridge then calls Better Auth's
- * linkSocialAccount via the bearer plugin (Authorization: Bearer
- * sessionToken) to obtain the GitHub OAuth redirect URL + state
- * cookies, forwards both to the browser, and the browser proceeds to
- * GitHub.
- */
+/** Return a one-time browser URL for repository authorization on Cloud. */
 export async function githubOauthHandoff(c: Context) {
   // cloudSessionAuth middleware (mounted on /github/*) already resolved
   // the Bearer token into a session row + user. We read them straight
@@ -920,7 +856,7 @@ export async function githubOauthHandoff(c: Context) {
     return c.json({ error: "No active session" }, 401);
   }
   const token = await oauthBridgeStore.issue(
-    { userId: user.id, sessionToken: session.token },
+    { userId: user.id, sessionToken: session.token, organizationId: getRequestContext(c).organizationId },
     { ttlMs: OAUTH_BRIDGE_TTL_MS },
   );
   return c.json({
@@ -930,18 +866,10 @@ export async function githubOauthHandoff(c: Context) {
   });
 }
 
-/**
- * GET /api/cloud/github/oauth-bridge?token=<>   (PUBLIC)
- *
- * Browser opens this from a popup. We consume the bridge token, set the
- * user's Better-Auth session cookie on the browser, call
- * auth.api.linkSocialAccount to get GitHub's OAuth start URL + Better
- * Auth's own state cookies, and redirect to that URL with all cookies
- * attached. When GitHub redirects back to Better Auth's callback, the
- * session cookie identifies the user and Better Auth creates the
- * `account` row scoped to them.
- */
+/** Consume the handoff and issue only the repository OAuth browser cookie. */
 export async function githubOauthBridge(c: Context) {
+  c.header("Cache-Control", "no-store");
+  c.header("Referrer-Policy", "no-referrer");
   const result = await startGithubLinkFromBridgeToken(c.req.query("token"));
   switch (result.kind) {
     case "missing-token":
@@ -968,17 +896,6 @@ export async function githubOauthBridge(c: Context) {
       );
       return response;
     }
-    case "no-url":
-      console.error(
-        `[github oauth-bridge] linkSocialAccount returned no URL — status=${result.status} body=${result.bodySnippet}`,
-      );
-      return c.html(
-        renderCallbackHtml(
-          "OAuth start failed",
-          "Could not start GitHub OAuth. Try again or check the server logs.",
-        ),
-        500,
-      );
     case "failed":
       console.error("[github oauth-bridge] failed:", result.error);
       return c.html(
@@ -988,19 +905,12 @@ export async function githubOauthBridge(c: Context) {
   }
 }
 
-/**
- * GET /api/cloud/github/oauth-success   (PUBLIC)
- *
- * Better Auth redirects here after the GitHub OAuth callback completes
- * and the `account` row has been written. We just render a friendly
- * close-window page; the dashboard picks up the new state on its next
- * /user-status refresh.
- */
+/** Close the bridge window after the repository grant has been saved. */
 export async function githubOauthSuccess(c: Context) {
   return c.html(
     renderCallbackHtml(
       "GitHub connected",
-      "Your GitHub account is now linked. You can close this window — the dashboard will refresh automatically.",
+      "GitHub repository access is authorized. You can close this window — continue App installation from Openship.",
       { closeAfterMs: 2000 },
     ),
   );
@@ -1009,9 +919,9 @@ export async function githubOauthSuccess(c: Context) {
 /**
  * POST /api/cloud/github/install-url
  *
- * Returns the central App's installation URL with a one-time state token
- * embedded as a query parameter. GitHub Apps preserve the `state` query
- * param through the install flow and append it to the Setup URL alongside
+ * Returns Openship's account-selection URL with a one-time state token. It
+ * offers existing installations, or forwards a new install to GitHub with the
+ * same state. GitHub preserves that state and appends it to the Setup URL alongside
  * `installation_id` and `setup_action` — that's what lets us attribute
  * the install back to the userId that started the flow without requiring
  * a SaaS session cookie on the popup browser (the App's Setup URL on
@@ -1036,6 +946,10 @@ export async function githubInstallUrl(c: Context) {
  * committed atomically. No browser session is trusted on this callback.
  */
 export async function githubInstallCallback(c: Context) {
+  c.header("Cache-Control", "no-store");
+  c.header("Referrer-Policy", "no-referrer");
+  if (c.req.query("flow") === "select") return githubInstallSelection(c);
+
   const result = await attributeGithubInstall({
     installationIdRaw: c.req.query("installation_id"),
     setupAction: c.req.query("setup_action"),
@@ -1096,9 +1010,44 @@ export async function githubInstallCallback(c: Context) {
       return c.html(
         renderCallbackHtml(
           "Install attribution failed",
-          `Could not finalize installation ${result.installationId}. Refresh the dashboard or try installing again. (${result.error})`,
+          `Could not finalize this GitHub connection. Refresh the dashboard or try installing again. (${result.error})`,
         ),
         500,
+      );
+  }
+}
+
+async function githubInstallSelection(c: Context) {
+  const result = await getGithubInstallSelection(c.req.query("state"));
+  switch (result.kind) {
+    case "ready":
+      if (result.installations.length === 0) return c.redirect(result.installUrl);
+      return c.html(
+        renderCallbackHtml(
+          "Connect GitHub",
+          `Choose the GitHub account to connect to ${result.workspaceName}.`,
+          { selection: result },
+        ),
+      );
+    case "missing-params":
+    case "state-expired":
+      return c.html(
+        renderCallbackHtml(
+          "Install link expired",
+          "This installation link expired or was already used. Start a new connection from Openship.",
+        ),
+        400,
+      );
+    case "forbidden":
+      return c.html(renderCallbackHtml("Installation not authorized", result.message), 403);
+    case "failed":
+      console.error("[github install-selection] failed:", result.error);
+      return c.html(
+        renderCallbackHtml(
+          "Could not load GitHub accounts",
+          "Your GitHub accounts could not be loaded. Refresh this page to try again.",
+        ),
+        502,
       );
   }
 }
@@ -1106,10 +1055,31 @@ export async function githubInstallCallback(c: Context) {
 function renderCallbackHtml(
   title: string,
   message: string,
-  opts?: { closeAfterMs?: number },
+  opts?: {
+    closeAfterMs?: number;
+    selection?: Extract<GithubInstallSelectionResult, { kind: "ready" }>;
+  },
 ): string {
   const closeScript = opts?.closeAfterMs
     ? `<script>setTimeout(() => window.close(), ${opts.closeAfterMs});</script>`
+    : "";
+  const selection = opts?.selection;
+  const accounts = selection
+    ? `<div class="installations">${selection.installations
+        .map(
+          (installation) => `
+      <form method="get" action="/api/cloud/github/install-callback">
+        <input type="hidden" name="state" value="${escapeHtml(selection.state)}" />
+        <input type="hidden" name="installation_id" value="${escapeHtml(String(installation.id))}" />
+        <input type="hidden" name="setup_action" value="update" />
+        <button type="submit">
+          <strong>${escapeHtml(installation.login)}</strong>
+          <span>${installation.type === "Organization" ? "Organization" : "Personal account"}</span>
+        </button>
+      </form>`,
+        )
+        .join("")}</div>
+      <a class="install-another" href="${escapeHtml(selection.installUrl)}">Install on another GitHub account</a>`
     : "";
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1122,12 +1092,20 @@ function renderCallbackHtml(
     .card { background: #fff; border-radius: 12px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.06); }
     h1 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
     p { font-size: 14px; line-height: 1.55; color: #555; margin: 0; }
+    .installations { display: grid; gap: 12px; margin-top: 24px; }
+    .installations button { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; padding: 14px 16px; border: 1px solid #ddd; border-radius: 8px; background: #fff; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+    .installations button:hover { background: #f6f6f6; }
+    .installations button:focus-visible, .install-another:focus-visible { outline: 2px solid #171717; outline-offset: 3px; }
+    .installations strong { overflow-wrap: anywhere; }
+    .installations span { font-size: 12px; color: #666; }
+    .install-another { display: inline-block; margin-top: 20px; font-size: 14px; color: #333; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>${escapeHtml(title)}</h1>
     <p>${escapeHtml(message)}</p>
+    ${accounts}
   </div>
   ${closeScript}
 </body>

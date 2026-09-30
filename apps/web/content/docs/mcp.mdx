@@ -153,10 +153,9 @@ This is the heart of the security model, and it's why MCP access is as safe as y
   bearer, and dispatches it through the same routes, validation, auth middleware, and per-resource permission
   check as a normal HTTP call.
 
-The practical upshot: a read-only token can only reach read tools, and a scoped token stays boxed into its
-granted resources. A scoped token isn't even *shown* the org-wide list and create tools — `get_projects`
-(list every project) simply won't appear in its `tools/list`; it sees only the per-resource tools for the
-resource types it was granted. And if a `tools/call` touches something outside that scope, it comes back
+A read-only token can only reach GET tools. A scoped token sees tools enabled by its grants, including
+collection tools when it has the matching wildcard permission. A grant to one project does not authorize
+listing every project. And if a `tools/call` touches something outside that scope, it comes back
 `404` — the scope doing its job. For the full protocol details (JSON-RPC methods, negotiation, error codes),
 see the [MCP API reference](/docs/api/mcp).
 
@@ -212,6 +211,11 @@ The `tokens`, `auth`, and `mcp` modules are hard-blocked from ever becoming tool
 can't mint itself a fresh credential or escape its own scope. Manage tokens and connected clients from the
 dashboard or the [Tokens API](/docs/api/tokens), not from an agent.
 </Callout>
+
+The [generated MCP catalog](/docs/api/mcp-tools) publishes the current tool names, descriptions and
+HTTP-only boundaries directly from the routes. The [cluster and scaling guide](/docs/guides/mcp-clusters-and-scaling)
+covers private networking, automated k3s setup, application replica changes, recovery and cleanup.
+Manual replica scaling is supported; metric-driven autoscaling and live worker joining are not implemented.
 
 ## Guided flows
 

@@ -18,13 +18,14 @@ const CONFIG: MultiServiceDeployConfig = {
   forcePull: true,
 };
 
-describe("Docker service force-pull ordering", () => {
+describe("Docker service replacement ordering", () => {
   it("reuses an existing local image after checking it before container removal", async () => {
     const inspectImage = vi.fn(async () => ({}));
+    const stop = vi.fn(async () => undefined);
     const remove = vi.fn(async () => undefined);
     const docker = {
       getImage: vi.fn(() => ({ inspect: inspectImage })),
-      getContainer: vi.fn(() => ({ remove })),
+      getContainer: vi.fn(() => ({ stop, remove })),
       createContainer: vi.fn().mockRejectedValue(new Error("stop after proving ordering")),
     };
     const runtime = await DockerRuntime.create({
@@ -41,10 +42,12 @@ describe("Docker service force-pull ordering", () => {
     ).rejects.toThrow("stop after proving ordering");
 
     expect(inspectImage).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledExactlyOnceWith();
     expect(remove).toHaveBeenCalledOnce();
     expect(inspectImage.mock.invocationCallOrder[0]).toBeLessThan(
-      remove.mock.invocationCallOrder[0]!,
+      stop.mock.invocationCallOrder[0]!,
     );
+    expect(stop.mock.invocationCallOrder[0]).toBeLessThan(remove.mock.invocationCallOrder[0]!);
   });
 
   it("keeps the running container intact when the replacement image cannot be pulled", async () => {
@@ -117,7 +120,7 @@ describe("Docker service force-pull ordering", () => {
   it("skips a second pull only when the orchestrator explicitly prepared the image", async () => {
     const remove = vi.fn(async () => undefined);
     const docker = {
-      getContainer: vi.fn(() => ({ remove })),
+      getContainer: vi.fn(() => ({ stop: vi.fn(async () => undefined), remove })),
       createContainer: vi.fn().mockRejectedValue(new Error("stop after proving no pull")),
     };
     const runtime = await DockerRuntime.create({
@@ -132,5 +135,53 @@ describe("Docker service force-pull ordering", () => {
 
     expect(pullImage).not.toHaveBeenCalled();
     expect(docker.getContainer).toHaveBeenCalled();
+  });
+
+  it.each(["replace", "destroy"] as const)(
+    "%s does not force-remove a container when graceful stop fails",
+    async (operation) => {
+      const error = Object.assign(new Error("daemon refused stop"), { statusCode: 500 });
+      const stop = vi.fn().mockRejectedValue(error);
+      const remove = vi.fn(async () => undefined);
+      const docker = {
+        getContainer: vi.fn(() => ({
+          stop,
+          remove,
+          inspect: async () => ({ Config: { StopTimeout: 30 } }),
+        })),
+        createContainer: vi.fn(),
+      };
+      const runtime = await DockerRuntime.create({
+        dockerSocketPath: "/tmp/openship-test-absent.sock",
+      });
+      (runtime as unknown as { _docker: unknown })._docker = docker;
+      const result =
+        operation === "replace"
+          ? runtime.deployServiceWorkload(GROUP, { ...CONFIG, imageAlreadyPrepared: true })
+          : runtime.destroy("old-container");
+
+      await expect(result).rejects.toBe(error);
+      expect(remove).not.toHaveBeenCalled();
+      expect(docker.createContainer).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not try to create a duplicate after removal fails", async () => {
+    const error = Object.assign(new Error("daemon refused removal"), { statusCode: 403 });
+    const docker = {
+      getContainer: vi.fn(() => ({
+        stop: vi.fn(async () => undefined),
+        remove: vi.fn().mockRejectedValue(error),
+      })),
+      createContainer: vi.fn(),
+    };
+    const runtime = await DockerRuntime.create({
+      dockerSocketPath: "/tmp/openship-test-absent.sock",
+    });
+    (runtime as unknown as { _docker: unknown })._docker = docker;
+    await expect(
+      runtime.deployServiceWorkload(GROUP, { ...CONFIG, imageAlreadyPrepared: true }),
+    ).rejects.toBe(error);
+    expect(docker.createContainer).not.toHaveBeenCalled();
   });
 });

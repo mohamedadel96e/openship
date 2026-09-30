@@ -1,4 +1,5 @@
 import { repos } from "@repo/db";
+import { observeCloudAudit } from "../modules/cloud-analytics/lifecycle";
 import type { ExecutionContext } from "@repo/platform";
 type AuditSource = NonNullable<ExecutionContext["source"]>;
 const pending = new Set<Promise<void>>();
@@ -45,6 +46,7 @@ export interface AuditEventInput {
 export const audit = {
   /** Awaited write. See module header. */
   async record(ctx: AuditContext, event: AuditEventInput): Promise<void> {
+    observeCloudAudit(ctx, event);
     try {
       await repos.auditEvent.create({
         organizationId: ctx.organizationId,

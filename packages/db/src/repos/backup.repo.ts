@@ -8,7 +8,19 @@
  *   restore      — restore history (sibling of run)
  */
 
-import { and, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  ne,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Database } from "../client";
 import {
@@ -17,6 +29,7 @@ import {
   backupRestore,
   backupRun,
   clusterDatabase,
+  clusterStorage,
   mailServers,
   project,
   service,
@@ -207,14 +220,29 @@ async function persistTransition(
 // ─── Destination repo ────────────────────────────────────────────────────────
 
 export function createBackupDestinationRepo(db: Database) {
-  const runReferences = (id: string) => and(
-    eq(backupRun.destinationId, id), isNull(backupRun.deletedAt),
-    or(eq(backupRun.status, "succeeded"), inArray(backupRun.status, IN_FLIGHT_RUN_STATUSES), liveBackupExecution),
-  );
-  const clusterReferences = (id: string) => and(
-    sql`${clusterDatabase.status} <> 'deleted'`,
-    or(sql`${clusterDatabase.config}->'backup'->>'destinationId' = ${id}`, sql`${clusterDatabase.restoreSource}->>'destinationId' = ${id}`),
-  );
+  const runReferences = (id: string) =>
+    and(
+      eq(backupRun.destinationId, id),
+      isNull(backupRun.deletedAt),
+      or(
+        eq(backupRun.status, "succeeded"),
+        inArray(backupRun.status, IN_FLIGHT_RUN_STATUSES),
+        liveBackupExecution,
+      ),
+    );
+  const clusterReferences = (id: string) =>
+    and(
+      sql`${clusterDatabase.status} <> 'deleted'`,
+      or(
+        sql`${clusterDatabase.config}->'backup'->>'destinationId' = ${id}`,
+        sql`${clusterDatabase.restoreSource}->>'destinationId' = ${id}`,
+      ),
+    );
+  const sharedStorageReferences = (id: string) =>
+    and(
+      ne(clusterStorage.status, "removed"),
+      sql`${clusterStorage.config}->>'backupDestinationId' = ${id}`,
+    );
   return {
     /**
      * Org-scoped list — returns every destination in the org. Access is
@@ -263,15 +291,65 @@ export function createBackupDestinationRepo(db: Database) {
       data: Partial<Omit<NewBackupDestination, "id" | "createdAt">>,
     ): Promise<BackupDestination | undefined> {
       return db.transaction(async (tx) => {
-        const [current] = await tx.select().from(backupDestination).where(eq(backupDestination.id, id)).for("update");
+        const [current] = await tx
+          .select()
+          .from(backupDestination)
+          .where(eq(backupDestination.id, id))
+          .for("update");
         if (!current) return undefined;
-        const moved = (["kind", "endpoint", "region", "bucket", "pathPrefix"] as const).some((key) => data[key] !== undefined && data[key] !== current[key]);
-        if (moved && (await tx.select({ id: clusterDatabase.id }).from(clusterDatabase).where(clusterReferences(id)).limit(1)).length)
-          throw new AppError("This destination contains a cluster database's recovery archives. Its storage address cannot be changed while that database or retained data exists.", 409, "CLUSTER_DATABASE_BACKUP_DESTINATION");
-        const storageMoved = moved || (["serverId", "sshHost", "sshPort", "sshUser"] as const).some(key => data[key] !== undefined && data[key] !== current[key]);
-        if (storageMoved && (await tx.select({ id: backupRun.id }).from(backupRun).where(runReferences(id)).limit(1)).length)
-          throw new AppError("This destination contains backups or has a backup in progress. Create another destination and update the policy to use it; existing backups must keep their original storage address.", 409, "BACKUP_DESTINATION_IN_USE");
-        const [row] = await tx.update(backupDestination).set({ ...data, updatedAt: new Date() }).where(eq(backupDestination.id, id)).returning();
+        const moved = (["kind", "endpoint", "region", "bucket", "pathPrefix"] as const).some(
+          (key) => data[key] !== undefined && data[key] !== current[key],
+        );
+        if (
+          moved &&
+          (
+            await tx
+              .select({ id: clusterStorage.id })
+              .from(clusterStorage)
+              .where(sharedStorageReferences(id))
+              .limit(1)
+          ).length
+        )
+          throw new AppError(
+            "Shared storage uses this backup destination. Keep its address so existing volume backups remain recoverable.",
+            409,
+            "CLUSTER_STORAGE_BACKUP_DESTINATION",
+          );
+        if (
+          moved &&
+          (
+            await tx
+              .select({ id: clusterDatabase.id })
+              .from(clusterDatabase)
+              .where(clusterReferences(id))
+              .limit(1)
+          ).length
+        )
+          throw new AppError(
+            "This destination contains a cluster database's recovery archives. Its storage address cannot be changed while that database or retained data exists.",
+            409,
+            "CLUSTER_DATABASE_BACKUP_DESTINATION",
+          );
+        const storageMoved =
+          moved ||
+          (["serverId", "sshHost", "sshPort", "sshUser"] as const).some(
+            (key) => data[key] !== undefined && data[key] !== current[key],
+          );
+        if (
+          storageMoved &&
+          (await tx.select({ id: backupRun.id }).from(backupRun).where(runReferences(id)).limit(1))
+            .length
+        )
+          throw new AppError(
+            "This destination contains backups or has a backup in progress. Create another destination and update the policy to use it; existing backups must keep their original storage address.",
+            409,
+            "BACKUP_DESTINATION_IN_USE",
+          );
+        const [row] = await tx
+          .update(backupDestination)
+          .set({ ...data, updatedAt: new Date() })
+          .where(eq(backupDestination.id, id))
+          .returning();
         return row;
       });
     },
@@ -291,11 +369,48 @@ export function createBackupDestinationRepo(db: Database) {
      *  caller catches and surfaces the friendly error. */
     async softDelete(id: string): Promise<{ ok: true } | { ok: false; reason: string }> {
       return db.transaction(async (tx) => {
-        await tx.select({ id: backupDestination.id }).from(backupDestination).where(eq(backupDestination.id, id)).for("update");
-        if ((await tx.select({ id: clusterDatabase.id }).from(clusterDatabase).where(clusterReferences(id)).limit(1)).length)
-          return { ok: false, reason: "This destination is used by cluster database backups or a retained database. Remove those databases and retained data first." };
-        if ((await tx.select({ id: backupRun.id }).from(backupRun).where(runReferences(id)).limit(1)).length)
-          return { ok: false, reason: "This destination still holds retained backups or has a backup in progress. Keep it available so those backups can be restored." };
+        await tx
+          .select({ id: backupDestination.id })
+          .from(backupDestination)
+          .where(eq(backupDestination.id, id))
+          .for("update");
+        if (
+          (
+            await tx
+              .select({ id: clusterStorage.id })
+              .from(clusterStorage)
+              .where(sharedStorageReferences(id))
+              .limit(1)
+          ).length
+        )
+          return {
+            ok: false,
+            reason:
+              "Shared storage uses this backup destination. Remove the storage installation before removing its recovery destination.",
+          };
+        if (
+          (
+            await tx
+              .select({ id: clusterDatabase.id })
+              .from(clusterDatabase)
+              .where(clusterReferences(id))
+              .limit(1)
+          ).length
+        )
+          return {
+            ok: false,
+            reason:
+              "This destination is used by cluster database backups or a retained database. Remove those databases and retained data first.",
+          };
+        if (
+          (await tx.select({ id: backupRun.id }).from(backupRun).where(runReferences(id)).limit(1))
+            .length
+        )
+          return {
+            ok: false,
+            reason:
+              "This destination still holds retained backups or has a backup in progress. Keep it available so those backups can be restored.",
+          };
         const referencingCount = await tx
           .select({ count: sql<number>`count(*)::int` })
           .from(backupPolicy)
@@ -497,25 +612,62 @@ export function createBackupPolicyRepo(db: Database) {
     },
 
     async create(data: NewBackupPolicy): Promise<BackupPolicy> {
-      const destination = await db.query.backupDestination.findFirst({ where: eq(backupDestination.id, data.destinationId) });
-      if (!destination || destination.deletedAt)
-        throw new AppError("Backup destination is no longer available", 409, "BACKUP_DESTINATION_UNAVAILABLE");
-      const row = await withProjectWorkAdmission(db, data.projectId, destination.organizationId, async (tx) => {
-        const [current] = await tx.select().from(backupDestination).where(eq(backupDestination.id, data.destinationId)).for("update");
-        if (!current || current.deletedAt)
-          throw new AppError("Backup destination is no longer available", 409, "BACKUP_DESTINATION_UNAVAILABLE");
-        // Postgres considers NULL service IDs distinct. The project admission
-        // lock also serializes creation of its single default policy, without
-        // deleting any pre-existing rules to add a database constraint.
-        if (data.projectId && !data.serviceId) {
-          const [existing] = await tx.select({ id: backupPolicy.id }).from(backupPolicy).where(and(
-            eq(backupPolicy.projectId, data.projectId), isNull(backupPolicy.serviceId), isNull(backupPolicy.deletedAt),
-          )).limit(1);
-          if (existing) throw new AppError("This project already has a backup policy. Edit the existing policy instead.", 409, "BACKUP_POLICY_EXISTS");
-        }
-        return (await tx.insert(backupPolicy).values(data).returning())[0]!;
+      const destination = await db.query.backupDestination.findFirst({
+        where: eq(backupDestination.id, data.destinationId),
       });
-      if (!row) throw new AppError("Cannot create a backup policy: project is being deleted or no longer exists", 409, "PROJECT_UNAVAILABLE");
+      if (!destination || destination.deletedAt)
+        throw new AppError(
+          "Backup destination is no longer available",
+          409,
+          "BACKUP_DESTINATION_UNAVAILABLE",
+        );
+      const row = await withProjectWorkAdmission(
+        db,
+        data.projectId,
+        destination.organizationId,
+        async (tx) => {
+          const [current] = await tx
+            .select()
+            .from(backupDestination)
+            .where(eq(backupDestination.id, data.destinationId))
+            .for("update");
+          if (!current || current.deletedAt)
+            throw new AppError(
+              "Backup destination is no longer available",
+              409,
+              "BACKUP_DESTINATION_UNAVAILABLE",
+            );
+          // Postgres considers NULL service IDs distinct. The project admission
+          // lock also serializes creation of its single default policy, without
+          // deleting any pre-existing rules to add a database constraint.
+          if (data.projectId && !data.serviceId) {
+            const [existing] = await tx
+              .select({ id: backupPolicy.id })
+              .from(backupPolicy)
+              .where(
+                and(
+                  eq(backupPolicy.projectId, data.projectId),
+                  isNull(backupPolicy.serviceId),
+                  isNull(backupPolicy.deletedAt),
+                ),
+              )
+              .limit(1);
+            if (existing)
+              throw new AppError(
+                "This project already has a backup policy. Edit the existing policy instead.",
+                409,
+                "BACKUP_POLICY_EXISTS",
+              );
+          }
+          return (await tx.insert(backupPolicy).values(data).returning())[0]!;
+        },
+      );
+      if (!row)
+        throw new AppError(
+          "Cannot create a backup policy: project is being deleted or no longer exists",
+          409,
+          "PROJECT_UNAVAILABLE",
+        );
       return row;
     },
 
@@ -538,8 +690,16 @@ export function createBackupPolicyRepo(db: Database) {
             .from(backupDestination)
             .where(eq(backupDestination.id, data.destinationId))
             .for("update");
-          if (!destination || destination.deletedAt || destination.organizationId !== owner.organizationId) {
-            throw new AppError("Backup destination is no longer available", 409, "BACKUP_DESTINATION_UNAVAILABLE");
+          if (
+            !destination ||
+            destination.deletedAt ||
+            destination.organizationId !== owner.organizationId
+          ) {
+            throw new AppError(
+              "Backup destination is no longer available",
+              409,
+              "BACKUP_DESTINATION_UNAVAILABLE",
+            );
           }
         }
         const [row] = await tx
@@ -602,13 +762,19 @@ export function createBackupRunRepo(db: Database) {
       if (opts?.active) conditions.push(inArray(backupRun.status, IN_FLIGHT_RUN_STATUSES));
       if (opts?.before) {
         const cursorRun = alias(backupRun, "backup_cursor");
-        const cursor = db.select({ startedAt: cursorRun.startedAt, id: cursorRun.id }).from(cursorRun).where(and(
-          eq(cursorRun.id, opts.before), eq(cursorRun.organizationId, organizationId),
-          opts.projectId ? eq(cursorRun.projectId, opts.projectId) : undefined,
-          opts.serviceId ? eq(cursorRun.serviceId, opts.serviceId) : undefined,
-          opts.mailServerId ? eq(cursorRun.mailServerId, opts.mailServerId) : undefined,
-          opts.destinationId ? eq(cursorRun.destinationId, opts.destinationId) : undefined,
-        ));
+        const cursor = db
+          .select({ startedAt: cursorRun.startedAt, id: cursorRun.id })
+          .from(cursorRun)
+          .where(
+            and(
+              eq(cursorRun.id, opts.before),
+              eq(cursorRun.organizationId, organizationId),
+              opts.projectId ? eq(cursorRun.projectId, opts.projectId) : undefined,
+              opts.serviceId ? eq(cursorRun.serviceId, opts.serviceId) : undefined,
+              opts.mailServerId ? eq(cursorRun.mailServerId, opts.mailServerId) : undefined,
+              opts.destinationId ? eq(cursorRun.destinationId, opts.destinationId) : undefined,
+            ),
+          );
         // Keep the timestamp comparison in Postgres (including its precision).
         // A pruned cursor still works: retention soft-deletes its history row.
         conditions.push(sql`(${backupRun.startedAt}, ${backupRun.id}) < (${cursor})`);
@@ -626,19 +792,44 @@ export function createBackupRunRepo(db: Database) {
     async listWithSources(organizationId: string, opts?: BackupRunListOptions) {
       const runs = await this.listByOrganization(organizationId, opts);
       if (!runs.length) return [];
-      const sources = await db.select({
-        id: backupRun.id,
-        projectName: project.name,
-        serviceName: service.name,
-        mailServerName: mailServers.domain,
-        destinationName: backupDestination.name,
-      }).from(backupRun)
-        .leftJoin(project, and(eq(project.id, backupRun.projectId), eq(project.organizationId, organizationId)))
-        .leftJoin(service, and(eq(service.id, backupRun.serviceId), eq(service.projectId, project.id)))
-        .leftJoin(servers, and(eq(servers.id, backupRun.mailServerId), eq(servers.organizationId, organizationId)))
+      const sources = await db
+        .select({
+          id: backupRun.id,
+          projectName: project.name,
+          serviceName: service.name,
+          mailServerName: mailServers.domain,
+          destinationName: backupDestination.name,
+        })
+        .from(backupRun)
+        .leftJoin(
+          project,
+          and(eq(project.id, backupRun.projectId), eq(project.organizationId, organizationId)),
+        )
+        .leftJoin(
+          service,
+          and(eq(service.id, backupRun.serviceId), eq(service.projectId, project.id)),
+        )
+        .leftJoin(
+          servers,
+          and(eq(servers.id, backupRun.mailServerId), eq(servers.organizationId, organizationId)),
+        )
         .leftJoin(mailServers, eq(mailServers.serverId, servers.id))
-        .leftJoin(backupDestination, and(eq(backupDestination.id, backupRun.destinationId), eq(backupDestination.organizationId, organizationId)))
-        .where(and(eq(backupRun.organizationId, organizationId), inArray(backupRun.id, runs.map((r) => r.id))));
+        .leftJoin(
+          backupDestination,
+          and(
+            eq(backupDestination.id, backupRun.destinationId),
+            eq(backupDestination.organizationId, organizationId),
+          ),
+        )
+        .where(
+          and(
+            eq(backupRun.organizationId, organizationId),
+            inArray(
+              backupRun.id,
+              runs.map((r) => r.id),
+            ),
+          ),
+        );
       const names = new Map(sources.map((s) => [s.id, s]));
       return runs.map((run) => ({
         ...run,
@@ -655,13 +846,20 @@ export function createBackupRunRepo(db: Database) {
       });
     },
 
-    async latestSucceededForSource(policyId: string, destinationId: string, serviceId: string | null, mailServerId: string | null): Promise<BackupRun | undefined> {
+    async latestSucceededForSource(
+      policyId: string,
+      destinationId: string,
+      serviceId: string | null,
+      mailServerId: string | null,
+    ): Promise<BackupRun | undefined> {
       return db.query.backupRun.findFirst({
         where: and(
-          eq(backupRun.policyId, policyId), eq(backupRun.destinationId, destinationId),
+          eq(backupRun.policyId, policyId),
+          eq(backupRun.destinationId, destinationId),
           serviceId ? eq(backupRun.serviceId, serviceId) : isNull(backupRun.serviceId),
           mailServerId ? eq(backupRun.mailServerId, mailServerId) : isNull(backupRun.mailServerId),
-          eq(backupRun.status, "succeeded"), isNull(backupRun.deletedAt),
+          eq(backupRun.status, "succeeded"),
+          isNull(backupRun.deletedAt),
         ),
         orderBy: [desc(backupRun.finishedAt), desc(backupRun.id)],
       });
@@ -678,10 +876,14 @@ export function createBackupRunRepo(db: Database) {
      * status. Legacy rows have no batchId and retain the former single-run behavior because
      * timestamp proximity cannot safely distinguish concurrent triggers.
      */
-    async latestByPolicy(policyId: string, destinationId?: string): Promise<PolicyLastRunSummary | undefined> {
+    async latestByPolicy(
+      policyId: string,
+      destinationId?: string,
+    ): Promise<PolicyLastRunSummary | undefined> {
       const latest = await db.query.backupRun.findFirst({
         where: and(
-          eq(backupRun.policyId, policyId), isNull(backupRun.deletedAt),
+          eq(backupRun.policyId, policyId),
+          isNull(backupRun.deletedAt),
           destinationId ? eq(backupRun.destinationId, destinationId) : undefined,
         ),
         orderBy: (t, { desc }) => [desc(t.startedAt), desc(t.id)],
@@ -787,21 +989,38 @@ export function createBackupRunRepo(db: Database) {
       const objects = new Map<string, Map<string, number>>();
       const legacyBytes = new Map<string, number>();
       for (let offset = 0; ; offset += 500) {
-        const page = await db.select({ destinationId: backupRun.destinationId, artifacts: backupRun.artifacts, bytesTransferred: backupRun.bytesTransferred })
+        const page = await db
+          .select({
+            destinationId: backupRun.destinationId,
+            artifacts: backupRun.artifacts,
+            bytesTransferred: backupRun.bytesTransferred,
+          })
           .from(backupRun)
-          .where(and(eq(backupRun.organizationId, organizationId), eq(backupRun.status, "succeeded"), isNull(backupRun.deletedAt)))
-          .orderBy(backupRun.id).limit(500).offset(offset);
+          .where(
+            and(
+              eq(backupRun.organizationId, organizationId),
+              eq(backupRun.status, "succeeded"),
+              isNull(backupRun.deletedAt),
+            ),
+          )
+          .orderBy(backupRun.id)
+          .limit(500)
+          .offset(offset);
         for (const run of page) {
           if (!run.destinationId) continue;
           // Older runs may only have the transfer counter. Keep that estimate
           // alongside the physical-object total for newer restore points.
           if (!run.artifacts?.length) {
-            legacyBytes.set(run.destinationId, (legacyBytes.get(run.destinationId) ?? 0) + (Number(run.bytesTransferred) || 0));
+            legacyBytes.set(
+              run.destinationId,
+              (legacyBytes.get(run.destinationId) ?? 0) + (Number(run.bytesTransferred) || 0),
+            );
             continue;
           }
           const stored = objects.get(run.destinationId) ?? new Map<string, number>();
           for (const artifact of (run.artifacts ?? []) as StoredBackupArtifact[]) {
-            for (const [key, size] of backupArtifactObjects(artifact)) stored.set(key, Number(size) || 0);
+            for (const [key, size] of backupArtifactObjects(artifact))
+              stored.set(key, Number(size) || 0);
           }
           objects.set(run.destinationId, stored);
         }
@@ -809,9 +1028,13 @@ export function createBackupRunRepo(db: Database) {
       }
       return rows.map((r) => ({
         destinationId: r.destinationId,
-        storedBytes: r.destinationId && objects.has(r.destinationId)
-          ? [...objects.get(r.destinationId)!.values()].reduce((sum, bytes) => sum + bytes, legacyBytes.get(r.destinationId) ?? 0)
-          : Number(r.storedBytes) || 0,
+        storedBytes:
+          r.destinationId && objects.has(r.destinationId)
+            ? [...objects.get(r.destinationId)!.values()].reduce(
+                (sum, bytes) => sum + bytes,
+                legacyBytes.get(r.destinationId) ?? 0,
+              )
+            : Number(r.storedBytes) || 0,
         runCount: Number(r.runCount) || 0,
         lastRunAt: r.lastRunAt ?? null,
         savedCount: Number(r.savedCount) || 0,
@@ -859,19 +1082,36 @@ export function createBackupRunRepo(db: Database) {
     async createBatch(data: NewBackupRun[]): Promise<BackupRun[]> {
       if (data.length === 0) return [];
       const organizationId = data[0]!.organizationId;
-      if (data.some(row => row.organizationId !== organizationId))
-        throw new AppError("A backup batch must belong to one organization", 400, "BACKUP_SCOPE_MISMATCH");
+      if (data.some((row) => row.organizationId !== organizationId))
+        throw new AppError(
+          "A backup batch must belong to one organization",
+          400,
+          "BACKUP_SCOPE_MISMATCH",
+        );
       const rows = await withProjectWorkAdmission(
         db,
-        data.flatMap(row => row.projectId ? [row.projectId] : []),
+        data.flatMap((row) => (row.projectId ? [row.projectId] : [])),
         organizationId,
         async (tx) => {
-          const ids = [...new Set(data.flatMap(row => row.destinationId ? [row.destinationId] : []))].sort();
+          const ids = [
+            ...new Set(data.flatMap((row) => (row.destinationId ? [row.destinationId] : []))),
+          ].sort();
           if (ids.length) {
-            const destinations = await tx.select().from(backupDestination).where(inArray(backupDestination.id, ids))
-              .orderBy(backupDestination.id).for("update");
-            if (destinations.length !== ids.length || destinations.some(row => row.deletedAt || row.organizationId !== organizationId))
-              throw new AppError("Backup destination is no longer available", 409, "BACKUP_DESTINATION_UNAVAILABLE");
+            const destinations = await tx
+              .select()
+              .from(backupDestination)
+              .where(inArray(backupDestination.id, ids))
+              .orderBy(backupDestination.id)
+              .for("update");
+            if (
+              destinations.length !== ids.length ||
+              destinations.some((row) => row.deletedAt || row.organizationId !== organizationId)
+            )
+              throw new AppError(
+                "Backup destination is no longer available",
+                409,
+                "BACKUP_DESTINATION_UNAVAILABLE",
+              );
           }
           return tx.insert(backupRun).values(data).returning();
         },

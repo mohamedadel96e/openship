@@ -12,6 +12,12 @@ function value(node, bindings) {
   if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
   if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
   if (ts.isIdentifier(node)) return bindings.get(node.text);
+  if (ts.isConditionalExpression(node)) {
+    const condition = value(node.condition, bindings);
+    return typeof condition === "boolean"
+      ? value(condition ? node.whenTrue : node.whenFalse, bindings)
+      : undefined;
+  }
   if (
     ts.isAsExpression(node) ||
     ts.isSatisfiesExpression(node) ||
@@ -34,6 +40,11 @@ function value(node, bindings) {
     const right = value(node.right, bindings);
     if ([left, right].every((part) => typeof part === "string" || typeof part === "number"))
       return left + right;
+  }
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken) {
+    const left = value(node.left, bindings);
+    const right = value(node.right, bindings);
+    return left !== undefined && right !== undefined ? left === right : undefined;
   }
   if (ts.isObjectLiteralExpression(node)) {
     const result = Object.create(null);
@@ -177,6 +188,10 @@ export function moduleHttpSurface(file, text, mounts = new Map()) {
                       ? "Authenticated"
                       : "Handler authentication")),
               localOnly: !!(router.localOnly || spec?.localOnly),
+              ...(typeof spec?.reason === "string" ? { publicReason: spec.reason } : {}),
+              ...(spec?.mcp ? { mcp: spec.mcp } : {}),
+              ...(!spec?.mcp && (spec?.mcpExcluded ?? router.mcpExcluded)
+                ? { mcpExcluded: spec?.mcpExcluded ?? router.mcpExcluded } : {}),
               source: file,
             });
         }

@@ -305,6 +305,10 @@ export const userSettings = pgTable("user_settings", {
   cloneTokenSetAt: timestamp("clone_token_set_at"),
   cloneTokenAsDefault: boolean("clone_token_as_default").notNull().default(false),
 
+  /** Repository OAuth grant, independent of the user's GitHub sign-in link.
+   * An encrypted disconnected marker suppresses the legacy token fallback. */
+  githubAuthorizationEncrypted: text("github_authorization_encrypted"),
+
   /**
    * What the first-time deploy nudge resolved to. Once set to anything other
    * than "prompt", the nudge stops asking.

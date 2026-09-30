@@ -79,15 +79,17 @@ changes what the operator set up last time.
 GET /api/apps/catalog/:id/host-fit?deployTarget=server&serverId=<id>
 ```
 
-Does a machine meet what the app declares in
-[`minResources`](/docs/reference/app-catalog)? Ask before installing, so the operator sees the
-shortfall instead of discovering it from a failed deploy.
+On self-hosted destinations, this compares the machine with the app's
+[`minResources`](/docs/reference/app-catalog) recommendation. On Openship Cloud, it previews
+the workspace allocation against the current plan. Pass `projectId` to include a draft's
+saved resource settings; access to that project is required.
 
 <TypeTable
   type={{
-    minResources: { type: '{ memoryMb?, cpuCores? } | null', description: 'What the app declares. null when it declares nothing — then there is nothing to check.' },
+    minResources: { type: '{ memoryMb?, cpuCores? } | null', description: 'The declared host recommendation, or null. Cloud allocations are checked independently of this field.' },
     capacity: { type: '{ cpuCores, memoryMb, source }', description: 'What the machine reported. source is "docker" | "local" | "unknown"; "unknown" means it could not be measured.' },
     fit: { type: '{ ok, memory?, cpu? }', description: 'ok:false only on a measured shortfall. Each present dimension carries { needed, available }.' },
+    cloud: { type: '{ resources, status, message? }', description: 'On Cloud: the calculated CPU, RAM and disk allocation, with ready, upgrade or unavailable status. Upgrade includes the plan shortfall. This is a preview, not a capacity reservation.' },
   }}
 />
 
@@ -105,11 +107,10 @@ shortfall instead of discovering it from a failed deploy.
 }
 ```
 
-<Callout title="Advisory, not the gate" type="info">
-This endpoint never refuses anything — it reports. The enforcement point is deploy preflight, which
-reads the same declaration through the same comparison and fails a **first** deploy with
-`HOST_RESOURCES_INSUFFICIENT`. Both are described under
-[Host requirements](/docs/reference/app-catalog).
+<Callout title="Self-hosted recommendations are advisory" type="info">
+A measured shortfall never blocks a self-hosted installation or redeployment. Cloud plan
+allowances are checked again before deployment is queued, and the provider checks live
+namespace capacity when allocating resources. See [Host requirements](/docs/reference/app-catalog).
 </Callout>
 
 A server ID must be accessible in the current organization. Cloud targets and machines that cannot be
@@ -341,7 +342,7 @@ nor one of your organization's custom apps. List valid ids with `GET /api/apps/c
 | Validate and save a custom app definition. | `apps.saveCustom(input)` | `POST /api/apps/custom`<br />`project:write` |
 | Create or update an installation draft and return its project. | `apps.install(input)` | `POST /api/apps`<br />`project:write` |
 | Read a template and its accessible installation draft. | `apps.getCatalogEntry(id)` | `GET /api/apps/catalog/:id`<br />`project:list` |
-| Check template requirements against a destination. | `apps.hostFit(id, input?)` | `GET /api/apps/catalog/:id/host-fit`<br />`project:list` |
+| Preview host recommendations or Cloud plan fit, including an optional draft's saved resources. | `apps.hostFit(id, input?)` | `GET /api/apps/catalog/:id/host-fit`<br />`project:list` |
 | Remove a custom catalog definition. | `apps.removeCustom(id)` | `DELETE /api/apps/custom/:appId`<br />`project:write` |
 
 {/* api-operations:end */}

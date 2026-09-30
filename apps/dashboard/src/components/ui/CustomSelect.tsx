@@ -33,6 +33,7 @@ interface DropdownPosition {
   left: number;
   width: number;
   maxHeight: number;
+  zIndex: number;
 }
 
 export interface CustomSelectProps<T extends string> {
@@ -127,6 +128,12 @@ export function CustomSelect<T extends string>({
     const spaceAbove = rect.top - VIEWPORT_PADDING;
     const openAbove = spaceBelow < 220 && spaceAbove > spaceBelow;
     const availableHeight = Math.max(120, (openAbove ? spaceAbove : spaceBelow) - MENU_OFFSET);
+    // Menus are portaled to body, so they must inherit the owning modal's
+    // layer explicitly. A nested modal sits above the default menu layer.
+    const modalLayer = Number(
+      triggerRef.current.closest("[data-modal-layer]")?.getAttribute("data-modal-layer") ?? 0,
+    );
+    const zIndex = Math.max(10050, modalLayer + 50);
 
     setMenuPosition(
       openAbove
@@ -135,12 +142,14 @@ export function CustomSelect<T extends string>({
             left,
             width,
             maxHeight: Math.min(MENU_MAX_HEIGHT, availableHeight),
+            zIndex,
           }
         : {
             top: rect.bottom + MENU_OFFSET,
             left,
             width,
             maxHeight: Math.min(MENU_MAX_HEIGHT, availableHeight),
+            zIndex,
           },
     );
   }, []);
@@ -281,11 +290,12 @@ export function CustomSelect<T extends string>({
           <div
             ref={menuRef}
             onKeyDown={handleMenuKeyDown}
-            className="fixed z-[10050] flex flex-col overflow-hidden rounded-2xl border border-border/50 bg-popover shadow-xl shadow-black/[0.08]"
+            className="fixed flex flex-col overflow-hidden rounded-2xl border border-border/50 bg-popover shadow-xl shadow-black/[0.08]"
             style={{
               left: menuPosition.left,
               width: menuPosition.width,
               maxHeight: menuPosition.maxHeight,
+              zIndex: menuPosition.zIndex,
               ...(menuPosition.top !== undefined
                 ? { top: menuPosition.top }
                 : { bottom: menuPosition.bottom }),

@@ -5,23 +5,172 @@ import {
 } from "oblien";
 
 const capacityErrors = new Map([
-  ["plan_limit_exceeded", "The configured Cloud limits exceed the provider account's resource capacity. Contact Openship support."],
-  ["namespace_limit_exceeded", "The Cloud provider account has reached its namespace limit. Contact Openship support."],
-  ["namespace_limit_reached", "This workload exceeds your organization's Cloud resource limits. Reduce its resources or review your plan."],
+  [
+    "plan_limit_exceeded",
+    "The configured Cloud limits exceed the provider account's resource capacity. Contact Openship support.",
+  ],
+  [
+    "namespace_limit_exceeded",
+    "The Cloud provider account has reached its namespace limit. Contact Openship support.",
+  ],
+  [
+    "namespace_limit_reached",
+    "This workload exceeds your organization's Cloud resource limits. Reduce its resources or review your plan.",
+  ],
+  [
+    "sandbox_limit_reached",
+    "The Cloud provider account has reached its workspace limit. Contact Openship support.",
+  ],
+  [
+    "pool_limit_reached",
+    "The Cloud provider's resource pool is at capacity. Try again later or contact Openship support.",
+  ],
 ]);
 
+const resourceUnits = {
+  cpus: "vCPU",
+  memory_mb: "MB",
+  disk_size_mb: "MB",
+  workspaces: "workspaces",
+} as const;
+const resourceLabels = {
+  cpus: "CPU",
+  memory_mb: "RAM",
+  disk_size_mb: "Disk",
+  workspaces: "Workspaces",
+} as const;
+type CapacityViolation = {
+  resource: keyof typeof resourceUnits;
+  requested: number;
+  effectiveLimit: number;
+  unit: string;
+  enforcementScope: "namespace" | "namespace_allocated_pool";
+  currentUsage?: number;
+};
+
+/** Only this tenant's numeric allocation belongs in a customer-facing error.
+ * Provider messages, account usage, identifiers and arbitrary details stay private. */
+function namespaceCapacityDetails(raw: unknown) {
+  if (!raw || typeof raw !== "object") return undefined;
+  const details = raw as Record<string, unknown>;
+  const candidates = Array.isArray(details.violations) ? details.violations.slice(0, 4) : [details];
+  const numeric = (value: unknown): value is number =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= Number.MAX_SAFE_INTEGER;
+  const violations: CapacityViolation[] = [];
+  for (const item of candidates) {
+    if (!item || typeof item !== "object") continue;
+    const value = item as Record<string, unknown>;
+    if (
+      typeof value.resource !== "string" ||
+      !Object.hasOwn(resourceUnits, value.resource) ||
+      !numeric(value.requested) ||
+      !numeric(value.effectiveLimit) ||
+      (value.enforcementScope !== "namespace" &&
+        value.enforcementScope !== "namespace_allocated_pool")
+    )
+      continue;
+    const resource = value.resource as keyof typeof resourceUnits;
+    violations.push({
+      resource,
+      requested: value.requested,
+      effectiveLimit: value.effectiveLimit,
+      unit: resourceUnits[resource],
+      enforcementScope: value.enforcementScope,
+      ...(numeric(value.currentUsage) ? { currentUsage: value.currentUsage } : {}),
+    });
+  }
+  return violations.length ? { ...violations[0]!, violations } : undefined;
+}
+
+function workspaceIdFromDetails(details: unknown): string | undefined {
+  const id = (details as { workspace_id?: unknown } | null)?.workspace_id;
+  return typeof id === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(id) ? id : undefined;
+}
+
+/** Creation can fail after allocating a workspace. Its identity takes priority
+ * over the error status; only a confirmed admission rejection releases a key.
+ * An unclassified 422 may be a failed provision after allocation. */
+export function cloudWorkspaceCreationFailure(error: unknown): {
+  workspaceId?: string;
+  rejected: boolean;
+  capacityRejected: boolean;
+} {
+  const value = error as { status?: number; code?: string; details?: unknown } | null;
+  const workspaceId = workspaceIdFromDetails(value?.details);
+  const capacityRejected = !workspaceId && typeof value?.code === "string" && capacityErrors.has(value.code.toLowerCase());
+  return {
+    workspaceId,
+    capacityRejected,
+    rejected:
+      !workspaceId &&
+      ([400, 401, 402, 403, 404].includes(value?.status ?? 0) || capacityRejected),
+  };
+}
+
 function providerError(status: number, body: unknown): OblienError {
-  const input = body as { code?: unknown; error?: unknown } | null;
+  const input = body as {
+    code?: unknown;
+    error?: unknown;
+    details?: unknown;
+    requestId?: unknown;
+  } | null;
   const candidate = input?.code ?? (typeof input?.error === "string" ? input.error : undefined);
-  const code = typeof candidate === "string" && /^[a-z0-9_-]{1,128}$/i.test(candidate) ? candidate : "OBLIEN_REQUEST_FAILED";
-  // Provider error bodies can contain account data, resource payloads or auth
-  // URLs. Keep the status/code needed for retries without forwarding that body.
-  const message = `${capacityErrors.get(code.toLowerCase()) ?? "Oblien rejected the request"} (HTTP ${status}, ${code})`;
-  const ErrorType = status === 401 || status === 403 ? AuthenticationError
-    : status === 402 ? PaymentRequiredError : status === 404 ? NotFoundError
-      : status === 409 ? ConflictError : status === 429 ? RateLimitError
-        : status === 400 || status === 422 ? ValidationError : null;
-  return ErrorType ? new ErrorType(message, code, undefined, undefined, status) : new OblienError(message, status, code);
+  const code =
+    typeof candidate === "string" && /^[a-z0-9_-]{1,128}$/i.test(candidate)
+      ? candidate
+      : "OBLIEN_REQUEST_FAILED";
+  const capacity =
+    code.toLowerCase() === "namespace_limit_reached"
+      ? namespaceCapacityDetails(input?.details)
+      : undefined;
+  const workspaceId = workspaceIdFromDetails(input?.details);
+  const details = workspaceId ? { ...capacity, workspace_id: workspaceId } : capacity;
+  const requestId =
+    typeof input?.requestId === "string" &&
+    /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(input.requestId)
+      ? input.requestId
+      : undefined;
+  const allocation = capacity?.violations
+    .map((value) => {
+      const scope =
+        value.enforcementScope === "namespace_allocated_pool"
+          ? "namespace total"
+          : value.resource === "workspaces"
+            ? "namespace workspace count"
+            : "per workspace";
+      return (
+        `${resourceLabels[value.resource]} requested ${value.requested} ${value.unit}; limit ${value.effectiveLimit} ${value.unit} (${scope})` +
+        (value.currentUsage === undefined
+          ? "."
+          : `; currently allocated ${value.currentUsage} ${value.unit}.`)
+      );
+    })
+    .join(" ");
+  const message =
+    `${capacityErrors.get(code.toLowerCase()) ?? "Oblien rejected the request"}` +
+    (allocation ? ` ${allocation}` : "") +
+    ` (HTTP ${status}, ${code})` +
+    (requestId ? ` Request ID: ${requestId}.` : "");
+  const ErrorType =
+    status === 401 || status === 403
+      ? AuthenticationError
+      : status === 402
+        ? PaymentRequiredError
+        : status === 404
+          ? NotFoundError
+          : status === 409
+            ? ConflictError
+            : status === 429
+              ? RateLimitError
+              : status === 400 || status === 422
+                ? ValidationError
+                : null;
+  return ErrorType
+    ? new ErrorType(message, code, details, requestId, status)
+    : new OblienError(message, status, code, details, requestId);
 }
 
 /** Keep the official SDK's endpoints, handles and runtime clients. Bound JSON
@@ -78,8 +227,16 @@ export class Oblien extends OblienSdk {
       // Older provider deployments returned HTTP 200 with
       // { valid:false, code:NAMESPACE_LIMIT_REACHED }. Preserve compatibility
       // without mistaking that refusal for an undefined but successful VM.
-      if (result.success === false || result.valid === false || (result.error != null && result.success !== true)) {
-        throw providerError(result.code === "NAMESPACE_LIMIT_REACHED" ? 409 : 502, body);
+      if (
+        result.success === false ||
+        result.valid === false ||
+        (result.error != null && result.success !== true)
+      ) {
+        const code = result.code ?? result.error;
+        throw providerError(
+          typeof code === "string" && capacityErrors.has(code.toLowerCase()) ? 409 : 502,
+          body,
+        );
       }
       return body as T;
     };

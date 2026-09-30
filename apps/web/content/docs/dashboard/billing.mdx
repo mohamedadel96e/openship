@@ -18,7 +18,7 @@ the Billing area simply doesn't appear. You only pay for your own infrastructure
 On Cloud, **Billing** is where you watch usage, change plan, and pull invoices.
 Plans, prices, and per-plan limits are published on the
 [pricing page](/pricing); the header strip on this screen shows how much of your
-plan's credits, build minutes, and capacity you've used in the current period.
+plan's metered credits and provider-reported capacity. CPU, RAM and disk allocation are shared across the namespace, including stopped workspaces and pending changes; credits are not minutes.
 Cloud traffic is measured, but an unknown traffic ceiling is not displayed as
 unlimited. Openship owns plan pricing and limits; each organization's purchased
 terms are kept for renewals.
@@ -43,3 +43,12 @@ the browser URL. Invoices and payment methods open the selected organization's
 portal, isolated from other customers and the reseller account.
 
 For the endpoints behind this screen, see the [billing API](/docs/api/billing).
+
+## Credit warnings and recovery
+
+When Cloud credits run low, a persistent dashboard banner links to the affected workspace's
+billing page. The final warning level, grace credits, and exhaustion also show a dismissible
+dialog. Credit-pack purchases appear only when top-ups are available.
+
+See [credit warnings and recovery](/docs/guides/billing#credit-warnings-and-recovery) for
+warning levels, notifications, and how the balance refreshes after a purchase.

@@ -21,6 +21,9 @@ const h = vi.hoisted(() => ({
   servers: new Map<string, { id: string; organizationId: string }>(),
   created: [] as Record<string, unknown>[],
   updateSsl: vi.fn(),
+  applyMailCertificate: vi.fn(),
+  recordSslFailure: vi.fn(),
+  update: vi.fn(),
   renewCert: vi.fn(async (domain: string) => ({
     domain,
     expiresAt: "2030-01-01T00:00:00.000Z",
@@ -31,6 +34,8 @@ const h = vi.hoisted(() => ({
   verifyCert: vi.fn(),
   resolveDeploymentPlatform: vi.fn(),
 }));
+
+vi.mock("@repo/platform/engine/modules/mail/mail-certificate.service", () => ({ applyMailCertificate: h.applyMailCertificate }));
 
 vi.mock("@repo/db", () => ({
   repos: {
@@ -46,6 +51,8 @@ vi.mock("@repo/db", () => ({
         return row;
       }),
       updateSsl: h.updateSsl,
+      recordSslFailure: h.recordSslFailure,
+      update: h.update,
     },
     project: { findById: vi.fn(async () => null) },
     deployment: { findById: vi.fn(async () => null) },
@@ -184,6 +191,7 @@ describe("renewing a mail-owned row", () => {
     const result = await manageDomainSsl(HOST, { action: "renew" });
 
     expect(result.verified).toBe(true);
+    expect(h.applyMailCertificate).toHaveBeenCalledWith("srv_mail", HOST);
     expect(h.renewCert).toHaveBeenCalledWith(HOST);
     // The whole point: reached the box by serverId, with no project in sight.
     expect(h.resolveDeploymentPlatform).toHaveBeenCalledWith(
@@ -245,3 +253,37 @@ vi.mock("@repo/platform/engine/lib/platform-config", () => ({
 vi.mock("@repo/platform/engine/lib/resource-access", () => ({
   platform: () => ({ target: "selfhosted", runtime: {} }),
 }));
+
+
+describe("mail certificate completion", () => {
+  it("does not report success when the certificate was issued but daemon reload failed", async () => {
+    mailServer();
+    mailDomainRow();
+    h.applyMailCertificate.mockRejectedValueOnce(new Error("Postfix reload failed"));
+    await expect(manageDomainSsl(HOST, { action: "renew" })).rejects.toThrow("Postfix reload failed");
+    expect(h.recordSslFailure).toHaveBeenCalledWith("dom_mail", "Postfix reload failed");
+    expect(h.updateSsl).toHaveBeenCalledWith("dom_mail", expect.objectContaining({ sslExpiresAt: new Date(ISSUED.expiresAt) }));
+  });
+
+  it("does not reload for a read-only verification", async () => {
+    mailServer();
+    mailDomainRow();
+    h.verifyCert.mockResolvedValueOnce(ISSUED);
+    await manageDomainSsl(HOST, { action: "verify" });
+    expect(h.applyMailCertificate).not.toHaveBeenCalled();
+    expect(h.renewCert).not.toHaveBeenCalled();
+  });
+
+  it("refuses to renew on a different mail server with the same hostname", async () => {
+    mailServer();
+    mailDomainRow();
+    await expect(manageDomainSsl(HOST, { action: "renew", mailServerId: "srv_other" })).rejects.toThrow();
+    expect(h.renewCert).not.toHaveBeenCalled();
+  });
+
+  it("records an adopted expired certificate without losing its expiry", async () => {
+    const expired = new Date(Date.now() - 86_400_000);
+    await recordMailCertDomain(HOST, { ...ISSUED, expiresAt: expired.toISOString() });
+    expect(h.update).toHaveBeenCalledWith("dom_mail.example.com", expect.objectContaining({ sslStatus: "error", sslExpiresAt: expired }));
+  });
+});

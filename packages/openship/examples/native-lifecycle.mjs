@@ -1,4 +1,4 @@
-// Run with Node.js 22+ after installing an SDK-enabled openship tarball.
+// Run with Node.js 22+ after installing openship 0.8.0 or later.
 // This demo owns a temporary installation and removes it on completion.
 // @ts-check
 import assert from "node:assert/strict";

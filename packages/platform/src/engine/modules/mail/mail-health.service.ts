@@ -15,6 +15,7 @@
 
 import type { CommandExecutor } from "@repo/adapters";
 import { safeErrorMessage } from "@repo/core";
+import { mapWithLimit } from "../../lib/map-with-limit";
 
 import {
   mailUnitProbeCommand,
@@ -193,7 +194,10 @@ export async function checkMailHealth(
     return MAIL_COMPONENTS.map((comp) => ({ ...describe(comp), status: "missing" as const }));
   }
   const flavor = probe?.flavor ?? "container";
-  return Promise.all(MAIL_COMPONENTS.map(async (comp) => probeUnit(exec, flavor, comp)));
+  // Leave SSH channels for the queue, state and TLS checks that share this
+  // connection. OpenSSH defaults to ten sessions; nine unbounded daemon probes
+  // alongside those reads made healthy services intermittently report unknown.
+  return mapWithLimit(MAIL_COMPONENTS, 4, (comp) => probeUnit(exec, flavor, comp));
 }
 
 /** The daemons that decide whether a box is delivering mail at all. */

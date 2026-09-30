@@ -59,12 +59,12 @@ export class CloudWorkspaceExecutor implements CommandExecutor {
     const stopTask = () => {
       if (taskId && !killSent) {
         killSent = true;
-        void runtime.exec.kill(taskId).catch(() => {});
+        return runtime.exec.kill(taskId).catch(() => {});
       }
     };
     const kill = () => {
       killed = true;
-      stopTask();
+      void stopTask();
       const error = new Error("Cloud command cancelled");
       cancellation.abort(error);
       rejectCancellation(error);
@@ -135,10 +135,14 @@ export class CloudWorkspaceExecutor implements CommandExecutor {
         if (code === undefined) throw new Error("Cloud command ended without an exit status");
         if (pending.length) await write(stdout, pending);
         if (verifiedExit === undefined && code === 0) throw new Error("Cloud command ended without a verified exit status");
+        // Streamed tasks retain their result slot even with keepLogs:false.
+        // Release this task before the next setup command starts; Supabase's
+        // generated files alone can otherwise fill the runtime's 50 slots.
+        await stopTask();
         return code;
       } catch (error) {
         killed = true;
-        stopTask();
+        void stopTask();
         cancellation.abort(error);
         throw error;
       }

@@ -1,6 +1,6 @@
 import { getTableColumns, inArray, sql } from "drizzle-orm";
 import { getTableConfig } from "drizzle-orm/pg-core";
-import { AppError, type ExportSelection, type TransferProject } from "@repo/core";
+import { AppError, normalizeTrackedDomain, type ExportSelection, type TransferProject } from "@repo/core";
 import { db, getDriver, type DatabaseTransaction } from "./client";
 import { DUMP_FORMAT_VERSION, topoOrderedTables, type DatabaseDump } from "./dump";
 
@@ -98,7 +98,7 @@ export const transferReferences = topoOrderedTables().flatMap((spec) => {
 });
 
 /** Bounded parameter batches, shared by project exports and import preflight. */
-function transferReader(
+export function createTransferReader(
   reader: Pick<DatabaseTransaction, "select">,
   metadataOnly = false,
 ): TransferRowReader {
@@ -154,7 +154,7 @@ function transferReader(
     return rows;
   };
 }
-export const readTransferRows: TransferRowReader = transferReader(db);
+export const readTransferRows: TransferRowReader = createTransferReader(db);
 
 export function transferProject(row: Row): TransferProject {
   return {
@@ -330,7 +330,9 @@ export async function selectProjectTransfer(
     templates.filter((row) => organizations.includes(row.organizationId)),
   );
 
-  const hostnames = ids(tables.domain ?? [], "hostname");
+  const hostnames = [...new Set(ids(tables.domain ?? [], "hostname")
+    .filter((value): value is string => typeof value === "string")
+    .flatMap((hostname) => [hostname, normalizeTrackedDomain(hostname)]))];
   await fetch("server_analytics", "domain", hostnames);
   await fetch("server_analytics_geo", "domain", hostnames);
   await fetch("audit_event", "resourceId", [
@@ -419,8 +421,17 @@ export async function dumpProjectTransfer(
   const graph = await db.transaction(async (rawTx) => {
     const tx = rawTx as DatabaseTransaction;
     await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY`);
-    return selectProjectTransfer(transferReader(tx, metadataOnly), selection, excludeTables);
+    return selectProjectTransfer(createTransferReader(tx, metadataOnly), selection, excludeTables);
   });
+  // An empty selected table is authoritative on overwrite; an omitted table is
+  // not. Include empty categories even when no domains/parents were collected.
+  const omitted = new Set(excludeTables);
+  if (selection.includeServers === false) {
+    for (const name of ["servers", "server_github_auth", "github_deploy_key"]) omitted.add(name);
+  }
+  for (const name of PROJECT_TRANSFER_TABLES) {
+    if (!omitted.has(name)) graph.tables[name] ??= [];
+  }
   return {
     ...graph,
     dump: {

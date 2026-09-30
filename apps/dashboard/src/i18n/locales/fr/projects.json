@@ -103,7 +103,7 @@
     "deletionInProgress": "Une autre suppression est déjà en cours pour ce projet",
     "deletionInProgressTitle": "Suppression en cours",
     "confirmForceOrphan": "Certaines ressources n'ont pas pu être supprimées du serveur. Supprimer quand même le projet et les nettoyer automatiquement plus tard ?",
-    "teardownFailedAt": "Le démantèlement a échoué à : {reasons}. Réessayez ou forcez la suppression pour les rendre orphelines.",
+    "teardownFailedAt": "Le nettoyage n’a pas pu se terminer : {reasons}. Le projet est toujours enregistré. Réessayez la suppression après avoir résolu le problème.",
     "teardownFailed": "Échec du démantèlement",
     "cleanupFailedTitle": "Échec du nettoyage",
     "alreadyDeleted": "Projet déjà supprimé",

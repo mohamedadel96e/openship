@@ -282,9 +282,8 @@ export function ServerMigrationWizard({
   isOpen?: boolean;
   onClose: () => void;
   serverId?: string;
-  /** "modal" (Library, default) wraps in a Modal; "tab" renders an inline
-   *  two-column layout for the server-detail Migrations tab (left = discovered
-   *  containers, right = the connection card until a scan swaps in the config). */
+  /** "modal" wraps in a Modal; "tab" renders the shared inline flow in New
+   *  Project or the server-detail Migrations tab. */
   variant?: "modal" | "tab";
   /** Connection summary for the tab's right column before a scan (server detail). */
   server?: {
@@ -2855,7 +2854,7 @@ export function ServerMigrationWizard({
               </div>
             </div>
           ) : (
-            /* No host/connection card here — only the scan card. */
+            /* New Project chooses a source here; server detail already has one. */
             <div className="rounded-2xl border border-border/50 bg-card p-5 space-y-3.5">
               <div className="flex items-center gap-2.5">
                 <div className="size-9 rounded-xl bg-info/10 flex items-center justify-center shrink-0">
@@ -2868,6 +2867,9 @@ export function ServerMigrationWizard({
               <p className="text-[13px] leading-relaxed text-muted-foreground">
                 {m.entry.cardDesc}
               </p>
+              {!serverId && (
+                <ServerSelector value={selectedId} onSelect={pickServer} disabled={scanning} />
+              )}
               {/* Scan-mode option sits directly above the button it changes. */}
               {flatOption(true)}
               <button

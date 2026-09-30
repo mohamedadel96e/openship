@@ -170,9 +170,6 @@ export interface PreflightOptions {
    *  app's declared host minimum can be matched against the target machine. Null
    *  for an ordinary project — nothing is declared, nothing is checked. */
   appTemplateId?: string | null;
-  /** True when the project has never had a live deployment. A shortfall FAILS a
-   *  first deploy and only warns afterwards — see `checkHostCapacity`. */
-  firstDeploy?: boolean;
 }
 
 /** Resolve owner/repo for the public-ness probe: prefer the already-parsed
@@ -1393,28 +1390,13 @@ async function checkCloudRuntime(
   };
 }
 
-/**
- * Match a catalog app's declared `minResources` against the machine it is about
- * to be installed on. Generic: any app that declares a minimum gets this, and an
- * app that declares none (almost all of them) is never checked.
- *
- * Two rules keep it from being a footgun of its own:
- *
- *   • It FAILS a first deploy and only WARNS afterwards. Refusing a redeploy
- *     would brick an app already running on a box that turned out to be
- *     undersized — the operator's way out of that is a deploy, not a refusal.
- *   • An unknown capacity never fails (`fitsCapacity`). A box we couldn't probe
- *     means we didn't look, not that the hardware is too small.
- *
- * Returns null when there is nothing to check, so no cosmetic row appears on the
- * checklist of an ordinary project.
- */
+/** Catalog requirements are recommendations on the operator's own hardware.
+ * Return a warning on a measured shortfall, including the first deployment. */
 async function checkHostCapacity(
   organizationId: string,
   appTemplateId: string,
   serverId: string | undefined,
   isLocalTarget: boolean,
-  firstDeploy: boolean,
 ): Promise<PreflightCheck | null> {
   const template = await getTemplateForOrg(organizationId, appTemplateId).catch(() => undefined);
   const min = template?.minResources;
@@ -1426,21 +1408,10 @@ async function checkHostCapacity(
   if (fit.ok) return check;
 
   const shortfall = describeResourceFit(fit);
-  if (firstDeploy) {
-    return {
-      ...check,
-      status: "fail",
-      code: PREFLIGHT_ERROR_CODES.HOST_RESOURCES_INSUFFICIENT,
-      message: `${template.name} needs ${shortfall}. Install it on a bigger machine, or pick a different destination.`,
-    };
-  }
-  // Written for the day warns are surfaced: today `runDeploymentPreflight` acts
-  // only on `!ok`, so every preflight warn's message is dropped. The status is
-  // what matters here — it keeps this off the failure path.
   return {
     ...check,
     status: "warn",
-    message: `${template.name} needs ${shortfall}. It will deploy, but expect it to be slow or OOM-killed on this machine.`,
+    message: `${template.name} recommends ${shortfall}. You can continue; performance may be limited on this machine.`,
   };
 }
 
@@ -1521,7 +1492,6 @@ export async function runPreflightChecks(
       opts.appTemplateId,
       snapshot.serverId,
       effectiveTarget === "local",
-      opts.firstDeploy ?? false,
     );
     if (hostCapacity) checks.push(hostCapacity);
   }

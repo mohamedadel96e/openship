@@ -7,24 +7,27 @@ import { PricingCards } from "@/components/billing/PricingCards";
 import type { PlanTierId } from "@repo/core";
 import { useI18n } from "@/components/i18n-provider";
 import type { BillingSubscription } from "@repo/contracts";
+import type { BillingState } from "@/lib/api/billing";
+import { needsCloudPlan } from "@/lib/billing-presentation";
 import { useCloudCheckout, useCloudPlans } from "./useCloudBilling";
 import { CloudUsageGuide } from "./CloudUsageGuide";
 
-export function CloudPlanPicker({ currentPlan, subscription, billingEnabled = false, canChangeSubscription = false, preserveProject = false, onCheckoutStarted }: {
+export function CloudPlanPicker({ currentPlan, subscription, complimentary, billingEnabled = false, canChangeSubscription = false, preserveProject = false, onCheckoutStarted }: {
   currentPlan: PlanTierId; billingEnabled?: boolean; canChangeSubscription?: boolean;
   subscription?: BillingSubscription | null;
+  complimentary?: BillingState["complimentary"];
   preserveProject?: boolean;
   onCheckoutStarted?: () => void;
 }) {
   const { t } = useI18n();
   const { payload, loading, error, retry } = useCloudPlans();
   const [interval, setInterval] = useState<"monthly" | "annual">(subscription?.interval ?? "monthly");
-  const canPurchase = billingEnabled && (currentPlan === "free" || canChangeSubscription);
+  const canPurchase = !complimentary && billingEnabled && (currentPlan === "free" || canChangeSubscription);
   const { startCheckout, subscribing, error: checkoutError, checkoutUrl } = useCloudCheckout({
     enabled: canPurchase, preserveProject, onCheckoutStarted,
   });
-  const selectedCurrentPlan = subscription === null || subscription?.status === "canceled"
-    || (subscription && subscription.interval !== interval) ? null : currentPlan;
+  const selectedCurrentPlan = needsCloudPlan({ tier: currentPlan, subscription, complimentary })
+    || (!complimentary && subscription && subscription.interval !== interval) ? null : currentPlan;
 
   const handleSelectPlan = (planTierId: PlanTierId) => {
     if (planTierId !== selectedCurrentPlan) void startCheckout(planTierId, interval);
@@ -92,7 +95,8 @@ export function CloudPlanPicker({ currentPlan, subscription, billingEnabled = fa
       {checkoutError && <p role="alert" className="text-sm text-danger">{checkoutError}</p>}
       {!canPurchase && (
         <p className="text-sm text-muted-foreground">
-          {billingEnabled ? t.billing.plansRoute.changeViaSupport : t.billing.plansRoute.billingUnavailable}{" "}
+          {complimentary ? t.billing.complimentary.changeViaSupport
+            : billingEnabled ? t.billing.plansRoute.changeViaSupport : t.billing.plansRoute.billingUnavailable}{" "}
           <a href="mailto:support@openship.io" className="text-primary hover:underline">{t.billing.portal.supportButton}</a>
         </p>
       )}

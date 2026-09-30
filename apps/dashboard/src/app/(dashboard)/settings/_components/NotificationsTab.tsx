@@ -40,6 +40,7 @@ import {
 } from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
+import { useAuth } from "@/context/AuthContext";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import {
   ChannelLogo,
@@ -161,6 +162,7 @@ function ChannelMultiSelect({
 
 export function NotificationsTab() {
   const { showToast } = useToast();
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [categories, setCategories] = useState<NotificationCategory[]>([]);
   const [categoryGroups, setCategoryGroups] = useState<NotificationCategoryGroup[]>([]);
@@ -206,7 +208,8 @@ export function NotificationsTab() {
 
   // Resolve caller's role in active org so we can gate the defaults UI.
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+    void (async () => {
       try {
         const result = await (
           authClient as unknown as {
@@ -217,15 +220,17 @@ export function NotificationsTab() {
             };
           }
         ).organization.getFullOrganization();
-        const session = await authClient.getSession();
-        const userId = session.data?.user?.id;
-        const me = result.data?.members?.find((m) => m.userId === userId);
+        if (cancelled) return;
+        const me = result.data?.members?.find((m) => m.userId === user?.id);
         setRole(me?.role ?? null);
       } catch {
-        setRole(null);
+        if (!cancelled) setRole(null);
       }
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   if (loading) {
     return (

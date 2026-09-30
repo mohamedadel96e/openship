@@ -192,7 +192,11 @@ function createAttachedShip<Assertion>({
         )
           throw new UnauthorizedError("The scoped identity is no longer valid");
         const resolved = await platform.resolveScope(current, organizationId);
-        return freezeContext({ ...resolved, source: attribution.source ?? resolved.source, userAgent: attribution.userAgent ?? resolved.userAgent });
+        return freezeContext({
+          ...resolved,
+          source: attribution.source ?? resolved.source,
+          userAgent: attribution.userAgent ?? resolved.userAgent,
+        });
       }
 
       function bind<Args extends unknown[], Result>(
@@ -280,13 +284,28 @@ function createAttachedShip<Assertion>({
           }
         },
       } satisfies DeploymentOperations);
-      const { streamRuntimeLogs, streamClusterDatabaseEvents, openServerLogStream, retryRoutingStream, ...projectResources } = platform.projects;
+      const {
+        streamRuntimeLogs,
+        streamClusterDatabaseEvents,
+        streamClusterVolumeEvents,
+        openServerLogStream,
+        retryRoutingStream,
+        ...projectResources
+      } = platform.projects;
       const projects = Object.freeze({
         ...bindGroup(projectResources),
+        async *streamClusterVolumeEvents(id, options = {}) {
+          const context = await resolveContext();
+          for await (const event of streamClusterVolumeEvents(context, id, options)) {
+            await resolveContext();
+            yield event;
+          }
+        },
         async *streamClusterDatabaseEvents(id, options = {}) {
           const context = await resolveContext();
           for await (const event of streamClusterDatabaseEvents(context, id, options)) {
-            await resolveContext(); yield event;
+            await resolveContext();
+            yield event;
           }
         },
         async *retryRoutingStream(id, options = {}) {
@@ -357,53 +376,110 @@ function createAttachedShip<Assertion>({
       } satisfies DomainOperations);
       const dns = bindGroup(platform.dns) satisfies DnsOperations;
       const credentials = bindGroup(platform.credentials) satisfies CredentialOperations;
-      const { openInstallStream, openInstallEvents, openMonitor, openContainerApplyStream, openContainerApplyEvents, openManagedNetworkPreparationEvents, openManagedNetworkOperationEvents, openClusterEvents, openClusterRuntimeEvents, ...serverResources } = platform.servers;
+      const {
+        openInstallStream,
+        openInstallEvents,
+        openMonitor,
+        openContainerApplyStream,
+        openContainerApplyEvents,
+        openManagedNetworkPreparationEvents,
+        openManagedNetworkOperationEvents,
+        openClusterEvents,
+        openClusterStorageEvents,
+        openClusterRuntimeEvents,
+        ...serverResources
+      } = platform.servers;
       const servers = Object.freeze({
         ...bindGroup(serverResources),
         async *managedNetworkPreparationEvents(id, options = {}) {
-          const source = await openManagedNetworkPreparationEvents(await resolveContext(), id, { ...options });
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          const source = await openManagedNetworkPreparationEvents(await resolveContext(), id, {
+            ...options,
+          });
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
         },
         async *managedNetworkOperationEvents(id, options = {}) {
-          const source = await openManagedNetworkOperationEvents(await resolveContext(), id, { ...options });
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          const source = await openManagedNetworkOperationEvents(await resolveContext(), id, {
+            ...options,
+          });
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
         },
         async *clusterEvents(options = {}) {
           const source = await openClusterEvents(await resolveContext(), { ...options });
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
+        },
+        async *clusterStorageEvents(id, options = {}) {
+          const source = await openClusterStorageEvents(await resolveContext(), id, { ...options });
+          yield* source.data;
         },
         async *clusterRuntimeEvents(id, options = {}) {
           const source = await openClusterRuntimeEvents(await resolveContext(), id, { ...options });
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
         },
         async *applyContainer(id, input, options = {}) {
           const command = structuredClone(input);
           const settings = { ...options };
-          const source = await openContainerApplyStream(await resolveContext(), id, command, settings);
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          const source = await openContainerApplyStream(
+            await resolveContext(),
+            id,
+            command,
+            settings,
+          );
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
         },
         async *containerApplyEvents(id, input, options = {}) {
           const command = structuredClone(input);
           const settings = { ...options };
-          const source = await openContainerApplyEvents(await resolveContext(), id, command, settings);
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          const source = await openContainerApplyEvents(
+            await resolveContext(),
+            id,
+            command,
+            settings,
+          );
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
         },
         async *installComponents(id, input, options = {}) {
           const command = structuredClone(input);
           const settings = { ...options };
           const source = await openInstallStream(await resolveContext(), id, command, settings);
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
         },
         async *installEvents(input = {}, options = {}) {
           const command = structuredClone(input);
           const settings = { ...options };
           const source = await openInstallEvents(await resolveContext(), command, settings);
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
         },
         async *monitor(id, options = {}) {
           const settings = { ...options };
           const source = await openMonitor(await resolveContext(), id, settings);
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
         },
       } satisfies ServerOperations);
       const { openRunStream: openJobRunStream, ...jobResources } = platform.jobs;
@@ -411,15 +487,22 @@ function createAttachedShip<Assertion>({
         ...bindGroup(jobResources),
         async *streamRun(id, options = {}) {
           const source = await openJobRunStream(await resolveContext(), id, { ...options });
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
         },
       } satisfies JobOperations);
-      const { openUsageStream: analyticsopenUsageStream, ...analyticsResources } = platform.analytics;
+      const { openUsageStream: analyticsopenUsageStream, ...analyticsResources } =
+        platform.analytics;
       const analytics = Object.freeze({
         ...bindGroup(analyticsResources),
         async *streamUsage(id, options = {}) {
           const source = await analyticsopenUsageStream(await resolveContext(), id, { ...options });
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
         },
       } satisfies AnalyticsOperations);
       const { openRunStream, openRestoreStream, ...backupResources } = platform.backups;
@@ -427,11 +510,17 @@ function createAttachedShip<Assertion>({
         ...bindGroup(backupResources),
         async *streamRun(id, options = {}) {
           const source = await openRunStream(await resolveContext(), id, { ...options });
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
         },
         async *streamRestore(id, options = {}) {
           const source = await openRestoreStream(await resolveContext(), id, { ...options });
-          for await (const event of source.data) { await resolveContext(); yield event; }
+          for await (const event of source.data) {
+            await resolveContext();
+            yield event;
+          }
         },
       } satisfies BackupOperations);
       return Object.freeze({

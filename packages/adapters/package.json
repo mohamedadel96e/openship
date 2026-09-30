@@ -12,6 +12,10 @@
     "./proxy": {
       "types": "./src/system/proxy/cli.ts",
       "import": "./src/system/proxy/cli.ts"
+    },
+    "./container-logging": {
+      "types": "./src/container-logging.ts",
+      "import": "./src/container-logging.ts"
     }
   },
   "scripts": {
@@ -30,9 +34,11 @@
     "@aws-sdk/lib-storage": "^3.668.0",
     "@aws-sdk/s3-request-presigner": "^3.668.0",
     "@repo/core": "workspace:*",
+    "acme-client": "^5.4.0",
     "dockerode": "^4.0.9",
     "ignore": "^7.0.5",
-    "oblien": "2.4.0",
+    "ioredis": "^5.10.0",
+    "oblien": "2.5.0",
     "ssh2": "^1.17.0",
     "tar-fs": "^2.1.4",
     "undici": "^7.29.1",

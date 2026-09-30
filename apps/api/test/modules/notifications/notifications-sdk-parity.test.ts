@@ -13,10 +13,11 @@ import { notificationsRoutes } from "../../../src/modules/notifications/notifica
 import { healthRoutes } from "../../../src/modules/health/health.routes";
 import { handleApiError } from "../../../src/middleware/error-handler";
 
-const h = vi.hoisted(() => ({ fetch: vi.fn() }));
+const h = vi.hoisted(() => ({ fetch: vi.fn(), mail: vi.fn() }));
 // All provider sends are local fakes. Exercise retained rendering, signing,
 // response handling and authorization without sending any external messages.
 vi.mock("@repo/platform/engine/lib/safe-fetch", async original => ({ ...await original<object>(), safeFetch: h.fetch }));
+vi.mock("@repo/platform/engine/lib/mail", async original => ({ ...await original<object>(), sendMail: h.mail }));
 
 installFakeRunner();
 const app = new Hono().onError(handleApiError).route("/api/health", healthRoutes).route("/api/notifications", notificationsRoutes);
@@ -24,6 +25,7 @@ beforeEach(async () => {
   await stopNotificationRunner();
   await db.delete(schema.notificationDelivery);
   h.fetch.mockReset().mockImplementation(async () => new Response("{}"));
+  h.mail.mockReset().mockResolvedValue(true);
 });
 async function clients(owner: SeededOwner) {
   const user = (await repos.user.findById(owner.userId))!;
@@ -163,5 +165,77 @@ describe("notifications shared SDK/HTTP operations", () => {
     await Promise.all([first, second, stopping]);
     expect((await repos.notificationDelivery.findById(queued.id))?.status).toBe("sent");
     expect((await repos.notificationDelivery.findById(queued.id))?.attempts).toBe(1);
+  });
+
+  it("retries durable credit emails beyond ordinary limits and keeps the organization and delivery identity", async () => {
+    const owner = await seedOwner();
+    await db.update(schema.user).set({ emailVerified: true }).where(eq(schema.user.id, owner.userId));
+    const prepared = await notification.prepare({
+      organizationId: owner.orgId, eventType: "billing.credit_low", resourceType: "billing",
+      idempotencyKey: "quota-source-event", payload: { durable: true, message: "95% used", url: `https://dashboard.test/cloud-billing?organizationId=${owner.orgId}` },
+    });
+    await prepared(db);
+    const queued = await repos.notificationDelivery.listForUser(owner.userId, owner.orgId);
+    expect(queued.map(row => row.channelKind).sort()).toEqual(["email", "in_app"]);
+    const email = queued.find(row => row.channelKind === "email")!;
+    await db.update(schema.notificationDelivery).set({ attempts: 8 }).where(eq(schema.notificationDelivery.id, email.id));
+    h.mail.mockResolvedValue(false);
+    await processQueuedNotifications();
+    expect((await repos.notificationDelivery.findById(email.id))?.status).toBe("queued");
+    expect((await repos.notificationDelivery.findById(email.id))?.attempts).toBe(9);
+    expect(h.mail).toHaveBeenCalledOnce();
+    await processQueuedNotifications();
+    expect(h.mail).toHaveBeenCalledOnce(); // Persisted backoff also applies to new worker ticks.
+    h.mail.mockResolvedValue(true);
+    await db.update(schema.notificationDelivery).set({ nextAttemptAt: new Date(0) }).where(eq(schema.notificationDelivery.id, email.id));
+    await processQueuedNotifications();
+    expect((await repos.notificationDelivery.findById(email.id))?.status).toBe("sent");
+    expect(h.mail).toHaveBeenLastCalledWith(expect.objectContaining({ organizationId: owner.orgId, text: expect.stringContaining(owner.orgId) }));
+    expect(await repos.notificationDelivery.listForUser(owner.userId, owner.orgId)).toHaveLength(2);
+    const c = await clients(owner);
+    expect(await c.native.testChannel(email.channelId!)).toMatchObject({ ok: true });
+  });
+
+  it("reuses Settings destinations and sends one credit email when the source event is retried", async () => {
+    const owner = await seedOwner();
+    await db.update(schema.user).set({ emailVerified: true }).where(eq(schema.user.id, owner.userId));
+    const user = (await repos.user.findById(owner.userId))!;
+    const email = await repos.notificationChannel.create({
+      userId: owner.userId, kind: "email", label: "My email", config: { address: user.email },
+      verified: true, enabled: true,
+    });
+    const inbox = await repos.notificationChannel.create({
+      userId: owner.userId, kind: "in_app", label: "My inbox", config: {}, verified: true, enabled: true,
+    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const enqueue = await notification.prepare({
+        organizationId: owner.orgId, eventType: "billing.credit_low", resourceType: "billing",
+        idempotencyKey: "same-credit-warning", payload: { durable: true, message: "95% used" },
+      });
+      await enqueue(db);
+    }
+    const deliveries = await repos.notificationDelivery.listForUser(owner.userId, owner.orgId);
+    expect(deliveries.map(row => row.channelId).sort()).toEqual([email.id, inbox.id].sort());
+    await processQueuedNotifications();
+    expect(h.mail).toHaveBeenCalledOnce();
+    expect(h.mail).toHaveBeenCalledWith(expect.objectContaining({ to: user.email, organizationId: owner.orgId }));
+  });
+
+  it("never sends queued credit email after the account address or billing permission is revoked", async () => {
+    const owner = await seedOwner();
+    await db.update(schema.user).set({ emailVerified: true }).where(eq(schema.user.id, owner.userId));
+    const prepare = () => notification.prepare({ organizationId: owner.orgId, eventType: "billing.credit_exhausted", resourceType: "billing", idempotencyKey: "revoked-email", payload: { durable: true } });
+    await (await prepare())(db);
+    await db.update(schema.user).set({ emailVerified: false }).where(eq(schema.user.id, owner.userId));
+    await processQueuedNotifications();
+    const email = (await repos.notificationDelivery.listForUser(owner.userId, owner.orgId)).find(row => row.channelKind === "email")!;
+    expect(email.status).toBe("failed");
+    expect(h.mail).not.toHaveBeenCalled();
+    await db.update(schema.user).set({ emailVerified: true }).where(eq(schema.user.id, owner.userId));
+    await db.update(schema.notificationDelivery).set({ status: "queued", nextAttemptAt: new Date(0) }).where(eq(schema.notificationDelivery.id, email.id));
+    await db.update(schema.member).set({ role: "restricted" }).where(eq(schema.member.userId, owner.userId));
+    await processQueuedNotifications();
+    expect((await repos.notificationDelivery.findById(email.id))?.status).toBe("failed");
+    expect(h.mail).not.toHaveBeenCalled();
   });
 });

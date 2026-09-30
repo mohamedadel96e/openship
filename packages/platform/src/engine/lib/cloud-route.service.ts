@@ -1,5 +1,5 @@
 import { Oblien, PAGE_CONTAINER_PREFIX, CloudInfraProvider, CloudDockerRuntime } from "@repo/adapters";
-import { repos } from "@repo/db";
+import { repos, type Deployment } from "@repo/db";
 import { AppError, SYSTEM, deploymentBelongsToProject } from "@repo/core";
 import { env } from "../config/env";
 import { getOrgCloudToken } from "./cloud/client";
@@ -8,6 +8,7 @@ import { issueNamespaceToken } from "./openship-cloud";
 import { createTenantCloudAdmin } from "./cloud-tenant-admin";
 import { disposePlatform, resolveDeploymentPlatform, type DeploymentMeta } from "./deployment-runtime";
 import { pickProjectPortOwner } from "./project-service-upstream";
+import { findActiveDeployment } from "./active-deployment";
 
 export interface CloudRouteProject {
   id: string;
@@ -30,11 +31,11 @@ async function tenantClient(organizationId: string) {
 }
 
 /** Provider errors propagate so a failed edit cannot be presented as applied. */
-export async function reapplyCloudProjectRoute(project: CloudRouteProject, input: CloudRouteInput): Promise<void> {
-  if (!project.cloudWorkspaceId || !project.activeDeploymentId) return;
-  const deployment = await repos.deployment.findById(project.activeDeploymentId);
+export async function reapplyCloudProjectRoute(project: CloudRouteProject, input: CloudRouteInput, activeDeployment?: Deployment): Promise<void> {
+  if (!project.activeDeploymentId) return;
+  const deployment = activeDeployment ?? await findActiveDeployment(project);
   if (!deployment?.containerId) return;
-  if (!deploymentBelongsToProject(project, deployment)) {
+  if (deployment.id !== project.activeDeploymentId || !deploymentBelongsToProject(project, deployment)) {
     throw new AppError("Cloud deployment does not belong to this project", 404, "DEPLOYMENT_NOT_FOUND");
   }
   if ((deployment.meta as DeploymentMeta | null)?.cloudDockerWorkspace) {

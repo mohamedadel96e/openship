@@ -97,6 +97,9 @@ export interface DnsProviderDescriptor {
 }
 
 export interface DnsProvider {
+  /** Provider wire representation, shared by planning and writes so quoted
+   * TXT records converge and legacy unquoted records can be repaired. */
+  formatContent?(type: DnsRecordType, content: string): string;
   readonly name: DnsProviderName;
 
   /** Rendered by the dashboard's provider picker. Lives on the provider so a new

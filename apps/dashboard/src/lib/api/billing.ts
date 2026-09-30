@@ -2,7 +2,8 @@ import { api } from "./client";
 import { endpoints } from "./endpoints";
 import type { PlanTierId, CreditPackDefinition } from "@repo/core";
 import type { ApiPlan } from "@/components/billing/PricingCards";
-import type { BillingSubscription, BillingResources, BillingCheckoutStatus } from "@repo/contracts";
+import type { BillingSubscription, BillingResources, BillingCheckoutStatus, BillingState as BillingStateContract } from "@repo/contracts";
+import { trackCloudEvent } from "../cloud-analytics";
 export type { BillingResources } from "@repo/contracts";
 
 /* ------------------------------------------------------------------ */
@@ -17,6 +18,7 @@ export type { BillingResources } from "@repo/contracts";
  * Period dates arrive over JSON as ISO strings (not `Date`).
  */
 export interface BillingState {
+  creditAlert?: BillingStateContract["creditAlert"];
   tier: PlanTierId;
   status: string;
   currentPeriod: {
@@ -34,6 +36,7 @@ export interface BillingState {
   };
   plan?: ApiPlan | null;
   subscription?: BillingSubscription | null;
+  complimentary?: BillingStateContract["complimentary"];
   capabilities?: { portal: boolean; cancellation: boolean; resumption?: boolean; subscriptionChange: boolean };
   /** Included milli-credits: zero without a plan; null for unknown or custom allowances. */
   monthlyCreditLimit: number | null;
@@ -87,35 +90,10 @@ export interface CapacityMeter {
   max: number | null;
 }
 
-/**
- * Per-resource capacity snapshot. All fields optional so the cloud can grow the
- * set without a dashboard release. Every meter here is a whole count except
- * `buildMinutes` (minutes) and `credits` (which the panel reads off the balance,
- * not this block).
- *
- * The vCPU / RAM / disk / bandwidth meters that used to live here are GONE on
- * purpose. Three of them were Oblien's PER-WORKSPACE ceilings, not a namespace
- * pool, so a used/max bar was the wrong shape for them at any value — and their
- * `used` was never populated, so the panel rendered four permanently-empty rows.
- * Compute traffic draws from the shared allowance. Edge requests and bandwidth
- * are measured separately by `getResources`, with namespace traffic allowances
- * from the Cloud catalog. Per-service machine size is shown as a plain value.
- */
-export interface BillingCapacity {
-  /** Free *.opsh.io edge routes the org is using vs its allowed maximum. */
-  routes?: CapacityMeter;
-  /** Concurrently running services, including services sharing a Docker workspace. */
-  services?: CapacityMeter;
-  /** Projects vs `limits.maxProjects`. Openship-enforced; Oblien has no project
-   *  concept, so this ceiling exists only on our side. */
-  projects?: CapacityMeter;
-  /**
-   * Build minutes used this period vs the plan's monthly allowance. Together
-   * with `routes` these are the only two meters the server ENFORCES on (a deploy
-   * is refused at the max), so they are the two that must never read as blank.
-   */
-  buildMinutes?: CapacityMeter;
-}
+/** Actual shared allocation comes from Oblien. Missing provider measurements
+ * stay unavailable; application counts and legacy build-time meters remain
+ * separate. Keep the dashboard aligned with the public billing contract. */
+export type BillingCapacity = NonNullable<BillingStateContract["capacity"]>;
 
 /**
  * One credit pack the user can buy as a one-shot top-up.
@@ -241,6 +219,7 @@ export const billingApi = {
     planTierId: SubscriptionPlanTierId,
     interval: SubscriptionInterval,
   ): Promise<{ checkoutUrl: string }> => {
+    trackCloudEvent({ event: "cloud_checkout_clicked", properties: { kind: "subscription", surface: "billing" } });
     const res = await api.post<Envelope<{ checkoutUrl: string }>>(
       endpoints.billing.subscription,
       { planTierId, interval, idempotencyKey: crypto.randomUUID() },
@@ -252,6 +231,7 @@ export const billingApi = {
    * Start an Oblien-hosted top-up. Oblien applies credits after payment.
    */
   createTopupCheckout: async (packId: string): Promise<{ checkoutUrl: string }> => {
+    trackCloudEvent({ event: "cloud_checkout_clicked", properties: { kind: "topup", surface: "billing" } });
     const res = await api.post<Envelope<{ checkoutUrl: string }>>(
       endpoints.billing.topup,
       { packId, idempotencyKey: crypto.randomUUID() },

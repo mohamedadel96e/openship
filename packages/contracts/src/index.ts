@@ -1,4 +1,5 @@
 export * from "./deployments";
+export * from "./cloud-support";
 export * from "./deployment-resources";
 export * from "./deployment-controls";
 export * from "./validation";
@@ -85,5 +86,8 @@ export * from "./billing-inputs";
 
 export * from "./infrastructure-resources";
 export * from "./cluster-runtime";
+export * from "./cluster-storage";
 export * from "./project-cluster";
 export * from "./cluster-database";
+export * from "./mail-inputs";
+export * from "./cloud-analytics";

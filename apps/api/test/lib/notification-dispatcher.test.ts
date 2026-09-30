@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // This file isolates subscription/default fan-out; real recipient policy is
 // exercised through notification SDK/HTTP parity and queue tests.
-vi.mock("@repo/platform/engine/lib/notification-access", () => ({ canReceiveNotification: async () => true }));
+vi.mock("@repo/platform/engine/lib/notification-access", () => ({ canReceiveNotification: async (userId: string) => !h.deniedUsers.has(userId) }));
 
 /**
  * Dispatcher tier-1 (explicit subscriptions) + tier-2 (org-default fallback)
@@ -12,6 +12,10 @@ vi.mock("@repo/platform/engine/lib/notification-access", () => ({ canReceiveNoti
  */
 
 const h = vi.hoisted(() => ({
+  lookupFailure: false,
+  deniedUsers: new Set<string>(),
+  seededUsers: [] as string[],
+  durable: [] as Array<{ key: string; userId: string; organizationId: string; channelId: string }>,
   created: [] as Array<{ userId: string; channelId: string; channelKind: string; category: string }>,
   enabledSubs: [] as Array<{ id: string; userId: string; channelId: string }>,
   channelsById: {} as Record<string, { id: string; kind: string; enabled: boolean; verified: boolean; userId: string } | undefined>,
@@ -23,12 +27,14 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("@repo/db", () => ({
+  createNotificationDeliveryRepo: () => ({ createOnce: async (key: string, data: { userId: string; organizationId: string; channelId: string }) => { h.durable.push({ key, ...data }); } }),
   repos: {
     notificationSubscription: {
-      listEnabledForDispatch: async () => h.enabledSubs,
+      listEnabledForDispatch: async () => { if (h.lookupFailure) throw new Error("database unavailable"); return h.enabledSubs; },
       listUserIdsWithSubscription: async () => h.touchedUserIds,
     },
     notificationChannel: {
+      ensureAccountChannels: async (userId: string) => { h.seededUsers.push(userId); },
       findById: async (id: string) => h.channelsById[id],
       listVerifiedForUsersByKinds: async (userIds: string[], kinds: string[]) =>
         h.verifiedByKinds.filter((c) => userIds.includes(c.userId) && kinds.includes(c.kind)),
@@ -67,6 +73,7 @@ const ch = (id: string, userId: string, kind: string, over?: Partial<{ enabled: 
 });
 
 beforeEach(() => {
+  h.lookupFailure = false; h.deniedUsers.clear(); h.seededUsers = []; h.durable = [];
   h.created = [];
   h.enabledSubs = [];
   h.channelsById = {};
@@ -171,5 +178,26 @@ describe("notification dispatcher", () => {
   it("drops non-notifiable event types", async () => {
     await notification.emitSync({ organizationId: "org", eventType: "some.internal.thing" });
     expect(h.created).toEqual([]);
+  });
+});
+
+
+describe("durable billing notification preparation", () => {
+  it("resolves access and preferences, then waits for the caller transaction before enqueueing", async () => {
+    h.members = [{ userId: "owner" }, { userId: "outsider" }, { userId: "opted-out" }];
+    h.deniedUsers.add("outsider");
+    h.touchedUserIds = ["opted-out"];
+    h.verifiedByKinds = [ch("email", "owner", "email"), ch("app", "owner", "in_app"), ch("foreign", "outsider", "email")];
+    const queue = await notification.prepare({ organizationId: "org", eventType: "billing.credit_low", idempotencyKey: "evt1" });
+    expect(h.seededUsers).toEqual(["owner"]);
+    expect(h.created).toHaveLength(0);
+    expect(h.durable).toHaveLength(0);
+    await queue({} as never);
+    expect(h.durable.map(row => [row.key, row.userId, row.channelId])).toEqual([["evt1", "owner", "email"], ["evt1", "owner", "app"]]);
+  });
+  it("surfaces lookup failures so the webhook remains retryable instead of acknowledging lost notifications", async () => {
+    h.lookupFailure = true;
+    await expect(notification.prepare({ organizationId: "org", eventType: "billing.credit_low", idempotencyKey: "evt1" })).rejects.toThrow("database unavailable");
+    expect(h.durable).toHaveLength(0);
   });
 });

@@ -1,4 +1,21 @@
 {
+  "home": {
+    "label": "Openship Cloud",
+    "title": "公開の準備はできましたか？",
+    "plansAndBilling": "プランと請求",
+    "description": "ビルドとホスティングの管理を任せて、成長に集中。",
+    "manageDescription": "プラン、使用状況、請求をまとめて確認。",
+    "purchasesUnavailable": "現在、新規サブスクリプションは受け付けていません。",
+    "viewPlans": "プランを見る"
+  },
+  "welcome": {
+    "eyebrow": "準備が整いました",
+    "title": "{name} へようこそ",
+    "description": "Cloud プランが有効になりました。さっそく使ってみましょう。",
+    "dismiss": "ウェルカム画面を閉じる",
+    "openProjects": "プロジェクトを開く",
+    "viewPlan": "自分のプランを見る"
+  },
   "capacity": {
     "title": "容量と使用状況",
     "subtitle": "プランに含まれる容量と使用量です。ライブの数値は Openship Cloud から同期されます。",
@@ -89,6 +106,14 @@
     "replacementNotice": "プランや請求間隔を変更すると、支払い後に選択した通常料金で新しい期間が始まります。自動の日割り計算はありません。",
     "changeViaSupport": "現在のサブスクリプションを変更するにはサポートにお問い合わせください。",
     "billingUnavailable": "このアカウントではまだ購入できません。"
+  },
+  "complimentary": {
+    "label": "無償提供プラン · 料金なし",
+    "untilRevoked": "取り消されるまで有効",
+    "expiresOn": "{date}まで利用可能",
+    "creditsRenewOn": "{date}にクレジットを更新",
+    "changeViaSupport": "無償提供プランの変更はサポートが対応します。",
+    "topupsUnavailable": "無償提供プランの追加利用はサポートが対応します。"
   },
   "pricing": {
     "custom": "カスタム",
@@ -306,9 +331,9 @@
     "creditsPerCycle": "請求サイクルあたり {amount} クレジット",
     "buildTime": "ビルド時間",
     "buildMinutes": "月あたり {amount} 分",
-    "buildHint": "コードのビルドにかかる時間です。5分のビルドは月間利用枠から5分を消費します。",
-    "apps": "実行中のサービス",
-    "appsHint": "同時に動くアプリ、データベース、ワーカーの数です。実行中のComposeサービスはそれぞれ1つとして数えます。",
+    "buildHint": "ビルドはリソースの消費量に応じて共有の利用枠を消費します。個別の時間制限は、保存済みプランに含まれている場合にのみ適用されます。",
+    "apps": "サービス枠",
+    "appsHint": "デプロイ済みのプロジェクトと待機中のデプロイが枠を確保します。未デプロイの下書きは枠を使用しません。",
     "machine": "サービスごとのCPUとメモリ",
     "machineHint": "1つのサービスで選択できるCPUとメモリの最大サイズです。共有残高ではなく、リソースの上限です。",
     "projects": "プロジェクト",
@@ -320,7 +345,7 @@
     "setupOnly": "サブスクリプションが必要",
     "setupHint": "プロジェクトの作成、コードのビルド、アプリの実行にはCloudプランを選択してください。",
     "includedTitle": "リソース",
-    "limitsHint": "プランに含まれるプロジェクト、実行中のサービス、月間ビルド時間。",
+    "limitsHint": "プランに含まれるプロジェクト数、稼働サービス数、ビルド時間の制限。",
     "balanceRule": "利用枠を使い切るとアプリは一時停止します。続行するには利用枠を追加し、リソース上限を増やすにはプランをアップグレードしてください。",
     "reset": "ビルド枠のリセット日：{date}",
     "cpuHint": "時間あたりの処理能力の使用量です。1 vCPUを1時間使うと1 vCPU時間になります。",
@@ -340,7 +365,12 @@
     "usageIncluded": "共有の利用枠を含む",
     "usageSummary": "ビルドと実行中のアプリは利用枠を共有します。マシンが大きく、実行時間が長いほど消費量が増えます。",
     "usageDetails": "使用量の詳細",
-    "usagePercent": "{percent}% 使用済み"
+    "usagePercent": "{percent}% 使用済み",
+    "poolHint": "停止中のワークスペースや保留中の変更も含め、すべてのワークスペースで共有します。",
+    "creditUnitsHint": "クレジットは分数ではなくリソース消費量です。CPU、メモリ、ディスク処理、転送には個別の料金があります。",
+    "topupCapacityHint": "追加購入は利用クレジットを増やします。CPU・RAM・ストレージの上限を増やすにはプランをアップグレードしてください。",
+    "poolTitle": "共有容量",
+    "poolCapacity": "{cpu} vCPU · {ram} GB RAM · {disk} GB ディスク"
   },
   "onboarding": {
     "workspaceDescription": "Cloudプランを選んでプロジェクトを作成し、コードをビルドしてアプリを実行しましょう。契約前はプロジェクトやコンピューティングリソースは含まれません。",
@@ -404,5 +434,18 @@
     "currentPeriod": "現在の請求期間",
     "viewUsage": "使用量の詳細を見る",
     "bandwidthPerMonth": "{amount} GB / 月"
+  },
+  "creditAlert": {
+    "lowTitle": "Cloud クレジットが残りわずかです",
+    "lowDescription": "購入したクレジットを含む割り当ての {percent}% を使用しました。残りは {credits} クレジットです。",
+    "graceTitle": "猶予クレジットを使用しています",
+    "graceDescription": "支払い済みのクレジットを使い切りました。新しいワークロードが制限されるまで、猶予クレジットは残り {credits} です。",
+    "exhaustedTitle": "Cloud クレジットを使い切りました",
+    "exhaustedDescription": "クレジットを追加するか、支払い済みの割り当てが更新されるまで、新しいワークロードは制限されます。請求画面で選択肢をご確認ください。",
+    "buyCredits": "クレジットを追加購入",
+    "openBilling": "請求画面を開く",
+    "close": "確認しました",
+    "opening": "この通知の組織の請求画面を開いています…",
+    "wrongOrganization": "このアカウントではこの請求リンクを利用できません。通知に記載された組織のアカウントでログインしてください。"
   }
 }

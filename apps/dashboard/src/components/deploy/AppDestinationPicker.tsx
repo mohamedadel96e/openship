@@ -8,6 +8,7 @@ import ServerSelector, { type ServerOption } from "@/components/shared/ServerSel
 import type { DeployTarget } from "@/context/deployment/types";
 import { useI18n } from "@/components/i18n-provider";
 import { useCloud } from "@/context/CloudContext";
+import { usePlatform } from "@/context/PlatformContext";
 
 export interface AppDestination {
   /**
@@ -27,8 +28,9 @@ export interface AppDestination {
 }
 
 /**
- * "Where to install" picker for the app wizards. Exactly two kinds of destination:
- * a SERVER ROW (the shared mail-style `ServerSelector` dropdown — pre-selects the
+ * "Where to install" picker for the app wizards. Hosted Cloud only offers Cloud.
+ * Self-hosted instances also offer a SERVER ROW (the shared mail-style
+ * `ServerSelector` dropdown — pre-selects the
  * first/only server so the wizard opens with a destination already chosen,
  * collapses many into a searchable list, carries its own "add server") or Openship
  * Cloud. Reports the pick as `{deployTarget, serverId, serverHost}`.
@@ -46,10 +48,8 @@ export interface AppDestination {
  * port-only install's URL reachable. Picking it on a VPS yielded
  * `http://localhost:<port>`, useless from anywhere but the box itself.
  *
- * That rule is now unconditional, which also makes this agree with the MAIN deploy
- * wizard — `useDesktopTargets` offers servers + cloud and no local card, on every
- * mode including desktop. Two pickers for the same question should not disagree
- * about what a destination is.
+ * This follows the MAIN deploy wizard: `useDesktopTargets` only offers server
+ * rows on self-hosted instances, including desktop, and always offers Cloud.
  */
 export function AppDestinationPicker({
   value,
@@ -61,8 +61,31 @@ export function AppDestinationPicker({
   const { t } = useI18n();
   const opt = t.deploy.targetStep.options;
   const { connected: cloudConnected } = useCloud();
+  const { selfHosted } = usePlatform();
 
   const serverActive = value?.deployTarget === "server";
+
+  React.useEffect(() => {
+    if (!selfHosted && value?.deployTarget !== "cloud") {
+      onChange({ deployTarget: "cloud" });
+    }
+  }, [selfHosted, value?.deployTarget, onChange]);
+
+  if (!selfHosted) {
+    return (
+      <div className="flex items-start gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted/40">
+          <UiIcon name="cloud" className="size-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-foreground">{opt.cloud}</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            {opt.cloudConnectedDesc}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2">

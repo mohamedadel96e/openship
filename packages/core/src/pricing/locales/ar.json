@@ -19,6 +19,10 @@
     "enterprise": {
       "name": "المؤسسات",
       "tagline": "حدود مخصّصة وبنية تحتية مخصّصة واتفاقية SLA."
+    },
+    "hobby": {
+      "name": "Hobby",
+      "tagline": "للتطوير الخفيف والتطبيقات العرضية، مع رصيد استخدام محدود."
     }
   },
   "features": {
@@ -49,7 +53,11 @@
     "selfHostedUnlimited": "عمليات نشر ومشاريع وخوادم ونطاقات غير محدودة",
     "selfHostedServices": "كل الخدمات المُدارة — Postgres وRedis والبريد",
     "selfHostedClients": "CLI وواجهة ويب وتطبيق سطح مكتب — خدمة خلفية واحدة",
-    "selfHostedFreeSubdomains": "{freeSubdomains} نطاق فرعي مجاني على {freeDomainSuffix} عند الربط مع Openship Cloud"
+    "selfHostedFreeSubdomains": "{freeSubdomains} نطاق فرعي مجاني على {freeDomainSuffix} عند الربط مع Openship Cloud",
+    "usageCredits": "{credits} رصيد استخدام شهريًا",
+    "namespaceCapacity": "الإجمالي: {namespaceCpu} vCPU، و{namespaceRamGb} GB ذاكرة، و{namespaceDiskGb} GB تخزين",
+    "finiteUsage": "قد تحتاج الاستضافة المستمرة إلى شحن رصيد إضافي.",
+    "oneRunningService": "تطبيق أو قاعدة بيانات أو عامل واحد قيد التشغيل"
   },
   "selfHosted": {
     "name": "استضافة ذاتية",
@@ -61,7 +69,12 @@
   "creditPacks": {
     "pack_5k": "{credits} رصيد",
     "pack_25k": "{credits} رصيد",
-    "pack_100k": "{credits} رصيد"
+    "pack_100k": "{credits} رصيد",
+    "pack_500": "{credits} رصيد",
+    "pack_2k": "{credits} رصيد",
+    "pack_400": "{credits} رصيد",
+    "pack_1700": "{credits} رصيد",
+    "pack_4500": "{credits} رصيد"
   },
   "ui": {
     "perMonth": "/شهر",

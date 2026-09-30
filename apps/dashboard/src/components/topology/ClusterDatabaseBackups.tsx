@@ -2,44 +2,28 @@
 
 import { Icon as UiIcon } from "@repo/ui/icons";
 
-import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { useRef, useState } from "react";
 import type { ClusterDatabase } from "@repo/contracts";
 import type { ClusterDatabaseConfig } from "@repo/core";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CustomSelect } from "@/components/ui/CustomSelect";
-import { backupDestinationsApi, type BackupDestinationSummary } from "@/lib/api/backups";
+import { BackupDestinationSelect } from "@/components/backup/BackupDestinationSelect";
 import { randomUUID } from "@/lib/random-uuid";
-import { getApiErrorMessage } from "@/lib/api";
 
 export function ClusterDatabaseBackupSettings({
   value,
   onChange,
   configured,
   disabled,
+  engine = "postgres",
 }: {
   value: ClusterDatabaseConfig["backup"];
   onChange: (value: ClusterDatabaseConfig["backup"]) => void;
   configured: boolean;
   disabled: boolean;
+  engine?: ClusterDatabaseConfig["engine"];
 }) {
-  const [destinations, setDestinations] = useState<BackupDestinationSummary[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let active = true;
-    void backupDestinationsApi
-      .list()
-      .then((response) => {
-        if (active) setDestinations(response.data.filter((item) => item.kind === "s3_compatible"));
-      })
-      .catch((err) => {
-        if (active) setError(getApiErrorMessage(err));
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
   return (
     <details className="rounded-xl bg-muted/30 p-3 text-sm" open={!!value}>
       <summary className="cursor-pointer">
@@ -47,28 +31,15 @@ export function ClusterDatabaseBackupSettings({
       </summary>
       <div className="mt-3 space-y-3">
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Save PostgreSQL data and recovery logs to an existing S3 destination. The database cluster
-          runs the schedule even when OpenShip is offline.
+          {engine === "postgres"
+            ? "Save database data and recovery logs to your backup destination."
+            : "Save Redis data snapshots to your backup destination. Each data partition has its own recovery point."}{" "}
+          The cluster runs the schedule even when OpenShip is offline.
         </p>
-        {error && (
-          <p role="alert" className="text-xs text-danger">
-            {error}
-          </p>
-        )}
-        <CustomSelect
-          variant="filled"
-          aria-label="Backup destination"
+        <BackupDestinationSelect
           value={value?.destinationId ?? ""}
           disabled={disabled || configured}
-          placeholder="Choose backup destination"
-          options={[
-            ...(!configured ? [{ value: "", label: "Configure later" }] : []),
-            ...destinations.map((item) => ({
-              value: item.id,
-              label: item.name,
-              description: item.bucket ?? undefined,
-            })),
-          ]}
+          optional={!configured}
           onChange={(destinationId) =>
             onChange(
               destinationId
@@ -81,11 +52,6 @@ export function ClusterDatabaseBackupSettings({
             )
           }
         />
-        {!destinations.length && !error && (
-          <Link href="/backups" className="text-primary hover:underline">
-            Add an S3 destination in Backups
-          </Link>
-        )}
         {value && (
           <>
             <CustomSelect
@@ -118,7 +84,10 @@ export function ClusterDatabaseBackupSettings({
               />
             </label>
             <p className="text-xs leading-relaxed text-muted-foreground">
-              Setup verifies the first backup. Recovery logs continue to archive between backups.
+              Setup verifies the first backup.{" "}
+              {engine === "postgres"
+                ? "Recovery logs continue to archive between backups."
+                : "Redis snapshots preserve data and expiration times. A sharded backup does not provide one transaction across all partitions."}
               Restores create a separate database.
             </p>
           </>
@@ -141,11 +110,14 @@ export function ClusterDatabaseBackups({
     requestId: string;
     name: string;
     config: ClusterDatabaseConfig;
+    clusterId?: string;
     restoreFrom: { databaseId: string; backupName: string };
+    clusterAwareClient?: true;
   }) => void;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [name, setName] = useState(`${database.name.slice(0, 54)}-restored`);
+  const [storageGiB, setStorageGiB] = useState(database.config.storageGiB);
   const request = useRef(randomUUID());
   const backups = database.observation?.backups ?? [];
   const archive = database.observation?.archive;
@@ -164,7 +136,9 @@ export function ClusterDatabaseBackups({
         <p
           className={`text-xs leading-relaxed ${archive.healthy === false ? "text-warning" : "text-muted-foreground"}`}
         >
-          {archive.healthy ? "Recovery logs are archiving successfully." : archive.message}
+          {archive.healthy && database.config.engine === "postgres"
+            ? "Recovery logs are archiving successfully."
+            : archive.message}
         </p>
       )}
       <p className="text-xs text-muted-foreground">
@@ -177,8 +151,8 @@ export function ClusterDatabaseBackups({
       </p>
       {!backups.length && (
         <p className="text-xs text-muted-foreground">
-          No completed backup has been observed yet. Refresh the database status to check the
-          operator.
+          No completed backup has been observed yet. Refresh the database status to check its
+          progress.
         </p>
       )}
       {backups.slice(0, 10).map((backup) => (
@@ -219,15 +193,22 @@ export function ClusterDatabaseBackups({
             onRestore({
               requestId: request.current,
               name,
-              config: database.config,
+              clusterId: database.clusterId,
+              config: { ...database.config, storageGiB },
               restoreFrom: { databaseId: database.id, backupName: selected },
+              ...(database.config.engine === "redis" && database.config.mode === "cluster"
+                ? { clusterAwareClient: true }
+                : {}),
             });
           }}
         >
           <p className="text-sm font-medium">Restore as a new database</p>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Restore to this backup's consistent recovery point. The application keeps its current
-            connection. Verify the restored data before switching it.
+            {database.config.engine === "postgres"
+              ? "Restore to this backup's consistent recovery point."
+              : "Recover the saved Redis snapshots, keeping each key's expiration time."}{" "}
+            The application keeps its current connection. Verify the restored data before switching
+            it.
           </p>
           <label className="block space-y-1.5 text-sm">
             <span>New database name</span>
@@ -240,6 +221,23 @@ export function ClusterDatabaseBackups({
               disabled={disabled}
               onChange={(event) => setName(event.target.value)}
             />
+          </label>
+          <label className="block space-y-1.5 text-sm">
+            <span>Storage per instance (GiB)</span>
+            <Input
+              variant="filled"
+              type="number"
+              min={database.config.storageGiB}
+              max={16384}
+              step={1}
+              value={storageGiB}
+              disabled={disabled}
+              onChange={(event) => setStorageGiB(Number(event.target.value))}
+              required
+            />
+            <span className="block text-xs text-muted-foreground">
+              Use a larger disk when the database needs more room.
+            </span>
           </label>
           <div className="flex gap-2">
             <Button type="submit" disabled={disabled || !name.trim() || name === database.name}>

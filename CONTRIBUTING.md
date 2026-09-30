@@ -143,6 +143,8 @@ maintain their own strict TypeScript configurations.
 - **Branches**: `feat/`, `fix/`, `docs/`, `chore/`
 - **Code style**: Prettier - run `bun format` before committing
 - **Types**: TypeScript strict mode everywhere
+- **Dashboard UI**: Follow the [dashboard design guide](docs/dashboard-design.md) for surfaces,
+  controls, typography, responsive layouts, and catalog forms.
 
 ## Localization
 

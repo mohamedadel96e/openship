@@ -14,6 +14,7 @@
 
 import {
   db,
+  assertDumpSchemaCompatible,
   eq,
   inArray,
   restoreSubgraphInTransaction,
@@ -26,13 +27,14 @@ import { env } from "@repo/platform/engine/config/env";
 import { reconcileRuntimeStateAfterImport } from "../../../lib/database-runtime-state";
 import { reassertMigrationLockAfterRestore, withMigrationLock } from "../migration/migration-lock";
 import { CloudInstanceNotTransferableError } from "./errors";
-import { openTransferSecrets } from "./passphrase-crypto";
+import { openTransferSecrets, transferSecretsRequirePassphrase } from "./passphrase-crypto";
 import { sealForInstance } from "./secret-codec";
 import { SECRET_COLUMNS, stripTransferSecrets, type SecretColumn } from "./secret-registry";
 import {
   planProjectImport,
   ProjectImportError,
   remapProjectSecrets,
+  removeReplacedProjectRows,
   validateImportSelection,
   type ImportContext,
 } from "./project-import";
@@ -96,9 +98,9 @@ export function assertValidEnvelope(file: DataTransferFile): void {
   ) {
     throw new InvalidTransferFileError("Not an Openship export file.");
   }
-  if (file.envelopeVersion !== 1 && file.envelopeVersion !== 2) {
+  if (![1, 2, 3, 4].includes(file.envelopeVersion)) {
     throw new InvalidTransferFileError(
-      `Unsupported export version ${file.envelopeVersion}; this build reads versions 1 and 2.`,
+      `Unsupported export version ${file.envelopeVersion}; this build reads versions 1–4. Update the destination before importing a newer export.`,
     );
   }
   if (
@@ -119,6 +121,29 @@ export function assertValidEnvelope(file: DataTransferFile): void {
     )
   ) {
     throw new InvalidTransferFileError("The export contains an invalid database snapshot.");
+  }
+  if (file.envelopeVersion >= 4) {
+    try {
+      assertDumpSchemaCompatible(file.dump);
+    } catch (error) {
+      throw new InvalidTransferFileError(error instanceof Error ? error.message : "This export requires a newer destination build.");
+    }
+  }
+  if (file.secrets) {
+    if (typeof file.secrets !== "object" || Array.isArray(file.secrets)) {
+      throw new InvalidTransferFileError("The credential bundle is invalid.");
+    }
+    if ("encoding" in file.secrets) {
+      if (
+        file.secrets.encoding !== "plaintext" ||
+        (file.envelopeVersion !== 3 && file.envelopeVersion !== 4) ||
+        (file.envelopeVersion === 3 && file.kind !== "openship-project-export") ||
+        "kdf" in file.secrets || "blob" in file.secrets
+      ) {
+        throw new InvalidTransferFileError("Plaintext credentials require a version 4 export or a legacy version 3 project export.");
+      }
+      assertValidSecretBundle(file.secrets);
+    }
   }
   if (
     file.manifest &&
@@ -160,6 +185,7 @@ function assertValidSecretBundle(bundle: SecretBundle | null): void {
     throw new InvalidTransferFileError("The credential bundle is invalid.");
   }
   const schemes = new Set(["scalar", "enc1", "map", "notification-config", "plaintext", "json"]);
+  const seen = new Set<string>();
   for (const entry of bundle.entries) {
     if (
       !entry ||
@@ -171,6 +197,12 @@ function assertValidSecretBundle(bundle: SecretBundle | null): void {
       throw new InvalidTransferFileError("The credential bundle contains an invalid entry.");
     }
     const knownSpec = SECRET_SPEC_BY_KEY.get(`${entry.table}.${entry.column}`);
+    if (!knownSpec) {
+      throw new InvalidTransferFileError("This export contains an unsupported credential field. Update the destination before importing.");
+    }
+    const key = JSON.stringify([entry.table, entry.id, entry.column]);
+    if (seen.has(key)) throw new InvalidTransferFileError("The credential bundle contains duplicate entries for the same field.");
+    seen.add(key);
     if (knownSpec && entry.scheme !== knownSpec.scheme) {
       throw new InvalidTransferFileError(
         "The credential bundle does not match the destination schema.",
@@ -178,12 +210,12 @@ function assertValidSecretBundle(bundle: SecretBundle | null): void {
     }
     const validValue =
       entry.scheme === "json"
-        ? entry.json !== null && typeof entry.json === "object"
+        ? entry.json === null || typeof entry.json === "object"
         : entry.scheme === "map"
-          ? isStringRecord(entry.map)
+          ? entry.map === null || isStringRecord(entry.map)
           : entry.scheme === "notification-config"
-            ? isStringRecord(entry.config)
-            : typeof entry.value === "string";
+            ? entry.config === null || isStringRecord(entry.config)
+            : entry.value === null || typeof entry.value === "string";
     if (!validValue) {
       throw new InvalidTransferFileError("The credential bundle contains an invalid secret value.");
     }
@@ -228,6 +260,7 @@ export async function previewInstanceImport(opts: {
     ).history,
     rows: Object.values(opts.file.dump.tables).reduce((n, rows) => n + rows.length, 0),
     hasSecrets: !!opts.file.secrets,
+    requiresPassphrase: transferSecretsRequirePassphrase(opts.file.secrets),
     warnings: opts.file.manifest?.warnings ?? [],
     blockers: [],
   };
@@ -327,6 +360,7 @@ export async function importPreparedInstance(opts: {
       const tx = rawTx as DatabaseTransaction;
       let updateTables: string[] | undefined;
       let retargetedDeployments: string[] = [];
+      let replacementRows = new Map<string, string[]>();
       if (projectScope) {
         const plan = await planProjectImport(
           file,
@@ -342,6 +376,7 @@ export async function importPreparedInstance(opts: {
         bundle = remapProjectSecrets(bundle, plan);
         updateTables = plan.updateTables;
         retargetedDeployments = [...plan.retargetedDeployments];
+        replacementRows = plan.replacementRows;
         localPathProjects = (file.dump.tables.project ?? [])
           .filter((row) => row.localPath)
           .map((row) => ({ slug: String(row.slug), localPath: String(row.localPath) }));
@@ -360,6 +395,7 @@ export async function importPreparedInstance(opts: {
         writtenRows,
       });
       rowsRestored = writtenRows.count;
+      await removeReplacedProjectRows(tx, replacementRows);
       // Unlike an ordinary overwrite, a changed host invalidates even the
       // destination's previous frozen runtime snapshot. Its secrets must not
       // reintroduce source-host bindings later in this transaction.
@@ -391,17 +427,13 @@ export async function importPreparedInstance(opts: {
         for (const { spec: rowSpec, entries } of rows.values()) {
           const id = entries[0]!.entry.id;
 
-          // notification-config re-hydration merges secrets back into the
-          // restored (scrubbed) config, so read it first.
+          // Merge notification secrets into the source's public configuration.
+          // A destination row may have kept its old secret-bearing column during
+          // the upsert; using it here would also retain outdated public settings.
           let currentCell: unknown;
           if (entries.some((e) => e.spec.scheme === "notification-config")) {
-            const [current] = (await tx
-              .select()
-              .from(rowSpec.table)
-              .where(eq(rowSpec.pk, id))
-              .limit(1)) as Array<Record<string, unknown>>;
-            currentCell =
-              current?.[entries.find((e) => e.spec.scheme === "notification-config")!.spec.column];
+            const column = entries.find((e) => e.spec.scheme === "notification-config")!.spec.column;
+            currentCell = file.dump.tables[rowSpec.sqlName]?.find((row) => row.id === id)?.[column];
           }
 
           const set: Record<string, unknown> = {};

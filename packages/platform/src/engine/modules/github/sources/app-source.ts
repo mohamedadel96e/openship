@@ -9,8 +9,8 @@
  * github.auth verbatim (multi-tenant org-scoped keys unchanged).
  *
  * Used two ways:
- *   - SaaS (CLOUD_MODE): the resolver returns this directly as THE GitHubSource
- *     (no gh, no merge).
+ *   - SaaS (CLOUD_MODE): the base source, optionally supplemented by the user's
+ *     personal token in the factory. No host/gh identity.
  *   - local + Openship Cloud connected: LocalGitHubSource (the merge) composes
  *     one of these as its App sub-source for installations + cloud-minted clone
  *     tokens, while gh drives listing.

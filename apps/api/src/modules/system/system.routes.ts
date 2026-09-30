@@ -1,4 +1,5 @@
 import { systemManagementRoutes } from "./system-management.routes";
+
 /**
  * System routes - mounted at /api/system in app.ts.
  *
@@ -46,7 +47,6 @@ const transferControlBodyLimit = bodyLimit({
       413,
     ),
 });
-
 
 /* ── Onboarding (first-run only, no auth) ───────────────────────── */
 r.public("get", "/onboarding", { reason: "First-run onboarding status check - no user exists yet" }, setup.onboardingStatus);
@@ -100,13 +100,13 @@ r.hono.route("/", serverManagementRoutes);
 // ── Per-server GitHub auth (self-hosted): device-login token / PAT / SSH
 //    server-key / per-repo deploy-key. The `:id` server is the permission
 //    resource; handlers hard-guard cloud + org-scope the server. ──
-r.get("/servers/:id/github", { tag: "server:read", authorizationHandledByOperation: true, auditHandledByOperation: true }, serverGithub.getStatus);
-r.post("/servers/:id/github/connect", { tag: "server:write", authorizationHandledByOperation: true, auditHandledByOperation: true }, serverGithub.startConnect);
-r.get("/servers/:id/github/connect/poll", { tag: "server:read", authorizationHandledByOperation: true, auditHandledByOperation: true }, serverGithub.pollConnect);
-r.put("/servers/:id/github/token", { tag: "server:write", authorizationHandledByOperation: true, auditHandledByOperation: true }, serverGithub.putToken);
-r.post("/servers/:id/github/ssh-key", { tag: "server:write", authorizationHandledByOperation: true, auditHandledByOperation: true }, serverGithub.generateSshKey);
-r.put("/servers/:id/github/deploy-key-mode", { tag: "server:write", authorizationHandledByOperation: true, auditHandledByOperation: true }, serverGithub.useDeployKeyMode);
-r.delete("/servers/:id/github", { tag: "server:write", authorizationHandledByOperation: true, auditHandledByOperation: true }, serverGithub.disconnect);
+r.get("/servers/:id/github", { tag: "server:read", authorizationHandledByOperation: true, auditHandledByOperation: true, mcp: { description: "Read GitHub authentication status on this deployment server. This is the server’s clone identity, distinct from the controller’s GitHub connection." } }, serverGithub.getStatus);
+r.post("/servers/:id/github/connect", { tag: "server:write", authorizationHandledByOperation: true, auditHandledByOperation: true, mcp: { description: "Start GitHub device authorization on this deployment server. Present the returned user code and URL to the user, then poll the server GitHub connection." } }, serverGithub.startConnect);
+r.get("/servers/:id/github/connect/poll", { tag: "server:read", authorizationHandledByOperation: true, auditHandledByOperation: true, mcp: { description: "Poll GitHub device authorization already started on this server. The user must complete the returned browser approval." } }, serverGithub.pollConnect);
+r.put("/servers/:id/github/token", { tag: "server:write", authorizationHandledByOperation: true, auditHandledByOperation: true, mcpExcluded: "Changes a deployment server’s GitHub credential mode. Configure tokens and deploy keys in the server’s GitHub settings." }, serverGithub.putToken);
+r.post("/servers/:id/github/ssh-key", { tag: "server:write", authorizationHandledByOperation: true, auditHandledByOperation: true, mcpExcluded: "Changes a deployment server’s GitHub credential mode. Configure tokens and deploy keys in the server’s GitHub settings." }, serverGithub.generateSshKey);
+r.put("/servers/:id/github/deploy-key-mode", { tag: "server:write", authorizationHandledByOperation: true, auditHandledByOperation: true, mcpExcluded: "Changes a deployment server’s GitHub credential mode. Configure tokens and deploy keys in the server’s GitHub settings." }, serverGithub.useDeployKeyMode);
+r.delete("/servers/:id/github", { tag: "server:write", authorizationHandledByOperation: true, auditHandledByOperation: true, mcpExcluded: "Disconnects the server-wide clone identity. Manage credential ownership in the server’s GitHub settings." }, serverGithub.disconnect);
 
 /* ── Server check & install (dashboard setup wizard) ─────────────
  * These endpoints target a server identified by `serverId` in the
@@ -133,11 +133,11 @@ r.delete("/servers/:id/github", { tag: "server:write", authorizationHandledByOpe
 // The `settings:*` tag admits plain members (lib/permission.ts discards the
 // action half), and requireRole("owner") would NOT help — see the middleware's
 // header for why an org-scoped role can't gate a whole-instance operation.
-r.post("/migration/preflight", { tag: "settings:admin" }, requireInstanceAdmin(), migration.preflight);
-r.post("/migration/start", { tag: "settings:admin" }, requireInstanceAdmin(), migration.start);
-r.post("/migration/start-cloud", { tag: "settings:admin" }, requireInstanceAdmin(), migration.startCloud);
-r.post("/migration/start-tunnel", { tag: "settings:admin" }, requireInstanceAdmin(), migration.startTunnel);
-r.post("/migration/switch-back", { tag: "settings:admin" }, requireInstanceAdmin(), migration.switchBack);
+r.post("/migration/preflight", { tag: "settings:admin", mcpExcluded: "Instance control-plane/team-mode migration uses a browser session and changes the instance identity. Use Settings → Team mode; application migration has dedicated /api/migration MCP tools." }, requireInstanceAdmin(), migration.preflight);
+r.post("/migration/start", { tag: "settings:admin", mcpExcluded: "Instance control-plane/team-mode migration uses a browser session and changes the instance identity. Use Settings → Team mode; application migration has dedicated /api/migration MCP tools." }, requireInstanceAdmin(), migration.start);
+r.post("/migration/start-cloud", { tag: "settings:admin", mcpExcluded: "Instance control-plane/team-mode migration uses a browser session and changes the instance identity. Use Settings → Team mode; application migration has dedicated /api/migration MCP tools." }, requireInstanceAdmin(), migration.startCloud);
+r.post("/migration/start-tunnel", { tag: "settings:admin", mcpExcluded: "Instance control-plane/team-mode migration uses a browser session and changes the instance identity. Use Settings → Team mode; application migration has dedicated /api/migration MCP tools." }, requireInstanceAdmin(), migration.startTunnel);
+r.post("/migration/switch-back", { tag: "settings:admin", mcpExcluded: "Instance control-plane/team-mode migration uses a browser session and changes the instance identity. Use Settings → Team mode; application migration has dedicated /api/migration MCP tools." }, requireInstanceAdmin(), migration.switchBack);
 
 /* ── Instance and project data export / import (instance-admin only) ─────
  * This moves the entire database including every org's data, and export
@@ -148,11 +148,11 @@ r.post("/migration/switch-back", { tag: "settings:admin" }, requireInstanceAdmin
  * that check resolves a caller-selected org and every user is owner of their
  * own personal org (GHSA-rwq6-r63g-3c8h). Do not "restore" it here.
  */
-r.get("/data-transfer/preview", { tag: "settings:admin" }, requireInstanceAdmin(), dataTransfer.previewInstanceExportHandler);
-r.post("/data-transfer/preview", { tag: "settings:admin" }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.previewInstanceExportHandler);
-r.post("/data-transfer/direct/session", { tag: "settings:admin" }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.createDirectReceiveSessionHandler);
-r.post("/data-transfer/direct/send", { tag: "settings:admin" }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.sendDirectTransferHandler);
-r.post("/data-transfer/direct/send/stream", { tag: "settings:admin" }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.sendDirectTransferStreamHandler);
+r.get("/data-transfer/preview", { tag: "settings:admin", mcpExcluded: "Instance archive import/export transfers binary data and credentials as an operator recovery workflow. Use Settings → Data transfer; application migration and volume backups have dedicated MCP tools." }, requireInstanceAdmin(), dataTransfer.previewInstanceExportHandler);
+r.post("/data-transfer/preview", { tag: "settings:admin", mcpExcluded: "Instance archive import/export transfers binary data and credentials as an operator recovery workflow. Use Settings → Data transfer; application migration and volume backups have dedicated MCP tools." }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.previewInstanceExportHandler);
+r.post("/data-transfer/direct/session", { tag: "settings:admin", mcpExcluded: "Instance archive import/export transfers binary data and credentials as an operator recovery workflow. Use Settings → Data transfer; application migration and volume backups have dedicated MCP tools." }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.createDirectReceiveSessionHandler);
+r.post("/data-transfer/direct/send", { tag: "settings:admin", mcpExcluded: "Instance archive import/export transfers binary data and credentials as an operator recovery workflow. Use Settings → Data transfer; application migration and volume backups have dedicated MCP tools." }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.sendDirectTransferHandler);
+r.post("/data-transfer/direct/send/stream", { tag: "settings:admin", mcpExcluded: "SSE transport for live progress. Use the resource’s JSON status/log tools over MCP, or an authenticated HTTP client for streaming." }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.sendDirectTransferStreamHandler);
 r.public(
   "post",
   "/data-transfer/direct/chunk/init",
@@ -210,12 +210,12 @@ r.public(
   }),
   dataTransfer.receiveDirectTransferHandler,
 );
-r.post("/data-transfer/export", { tag: "settings:admin" }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.exportInstanceHandler);
-r.post("/data-transfer/import/session", { tag: "settings:admin" }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.createFileUploadHandler);
-r.post("/data-transfer/import/session/:sessionId/preview", { tag: "settings:admin" }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.previewFileUploadHandler);
+r.post("/data-transfer/export", { tag: "settings:admin", mcpExcluded: "Instance archive import/export transfers binary data and credentials as an operator recovery workflow. Use Settings → Data transfer; application migration and volume backups have dedicated MCP tools." }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.exportInstanceHandler);
+r.post("/data-transfer/import/session", { tag: "settings:admin", mcpExcluded: "Instance archive import/export transfers binary data and credentials as an operator recovery workflow. Use Settings → Data transfer; application migration and volume backups have dedicated MCP tools." }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.createFileUploadHandler);
+r.post("/data-transfer/import/session/:sessionId/preview", { tag: "settings:admin", mcpExcluded: "Instance archive import/export transfers binary data and credentials as an operator recovery workflow. Use Settings → Data transfer; application migration and volume backups have dedicated MCP tools." }, requireInstanceAdmin(), transferControlBodyLimit, dataTransfer.previewFileUploadHandler);
 r.put(
   "/data-transfer/import/session/:sessionId/chunk/:index",
-  { tag: "settings:admin" },
+  { tag: "settings:admin", mcpExcluded: "Instance archive import/export transfers binary data and credentials as an operator recovery workflow. Use Settings → Data transfer; application migration and volume backups have dedicated MCP tools." },
   requireInstanceAdmin(),
   bodyLimit({
     maxSize: TRANSFER_CHUNK_BYTES,
@@ -226,7 +226,7 @@ r.put(
 );
 r.post(
   "/data-transfer/import/session/:sessionId/finalize/stream",
-  { tag: "settings:admin" },
+  { tag: "settings:admin", mcpExcluded: "SSE transport for live progress. Use the resource’s JSON status/log tools over MCP, or an authenticated HTTP client for streaming." },
   requireInstanceAdmin(),
   transferControlBodyLimit,
   dataTransfer.finalizeFileUploadStreamHandler,
@@ -238,6 +238,6 @@ r.use(
     onError: (c) => c.json({ error: "Import file exceeds the 500MB limit.", code: "PAYLOAD_TOO_LARGE" }, 413),
   }),
 );
-r.post("/data-transfer/import", { tag: "settings:admin" }, requireInstanceAdmin(), dataTransfer.importInstanceHandler);
+r.post("/data-transfer/import", { tag: "settings:admin", mcpExcluded: "Instance archive import/export transfers binary data and credentials as an operator recovery workflow. Use Settings → Data transfer; application migration and volume backups have dedicated MCP tools." }, requireInstanceAdmin(), dataTransfer.importInstanceHandler);
 
 export const systemRoutes = r.hono;

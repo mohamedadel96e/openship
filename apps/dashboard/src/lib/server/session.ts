@@ -107,6 +107,8 @@ export const getSession = cache(async (): Promise<SessionData | null> => {
 /* ------------------------------------------------------------------ */
 
 export type DeploymentInfo = {
+  /** Advertised only by the production SaaS API; contains no PostHog key. */
+  cloudAnalytics?: { dashboardOrigin: string };
   selfHosted: boolean;
   deployMode: string;
   /** True when OpenShip runs ON a server (self-hosted, non-desktop) — the host

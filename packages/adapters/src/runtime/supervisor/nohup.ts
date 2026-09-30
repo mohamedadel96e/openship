@@ -49,8 +49,8 @@ export class NohupSupervisor implements ProcessSupervisor {
   private async readPid(id: string): Promise<number | null> {
     try {
       const content = await this.executor.readFile(this.pidFile(id));
-      const pid = parseInt(content.trim(), 10);
-      return isNaN(pid) ? null : pid;
+      const pid = Number(content.trim());
+      return Number.isSafeInteger(pid) && pid > 1 ? pid : null;
     } catch {
       return null;
     }
@@ -166,21 +166,51 @@ export class NohupSupervisor implements ProcessSupervisor {
     const pid = await this.readPid(deploymentId);
     if (!pid) return;
 
-    if (await this.isAlive(pid)) {
-      // Kill entire process group (PGID = leader PID from setsid)
-      await this.executor.exec(`kill -- -${pid} 2>/dev/null || kill ${pid} 2>/dev/null || true`);
-
-      // Wait up to 10s for graceful shutdown
-      const deadline = Date.now() + 10_000;
-      while (Date.now() < deadline && (await this.isAlive(pid))) {
-        await new Promise((r) => setTimeout(r, 500));
+    // Without setsid (notably on macOS), the shell shares its caller's group.
+    // Capture descendants before signalling it: killing only the shell leaves
+    // npm/node children alive and still holding the application's port. Retain
+    // those PIDs through reparenting, and include children forked during shutdown.
+    const tracked = new Set([pid]);
+    let ownsGroup = false;
+    const readRunning = async () => {
+      const output = await this.executor.exec("ps -e -o pid=,ppid=,pgid=,stat=");
+      const rows = output.split("\n").flatMap(line => {
+        const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)$/);
+        return match ? [{ pid: Number(match[1]), parent: Number(match[2]), group: Number(match[3]), state: match[4]! }] : [];
+      });
+      if (!rows.length) throw new Error("Could not inspect supervised process tree");
+      ownsGroup ||= rows.some(row => row.pid === pid && row.group === pid);
+      if (ownsGroup) for (const row of rows) if (row.group === pid) tracked.add(row.pid);
+      let previousSize: number;
+      do {
+        previousSize = tracked.size;
+        for (const row of rows) if (tracked.has(row.parent)) tracked.add(row.pid);
+      } while (tracked.size !== previousSize);
+      // Zombies have already released their sockets; only their parent can reap them.
+      return rows.filter(row => tracked.has(row.pid) && !row.state.startsWith("Z"));
+    };
+    let running = await readRunning();
+    const signal = async (name: "TERM" | "KILL") => {
+      const targets = running.filter(row => !ownsGroup || row.group !== pid).map(row => row.pid);
+      if (ownsGroup && running.some(row => row.group === pid)) targets.unshift(-pid);
+      if (targets.length) await this.executor.exec(`kill -${name} -- ${targets.join(" ")} 2>/dev/null || true`);
+    };
+    const waitForExit = async (timeoutMs: number) => {
+      const deadline = Date.now() + timeoutMs;
+      while (running.length && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        running = await readRunning();
       }
+    };
 
-      // SIGKILL if still alive
-      if (await this.isAlive(pid)) {
-        await this.executor.exec(`kill -9 -- -${pid} 2>/dev/null || kill -9 ${pid} 2>/dev/null || true`);
-      }
+    await signal("TERM");
+    await waitForExit(10_000);
+    if (running.length) {
+      await signal("KILL");
+      await waitForExit(2_000);
     }
+    if (running.length) throw new Error(`Supervised processes did not stop: ${running.map(row => row.pid).join(", ")}`);
+    await this.removePid(deploymentId);
   }
 
   async start(_deploymentId: string): Promise<void> {

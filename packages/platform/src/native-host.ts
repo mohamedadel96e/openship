@@ -197,7 +197,7 @@ export async function createNativePlatform(value: NativePlatformOptions): Promis
   try { await ready; } catch (error) { await worker.terminate(); throw error; }
   const methods = ["create", "get", "list", "logs", "buildStatus", "restorePlan", "cancel", "respond", "rollback", "redeploy", "pin", "keep", "reject", "remove", "restart", "skipPortCheck", "prepare", "buildAccess", "start", "containerInfo", "containerUsage", "pendingActions", "sslStatus", "renewSsl"] as const;
   const deployments = Object.fromEntries(methods.map(name => [name, (...args: unknown[]) => call(`deployments.${name}`, ...args)])) as Omit<PlatformDeploymentOperations, "events">;
-  const projectResources = Object.fromEntries(["create", "ensure", "get", "list", "getHome", "update", "scanLocal", "importLocal", "listLocal", ...Object.keys(ProjectControlSchemas)].map(name => [name, (...args: unknown[]) => call(`projects.${name}`, ...args)])) as Omit<PlatformProjectOperations, "streamRuntimeLogs" | "streamClusterDatabaseEvents" | "openServerLogStream" | "retryRoutingStream">;
+  const projectResources = Object.fromEntries(["create", "ensure", "get", "list", "getHome", "update", "scanLocal", "importLocal", "listLocal", ...Object.keys(ProjectControlSchemas)].map(name => [name, (...args: unknown[]) => call(`projects.${name}`, ...args)])) as Omit<PlatformProjectOperations, "streamRuntimeLogs" | "streamClusterDatabaseEvents" | "streamClusterVolumeEvents" | "openServerLogStream" | "retryRoutingStream">;
   const sources: PlatformSourceOperations = {
     open: (...args) => call("sources.open", ...args), stage: (...args) => call("sources.stage", ...args),
     scan: (...args) => call("sources.scan", ...args), upload: (...args) => call("sources.upload", ...args), reveal: (...args) => call("sources.reveal", ...args),
@@ -205,7 +205,7 @@ export async function createNativePlatform(value: NativePlatformOptions): Promis
   const serviceResources = Object.fromEntries([...Object.keys(ServiceCollectionSchemas), ...Object.keys(ServiceResourceSchemas)].map(name => [name, (...args: unknown[]) => call(`services.${name}`, ...args)])) as Omit<PlatformServiceOperations, "streamLogs">;
   const domainResources = Object.fromEntries(Object.keys({ ...DomainCollectionSchemas, ...DomainResourceSchemas, ...DomainScopedSchemas }).map(name => [name, (...args: unknown[]) => call(`domains.${name}`, ...args)])) as Omit<PlatformDomainOperations, "verifyStream">;
   const dns = Object.fromEntries(Object.keys(DnsOperationSchemas).map(name => [name, (...args: unknown[]) => call(`dns.${name}`, ...args)])) as PlatformDnsOperations;
-  const serverResources = Object.fromEntries([...Object.keys({ ...ServerCollectionSchemas, ...ServerResourceSchemas }), "getInstallSession", "respondToInstall"].map(name => [name, (...args: unknown[]) => call(`servers.${name}`, ...args)])) as Omit<PlatformServerOperations, "openInstallStream" | "openInstallEvents" | "openMonitor" | "openContainerApplyStream" | "openContainerApplyEvents" | "openManagedNetworkPreparationEvents" | "openManagedNetworkOperationEvents" | "openClusterEvents" | "openClusterRuntimeEvents">;
+  const serverResources = Object.fromEntries([...Object.keys({ ...ServerCollectionSchemas, ...ServerResourceSchemas }), "getInstallSession", "respondToInstall"].map(name => [name, (...args: unknown[]) => call(`servers.${name}`, ...args)])) as Omit<PlatformServerOperations, "openInstallStream" | "openInstallEvents" | "openMonitor" | "openContainerApplyStream" | "openContainerApplyEvents" | "openManagedNetworkPreparationEvents" | "openManagedNetworkOperationEvents" | "openClusterEvents" | "openClusterRuntimeEvents" | "openClusterStorageEvents">;
   const credentials = Object.fromEntries(Object.keys({ ...CredentialCollectionSchemas, ...CredentialResourceSchemas }).map(name => [name, (...args: unknown[]) => call(`credentials.${name}`, ...args)])) as PlatformCredentialOperations;
   async function* streamValues<T>(streamId: string, signal?: AbortSignal): AsyncGenerator<T> {
     const abort = () => { void call("stream.close", streamId).catch(() => {}); };
@@ -241,6 +241,7 @@ export async function createNativePlatform(value: NativePlatformOptions): Promis
     ...projectResources,
     streamRuntimeLogs: (ctx, id, input = {}, options = {}) => streamEvents("projects.streamRuntimeLogs", ctx, [id, input], options.signal),
     streamClusterDatabaseEvents: (ctx, id, options = {}) => streamEvents("projects.streamClusterDatabaseEvents", ctx, [id], options.signal),
+    streamClusterVolumeEvents: (ctx, id, options = {}) => streamEvents("projects.streamClusterVolumeEvents", ctx, [id], options.signal),
     retryRoutingStream: (ctx, id, options = {}) =>
       streamEvents("projects.retryRoutingStream", ctx, [id], options.signal),
     async openServerLogStream(ctx, id, input = {}, options = {}) {
@@ -262,6 +263,7 @@ export async function createNativePlatform(value: NativePlatformOptions): Promis
     openManagedNetworkOperationEvents: (ctx, id, settings = {}) => openStreamValues<DeploymentEvent>("servers.managedNetworkOperationEvents", ctx, [id], settings.signal),
     openClusterEvents: (ctx, settings = {}) => openStreamValues<DeploymentEvent>("servers.clusterEvents", ctx, [], settings.signal),
     openClusterRuntimeEvents: (ctx, id, settings = {}) => openStreamValues<DeploymentEvent>("servers.clusterRuntimeEvents", ctx, [id], settings.signal),
+    openClusterStorageEvents: (ctx, id, settings = {}) => openStreamValues<DeploymentEvent>("servers.clusterStorageEvents", ctx, [id], settings.signal),
     openContainerApplyStream: (ctx, id, input, settings = {}) => openStreamValues<DeploymentEvent>("servers.applyContainer", ctx, [id, input], settings.signal),
     openContainerApplyEvents: (ctx, id, input, settings = {}) => openStreamValues<DeploymentEvent>("servers.containerApplyEvents", ctx, [id, input], settings.signal),
     openInstallStream: (ctx, id, input, settings = {}) => openStreamValues<DeploymentEvent>("servers.installComponents", ctx, [id, input], settings.signal),

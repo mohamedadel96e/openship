@@ -13,6 +13,19 @@ export type NewDeployment = typeof deployment.$inferInsert;
 export type BuildSession = typeof buildSession.$inferSelect;
 export type NewBuildSession = typeof buildSession.$inferInsert;
 
+/** A terminal outcome does not end the worker's durable execution lease. */
+export function liveBuildExecutionCondition() {
+  // Keep inner columns explicit: relational queries alias interpolated columns
+  // to the outer deployment table.
+  return sql`exists (
+    select 1 from "build_session" as "active_build_session"
+    where "active_build_session"."deployment_id" = ${deployment.id}
+      and "active_build_session"."project_id" = ${deployment.projectId}
+      and "active_build_session"."started_at" is not null
+      and "active_build_session"."finished_at" is null
+  )`;
+}
+
 // ─── Repository ──────────────────────────────────────────────────────────────
 
 export function createDeploymentRepo(db: Database, encryption: ConfigurationEncryption) {
@@ -119,14 +132,7 @@ export function createDeploymentRepo(db: Database, encryption: ConfigurationEncr
           eq(deployment.projectId, projectId),
           or(
             inArray(deployment.status, ["queued", "building", "deploying"]),
-            sql`exists (
-              select 1
-              from "build_session" as "active_build_session"
-              where "active_build_session"."deployment_id" = ${deployment.id}
-                and "active_build_session"."project_id" = ${deployment.projectId}
-                and "active_build_session"."started_at" is not null
-                and "active_build_session"."finished_at" is null
-            )`,
+            liveBuildExecutionCondition(),
           ),
         ),
       })).map(codec.openDeployment);

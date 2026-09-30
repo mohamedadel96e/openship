@@ -6,8 +6,7 @@
  * consistently, and the webhook-proxy + best-effort semantics live in one place
  * rather than being copy-pasted per caller:
  *   - cloud project      → the runtime's page/workspace primitives
- *                          (cloud-route.service; the CloudInfraProvider routing
- *                          stub is a no-op).
+ *                          (cloud-route.service).
  *   - self-hosted target → the DEPLOYMENT'S OWN routing provider (the local box,
  *                          or a remote server/sandbox over SSH) resolved via
  *                          resolveDeploymentRuntime — never the global
@@ -33,8 +32,10 @@ import type {
   RouteHostRedirect,
 } from "@repo/adapters";
 import { edgeProxyFor } from "@repo/adapters";
-import { safeErrorMessage, sanitizeProxySettings, type RoutingConfig } from "@repo/core";
+import { AppError, safeErrorMessage, sanitizeProxySettings, type RoutingConfig } from "@repo/core";
 import { platform } from "./platform-config";
+import { activeDeploymentForProject, findActiveDeployment } from "./active-deployment";
+import { readDeployMeta, resolveProjectLiveDeployTarget } from "../modules/projects/project-deploy-target";
 import {
   disposePlatform,
   resolveDeploymentPlatform,
@@ -156,16 +157,24 @@ export async function reconcileProjectRoutes(
   const removes = opts.removes ?? [];
   if (registers.length === 0 && removes.length === 0) return;
 
+  if (opts.deployment && !activeDeploymentForProject(project, opts.deployment)) {
+    throw new AppError("The active deployment changed. Refresh the project and retry routing.", 409, "DEPLOYMENT_CHANGED");
+  }
+  const deployment = opts.deployment ?? await findActiveDeployment(project);
+  const target = deployment
+    ? await resolveProjectLiveDeployTarget(project, deployment)
+    : readDeployMeta(project, null);
+
   // Cloud: page/workspace primitives. The webhook proxy is an nginx concern, so
   // it does not apply here (cloud webhook delivery uses a different path).
-  if (project.cloudWorkspaceId) {
+  if (target.deployTarget === "cloud") {
     for (const r of removes) await removeCloudProjectRoute(project, r);
     for (const r of registers) {
       await reapplyCloudProjectRoute(project, {
         hostname: r.hostname,
         port: r.port,
         isCustomDomain: r.isCustomDomain,
-      });
+      }, deployment);
       opts.onLog?.(`Applied route ${r.hostname}.`);
     }
     return;
@@ -178,9 +187,9 @@ export async function reconcileProjectRoutes(
   // loopback bridge, and this path only ever wanted `.routing` — so it was
   // binding a listener per route apply and never closing it.
   let resolved: ResolvedDeploymentPlatform | null = null;
-  if (!opts.routing && opts.deployment) {
-    resolved = await resolveDeploymentPlatform((opts.deployment.meta ?? {}) as DeploymentMeta, {
-      organizationId: opts.deployment.organizationId,
+  if (!opts.routing && deployment) {
+    resolved = await resolveDeploymentPlatform((deployment.meta ?? {}) as DeploymentMeta, {
+      organizationId: deployment.organizationId,
     });
   }
   const routing = opts.routing ?? resolved?.platform.routing ?? null;

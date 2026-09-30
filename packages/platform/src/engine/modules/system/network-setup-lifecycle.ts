@@ -7,6 +7,7 @@ import { notifyClusterDatabase } from "../projects/cluster-database.events";
 type NetworkSetupWorker = { organizationId: string; id: string } & (
   | { kind: "preparation" | "operation"; generation: number }
   | { kind: "runtime"; generation: number; clusterId: string }
+  | { kind: "storage"; generation: number; clusterId: string }
   | { kind: "database"; generation: number; projectId: string }
   | { kind: "verification" }
 );
@@ -73,8 +74,19 @@ export function createNetworkSetupLifecycle(dependencies: {
 const lifecycle = createNetworkSetupLifecycle({
   defer: deferBackgroundWork,
   async interrupt(worker) {
-    if (worker.kind === "database") {
-      const changed = await repos.clusterDatabase.interrupt(worker.id, worker.generation, "OpenShip stopped during database setup. Retry to inspect the saved resources and continue.");
+    if (worker.kind === "storage") {
+      const changed = await repos.clusterStorage.interrupt(
+        worker.id,
+        worker.generation,
+        "OpenShip stopped during storage setup. Retry to inspect the saved installation and continue.",
+      );
+      if (changed.length) notifyNetworkSetup(worker.organizationId, "storage", worker.clusterId);
+    } else if (worker.kind === "database") {
+      const changed = await repos.clusterDatabase.interrupt(
+        worker.id,
+        worker.generation,
+        "OpenShip stopped during database setup. Retry to inspect the saved resources and continue.",
+      );
       if (changed.length) notifyClusterDatabase(worker.organizationId, worker.projectId);
     } else if (worker.kind === "runtime") {
       const changed = await repos.clusterRuntime.interrupt(
@@ -113,6 +125,8 @@ export const stopNetworkSetups = lifecycle.stop;
 
 /** Metadata recovery only. Shared databases retain other controllers' valid leases. */
 export async function recoverNetworkSetups(exclusive: boolean): Promise<void> {
+  const storage = await repos.clusterStorage.recoverInterrupted(exclusive);
+  for (const row of storage) notifyNetworkSetup(row.organizationId, "storage", row.clusterId);
   const databases = await repos.clusterDatabase.recoverInterrupted(exclusive);
   for (const row of databases) notifyClusterDatabase(row.organizationId, row.projectId);
   const runtimes = await repos.clusterRuntime.recoverInterrupted(exclusive);
@@ -122,6 +136,12 @@ export async function recoverNetworkSetups(exclusive: boolean): Promise<void> {
   const { operations, verifications } = await repos.serverCluster.recoverInterrupted(exclusive);
   for (const row of operations) notifyNetworkSetup(row.organizationId, "operation", row.id);
   for (const row of verifications) notifyNetworkSetup(row.organizationId, "overview");
-  const count = preparations.length + operations.length + verifications.length + runtimes.length + databases.length;
+  const count =
+    storage.length +
+    preparations.length +
+    operations.length +
+    verifications.length +
+    runtimes.length +
+    databases.length;
   if (count) console.log(`[network-setup] marked ${count} abandoned run(s) interrupted`);
 }

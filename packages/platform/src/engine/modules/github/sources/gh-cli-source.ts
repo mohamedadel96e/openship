@@ -32,6 +32,9 @@ import type {
 export type GhCliStatus = LocalGhStatus;
 
 export class GhCliSource {
+  // Sources live for one request; home and owner listing share one verification.
+  private statusPromise?: Promise<GhCliStatus>;
+
   constructor(private readonly userId: string) {}
 
   /** Raw local gh token (or null). */
@@ -41,13 +44,16 @@ export class GhCliSource {
 
   /** gh CLI auth status + profile. */
   status(): Promise<GhCliStatus> {
-    return getLocalGhStatus();
+    return this.statusPromise ??= getLocalGhStatus();
   }
 
   /** Every repo the gh user can see (owner + collaborator + org member). */
   async listAllRepos(): Promise<MappedRepository[]> {
     const raw = await listLocalGhRepos(this.userId);
-    return mapRepositories(Array.isArray(raw) ? (raw as GitHubRepository[]) : []);
+    return mapRepositories(Array.isArray(raw) ? (raw as GitHubRepository[]) : []).map((repo) => ({
+      ...repo,
+      source: "cli",
+    }));
   }
 
   /** Repos for a specific owner, filtered from the affiliation list. */
@@ -62,13 +68,14 @@ export class GhCliSource {
 
   /**
    * The gh user + every org they belong to — for the owner picker. Tagged
-   * source: "cli" ("Local only"), incl. orgs with no App installation.
+   * source: "cli", including orgs with no App installation. Deployment access
+   * is resolved separately for the chosen build target.
    */
   async listOwners(): Promise<MappedAccount[]> {
     const out: MappedAccount[] = [];
     const seen = new Set<string>();
 
-    const st = await getLocalGhStatus();
+    const st = await this.status();
     if (st.available && st.login) {
       out.push({
         login: st.login,

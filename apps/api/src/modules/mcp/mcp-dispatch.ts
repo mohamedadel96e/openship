@@ -1,6 +1,7 @@
 import { app } from "../../app";
 import { SDK_SCOPE_HEADER } from "@repo/contracts";
 import { Value } from "@sinclair/typebox/value";
+import type { TSchema } from "@sinclair/typebox";
 import { internalClientHeader, internalSourceHeader } from "../../lib/call-source";
 import { McpOrganizationIdSchema, type McpToolDef } from "./mcp-tools";
 
@@ -50,8 +51,27 @@ export async function dispatchTool(
   const orgId = args.organizationId;
   if (orgId !== undefined && !Value.Check(McpOrganizationIdSchema, orgId)) {
     return {
-      status: 400, ok: false,
-      data: { error: "organizationId must be a nonempty workspace ID from get_permissions_workspaces, without whitespace or control characters", code: "INVALID_ORGANIZATION_ID" },
+      status: 400,
+      ok: false,
+      data: {
+        error:
+          "organizationId must be a nonempty workspace ID from get_permissions_workspaces, without whitespace or control characters",
+        code: "INVALID_ORGANIZATION_ID",
+      },
+    };
+  }
+  if (!Value.Check(tool.inputSchema as TSchema, args)) {
+    // Never echo input values or schemas: either may contain credentials.
+    return {
+      status: 400,
+      ok: false,
+      data: {
+        error: "Invalid tool arguments. Use this tool's inputSchema from tools/list.",
+        code: "INVALID_TOOL_ARGUMENTS",
+        details: [...Value.Errors(tool.inputSchema as TSchema, args)]
+          .slice(0, 10)
+          .map(({ path, message }) => ({ path, message })),
+      },
     };
   }
   // Fill path params.
@@ -59,7 +79,11 @@ export async function dispatchTool(
   for (const param of tool.pathParams) {
     const value = args[param];
     if (value === undefined || value === null || `${value}` === "") {
-      return { status: 400, ok: false, data: { error: `Missing required path parameter: ${param}` } };
+      return {
+        status: 400,
+        ok: false,
+        data: { error: `Missing required path parameter: ${param}` },
+      };
     }
     path = path.replace(`:${param}`, encodeURIComponent(String(value)));
   }
@@ -97,14 +121,26 @@ export async function dispatchTool(
   }
 
   let body: string | undefined;
-  if (tool.hasBody && args.body && typeof args.body === "object") {
+  if (tool.hasBody) {
     headers["content-type"] = "application/json";
-    body = JSON.stringify(args.body);
+    body = JSON.stringify(args.body ?? {});
   }
 
-  const res = await app.fetch(
-    new Request(url.toString(), { method: tool.method, headers, body }),
-  );
+  const res = await app.fetch(new Request(url.toString(), { method: tool.method, headers, body }));
+
+  if (res.headers.get("content-type")?.split(";", 1)[0]?.trim() === "text/event-stream") {
+    // A mistakenly advertised stream must not leave tools/call waiting forever.
+    await res.body?.cancel();
+    return {
+      status: 502,
+      ok: false,
+      data: {
+        error:
+          "This endpoint returned a live event stream. Read the operation's JSON status/log endpoint; live streams require an authenticated HTTP client.",
+        code: "MCP_STREAM_NOT_SUPPORTED",
+      },
+    };
+  }
 
   const text = await res.text();
   let data: unknown = text;
@@ -113,5 +149,10 @@ export async function dispatchTool(
   } catch {
     /* non-JSON response — return the raw text */
   }
-  return { status: res.status, ok: res.ok, data, ...(res.ok && typeof orgId === "string" ? { organizationId: orgId } : {}) };
+  return {
+    status: res.status,
+    ok: res.ok,
+    data,
+    ...(res.ok && typeof orgId === "string" ? { organizationId: orgId } : {}),
+  };
 }

@@ -54,7 +54,9 @@ const {
       listByProject: vi.fn(),
       reconcileFromCompose: vi.fn(),
       syncFromCompose: vi.fn(),
+      seedDraftAppResourceDefaults: vi.fn(),
     },
+    customAppTemplate: { findByAppId: vi.fn(async () => undefined) },
     serviceDeployment: {
       latestByProject: vi.fn(),
     },
@@ -139,7 +141,8 @@ import {
   type DeploymentConfigSnapshot,
 } from "@repo/platform/engine/modules/deployments/build.service";
 import { createServiceRepo, toComposeSpec, type Database } from "@repo/db";
-import { ENV_MASK, type ReleaseSource } from "@repo/core";
+import { ENV_MASK, getAppTemplate, type ReleaseSource, type ResourceValues } from "@repo/core";
+import { cloudDockerResources } from "@repo/platform/engine/lib/resources";
 import {
   newFolderSessionId,
   putFolderSession,
@@ -222,10 +225,13 @@ function installStatefulComposeRepo<T extends Record<string, unknown>>(initial: 
     query: { service: { findMany: async () => [stored] } },
     update: () => ({
       set: (data: Record<string, unknown>) => ({
-        where: async () => {
-          writes.push(configuration.openService(data));
-          stored = { ...stored, ...data } as T;
-        },
+        where: () => ({
+          returning: async () => {
+            writes.push(configuration.openService(data));
+            stored = { ...stored, ...data } as T;
+            return [stored];
+          },
+        }),
       }),
     }),
   } as unknown as Database;
@@ -559,6 +565,33 @@ describe("resolveSnapshotTarget", () => {
   });
 });
 
+/**
+ * Release commands are FROZEN onto the deployment, for the same reason `volumes`
+ * is: a redeploy of an old deployment must replay the commands that release
+ * declared, not whatever the project says today. The absent case matters just as
+ * much — the key must not appear at all, so a snapshot from a project with no
+ * release phase is byte-identical to one written before the field existed (and a
+ * redeploy of a pre-existing deployment stays a no-op).
+ */
+describe("buildConfigSnapshot — release commands", () => {
+  it("freezes the project's declared commands onto the snapshot", () => {
+    const snapshot = buildConfigSnapshot(
+      baseProject({ releaseCommands: ["php artisan migrate --force", "php artisan db:seed --force"] }) as any,
+    );
+    expect(snapshot.releaseCommands).toEqual([
+      "php artisan migrate --force",
+      "php artisan db:seed --force",
+    ]);
+  });
+
+  it("omits the key entirely for null, [] and a project that never declared any", () => {
+    for (const releaseCommands of [null, [], undefined]) {
+      const snapshot = buildConfigSnapshot(baseProject({ releaseCommands }) as any);
+      expect("releaseCommands" in snapshot).toBe(false);
+    }
+  });
+});
+
 describe("triggerDeployment", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -726,6 +759,124 @@ describe("triggerDeployment", () => {
       [expect.objectContaining({ key: "NEXT_PUBLIC_API_URL", isSecret: false })],
       [],
     );
+  });
+
+  it.each(
+    ["manual", "webhook", "build-access", "redeploy"].flatMap((entry) =>
+      ["github", "local"].map((source) => ({ entry, source })),
+    ),
+  )("deploys an app with an attached database via $entry from $source (#959)", async ({ entry, source }) => {
+    const project = baseProject({
+      framework: source === "github" ? "vite" : "node",
+      composePath: null,
+      localPath: source === "local" ? "/srv/app" : null,
+      gitProvider: source,
+      gitOwner: source === "github" ? "acme" : null,
+      gitRepo: source === "github" ? "app" : null,
+      gitUrl: source === "github" ? "https://github.com/acme/app.git" : null,
+    });
+    const services = [
+      { id: "svc-app", name: "app", kind: "monorepo", enabled: true, rootDirectory: "./" },
+      {
+        id: "svc-db", name: "postgres", kind: "compose", enabled: true,
+        image: "postgres:16-alpine", build: null, importedSpec: null,
+        environment: { POSTGRES_PASSWORD: "saved-production-password" },
+        volumes: ["postgres_data:/var/lib/postgresql/data"],
+      },
+    ];
+    repos.project.findById.mockResolvedValue(project);
+    repos.service.listByProject.mockResolvedValue(services);
+    repos.project.getEnvMap.mockResolvedValue({ SHARED: encrypt("production") });
+    // This is the real scan result for an app whose repo also contains a
+    // local-development Compose file (covered by prepare.service.test.ts).
+    resolveProjectInfo.mockResolvedValue({
+      stack: project.framework,
+      projectType: "app",
+      services: source === "local" ? [] : undefined,
+      openshipEnv: { SHARED: "repository-default", FROM_REPO: "source-default" },
+    });
+    syncProjectRouteState.mockResolvedValue({ publicEndpoints: [] });
+
+    if (entry === "redeploy") {
+      repos.deployment.findById.mockResolvedValue({
+        id: "dep-old", projectId: project.id, organizationId: project.organizationId,
+        branch: "main", environment: "production", commitSha: "old-sha",
+        meta: releaseSnapshot({ framework: project.framework as string }),
+      });
+      await redeployBuildSession(ctx, "dep-old", { useExistingCommit: true });
+    } else {
+      const actualPipeline = await vi.importActual<
+        typeof import("@repo/platform/engine/modules/deployments/build-pipeline")
+      >("@repo/platform/engine/modules/deployments/build-pipeline");
+      resolveServicePipelineMode.mockImplementationOnce(actualPipeline.resolveServicePipelineMode);
+
+      if (entry === "build-access") {
+        await requestBuildAccess(ctx, { projectId: project.id });
+      } else {
+        await triggerDeployment(ctx, {
+          projectId: project.id,
+          branch: "main",
+          commitSha: "1eeaf7692a19ee6e7ecb64b9d1a5c3ee7c0ac2f5",
+          ...(entry === "webhook" ? { trigger: "webhook" as const, changedPaths: ["src/main.ts"] } : {}),
+        });
+      }
+    }
+
+    expect(repos.service.reconcileFromCompose).not.toHaveBeenCalled();
+    expect(repos.service.syncFromCompose).not.toHaveBeenCalled();
+    expect(repos.deployment.create).toHaveBeenCalledOnce();
+    const deployment = repos.deployment.create.mock.calls[0][0];
+    expect(deployment.meta.composeServices).toEqual([
+      expect.objectContaining({ name: "app", kind: "monorepo", rootDirectory: "./" }),
+      expect.objectContaining({
+        name: "postgres", image: services[1].image,
+        environment: services[1].environment, volumes: services[1].volumes,
+      }),
+    ]);
+    expect(decrypt(deployment.envVars.SHARED)).toBe("production");
+    expect(decrypt(deployment.envVars.FROM_REPO)).toBe("source-default");
+    expect(kickoffBuild).toHaveBeenCalledOnce();
+  });
+
+  it.each(["compose-path", "compose-framework", "imported-baseline", "detected-services"])(
+    "still rejects an empty source required by %s (#959)", async (source) => {
+      repos.project.findById.mockResolvedValue(baseProject({
+        framework: source === "compose-framework" ? "docker-compose" : "vite",
+        composePath: source === "compose-path" ? "compose.yml" : null,
+      }));
+      repos.service.listByProject.mockResolvedValue(source === "compose-path" ? [] : [{
+        ...composeServices[0],
+        importedSpec: source === "imported-baseline" ? toComposeSpec(composeServices[0]) : null,
+      }]);
+      resolveProjectInfo.mockResolvedValue({
+        projectType: source === "detected-services" ? "services" : "app",
+        services: [],
+      });
+
+      await expect(triggerDeployment(ctx, { projectId: "project-1" })).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringContaining("contains no services"),
+      });
+      expect(repos.service.reconcileFromCompose).not.toHaveBeenCalled();
+      expect(repos.deployment.create).not.toHaveBeenCalled();
+      expect(kickoffBuild).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { framework: "node", importedSpec: toComposeSpec(composeServices[0]) },
+    { framework: "unknown", importedSpec: null },
+  ])("keeps source reconciliation for $framework service projects (#959)", async ({ framework, importedSpec }) => {
+    repos.project.findById.mockResolvedValue(baseProject({ framework, composePath: null }));
+    repos.service.listByProject.mockResolvedValue([{ ...composeServices[0], importedSpec }]);
+    // Native openship.json services retain their detected framework. Migrated
+    // projects can start with an unknown framework and no imported baseline.
+    resolveProjectInfo.mockResolvedValue({ projectType: "services", services: composeServices });
+
+    await triggerDeployment(ctx, { projectId: "project-1" });
+
+    expect(repos.service.reconcileFromCompose).toHaveBeenCalledWith("project-1", composeServices);
+    expect(kickoffBuild).toHaveBeenCalledOnce();
   });
 
   it("reconciles a code-only webhook when a persisted image expression depends on env", async () => {
@@ -1692,6 +1843,59 @@ describe("redeployBuildSession environment snapshot", () => {
     expect(repos.deployment.create).toHaveBeenCalledWith(
       expect.objectContaining({ envVars: { MANUAL_ENV: "keep-me" } }),
     );
+  });
+
+  it("refreshes missing Cloud app defaults before freezing a failed installation's retry", async () => {
+    const project = baseProject({
+      appTemplateId: "supabase",
+      isApp: true,
+      deployTarget: "cloud",
+      gitProvider: null,
+      localPath: null,
+      hasBuild: false,
+    });
+    const services = getAppTemplate("supabase")!.services!.map((service) => ({
+      id: `svc-${service.name}`,
+      projectId: project.id,
+      name: service.name,
+      kind: "compose",
+      enabled: true,
+      image: service.image,
+      advanced: { stopGracePeriod: "30s" } as Record<string, unknown>,
+    }));
+    const previous = {
+      ...baseSnapshot(),
+      deployTarget: "cloud",
+      serviceDeploymentMode: "services",
+      composeServices: services.map((service) => ({ ...service, advanced: { ...service.advanced } })),
+    };
+    repos.project.findById.mockResolvedValue(project);
+    repos.deployment.findById.mockResolvedValue({
+      id: "dep-old", projectId: project.id, organizationId: project.organizationId,
+      branch: "main", environment: "production", framework: "docker-compose", status: "failed",
+      meta: previous,
+    });
+    repos.service.listByProject.mockResolvedValue(services);
+    repos.service.seedDraftAppResourceDefaults.mockImplementationOnce(async ({ profiles }) => {
+      for (const service of services) {
+        const profile = profiles.find((entry: { name: string }) => entry.name === service.name);
+        if (profile) service.advanced.resources = { ...profile.resources };
+      }
+    });
+
+    await redeployBuildSession(ctx, "dep-old");
+
+    const queued = repos.deployment.create.mock.calls[0]![0];
+    expect(cloudDockerResources({
+      resources: queued.meta.resources,
+      services: queued.meta.composeServices.map((service: { advanced: { resources: ResourceValues } }) => ({
+        resources: service.advanced.resources,
+      })),
+    })).toEqual({ cpuCores: 4, memoryMb: 8192, diskMb: 40960 });
+    expect(queued.envVars).toEqual({ MANUAL_ENV: "keep-me" });
+    expect(queued.meta.composeServices.every((service: { advanced: { stopGracePeriod: string } }) =>
+      service.advanced.stopGracePeriod === "30s")).toBe(true);
+    expect(previous.composeServices.every((service) => service.advanced.resources === undefined)).toBe(true);
   });
 
   it("refreshes openship.json env for a single-app redeploy without parsing Compose", async () => {

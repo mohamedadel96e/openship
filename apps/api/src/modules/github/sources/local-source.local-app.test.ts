@@ -17,6 +17,14 @@ vi.mock("@repo/platform/engine/modules/github/github.auth", () => ({
 }));
 vi.mock("@repo/platform/engine/modules/github/github.service", () => ({ listUserOwnedRepos: vi.fn() }));
 vi.mock("@repo/platform/engine/modules/github/github.token", () => ({ tokenFor: vi.fn(), canResolveTokenFor: vi.fn() }));
+vi.mock("@repo/platform/engine/modules/github/github.local-auth", () => ({
+  getLocalGhToken: vi.fn(),
+  getLocalGhStatus: async () => ({ available: true, login: "operator", method: "token" }),
+  listLocalGhRepos: async () => ["shared", "cli-only"].map((name) => ({
+    full_name: `acme/${name}`, name, owner: { login: "acme" },
+  })),
+  listLocalGhOrgs: async () => [],
+}));
 vi.mock("@repo/platform/engine/modules/github/sources/app-source", () => ({
   GitHubAppSource: class {
     mode = "app";
@@ -30,6 +38,7 @@ vi.mock("@repo/platform/engine/modules/github/sources/app-source", () => ({
 }));
 
 import { LocalGitHubSource } from "@repo/platform/engine/modules/github/sources/local-source";
+import { GhCliSource } from "@repo/platform/engine/modules/github/sources/gh-cli-source";
 
 const repo = (name: string, source: "app" | "cli") => ({
   full_name: `acme/${name}`,
@@ -65,16 +74,15 @@ describe("LocalGitHubSource with an operator-owned App", () => {
     };
   });
 
-  it("deduplicates the repo browser and marks App-covered CLI repos as remote-capable", async () => {
-    const gh = {
-      listReposForOwner: vi.fn(async () => [repo("shared", "cli"), repo("cli-only", "cli")]),
-      listAllRepos: vi.fn(),
-      listOwners: vi.fn(),
-      status: vi.fn(),
-    } as any;
-    const source = new LocalGitHubSource({ userId: "u", organizationId: "o" } as any, gh);
+  it.each(["owner", "home"])("deduplicates the %s browser and retains App and CLI coverage", async (view) => {
+    const source = new LocalGitHubSource(
+      { userId: "u", organizationId: "o" } as any,
+      new GhCliSource("u"),
+    );
 
-    const repos = await source.listReposForOwner("acme");
+    const repos = view === "owner"
+      ? await source.listReposForOwner("acme")
+      : (await source.getHome()).repos;
 
     expect(repos?.map((row) => [row.name, row.source]).sort()).toEqual([
       ["app-only", "app"],

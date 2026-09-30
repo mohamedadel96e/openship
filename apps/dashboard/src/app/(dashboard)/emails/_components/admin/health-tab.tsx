@@ -27,6 +27,8 @@ import { Icon as UiIcon, type IconName } from "@repo/ui/icons";
  */
 
 import { useCallback, useEffect, useState } from "react";
+import type { MailCertificateHealth } from "@repo/core";
+import { CertificateHealthCard } from "./certificate-card";
 import {
   mailAdminApi,
   mailApi,
@@ -65,6 +67,7 @@ export function HealthTab({ serverId }: { serverId: string }) {
   const [delivery, setDelivery] = useState<MailDeliveryHealth | null>(null);
   const [reachability, setReachability] = useState<MailPortReachability | null>(null);
   const [reachabilityRefreshing, setReachabilityRefreshing] = useState(false);
+  const [certificate, setCertificate] = useState<MailCertificateHealth | null>(null);
   const [componentsErr, setComponentsErr] = useState<string | null>(null);
   const [componentsLastUpdated, setComponentsLastUpdated] = useState<number | null>(null);
 
@@ -78,6 +81,7 @@ export function HealthTab({ serverId }: { serverId: string }) {
       setComponents(r.components);
       setDelivery(r.delivery);
       setReachability(r.reachability);
+      setCertificate(r.certificate ?? null);
       setComponentsErr(null);
       setComponentsLastUpdated(Date.now());
     } catch (err) {
@@ -141,6 +145,7 @@ export function HealthTab({ serverId }: { serverId: string }) {
     delivery,
     t.emailsAdmin.health,
     reachability,
+    certificate,
   );
 
   return (
@@ -173,6 +178,8 @@ export function HealthTab({ serverId }: { serverId: string }) {
           </div>
         </div>
       )}
+
+      <CertificateHealthCard health={certificate} serverId={serverId} />
 
       {/* ── Daemons ───────────────────────────────────────────────────── */}
       <SectionCard

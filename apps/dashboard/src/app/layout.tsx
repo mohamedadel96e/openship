@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { IconProvider } from "@repo/ui/icons";
+import { runtimeTarget } from "@repo/core";
+import { CLOUD_ICON_BASE_URL, IconProvider, LOCAL_ICON_BASE_URL } from "@repo/ui/icons";
 import { cookies, headers } from "next/headers";
 import "./globals.css";
 import { ThemeProvider, ThemeScript } from "@/components/theme-provider";
@@ -8,6 +9,8 @@ import { I18nProvider } from "@/components/i18n-provider";
 import { brandNameFor } from "@/lib/product-view";
 import { resolveRequestProductView } from "@/lib/server/product-view";
 import { AuthProvider } from "@/context/AuthContext";
+import { CloudAnalytics } from "@/components/cloud-analytics";
+import { getDeploymentInfoOrNull } from "@/lib/server/session";
 import { NetworkErrorHandler } from "@/components/network-error-handler";
 import { ModalProvider } from "@/context/ModalContext";
 import { DesktopChrome } from "@/components/desktop-chrome";
@@ -96,13 +99,20 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // (a module-load constant that can't read a runtime env) targets it. Read
   // per-request thanks to `force-dynamic` above.
   const localApiOrigin = process.env.OPENSHIP_LOCAL_API_URL;
+  const deploymentInfo = await getDeploymentInfoOrNull();
+  // Resolve the asset host before SSR, including auth and API-unavailable pages.
+  // Cloud-connected desktop instances still use their bundled icons.
+  const cloudIcons =
+    !localApiOrigin &&
+    deploymentInfo?.deployMode !== "desktop" &&
+    !(deploymentInfo?.selfHosted ?? runtimeTarget.selfHosted);
 
   const locale = await resolveRequestLocale();
   const dir = isRtl(locale) ? "rtl" : "ltr";
   // Resolved here (not in the dashboard layout) because the brand also appears
   // on screens that render outside the dashboard providers: /login, /authorize,
   // not-found, and the API-unavailable shell.
-  const productView = await resolveRequestProductView();
+  const productView = await resolveRequestProductView(deploymentInfo);
   // English is the bundled base (no prop needed); for other locales load the
   // dictionary server-side so the very first render is already translated.
   const initialDictionary =
@@ -129,9 +139,15 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         ) : null}
       </head>
       <body>
-        <IconProvider baseUrl={process.env.OPENSHIP_ICON_BASE_URL}>
+        <IconProvider
+          baseUrl={cloudIcons ? CLOUD_ICON_BASE_URL : process.env.OPENSHIP_ICON_BASE_URL}
+          fallbackBaseUrl={LOCAL_ICON_BASE_URL}
+        >
           <ThemeProvider>
             <AuthProvider>
+              {!localApiOrigin && deploymentInfo?.selfHosted === false && deploymentInfo.deployMode !== "desktop" && deploymentInfo.cloudAnalytics ? (
+                <CloudAnalytics config={deploymentInfo.cloudAnalytics} />
+              ) : null}
               <I18nProvider
                 initialLocale={locale}
                 initialDictionary={initialDictionary}

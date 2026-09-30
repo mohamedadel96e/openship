@@ -103,7 +103,7 @@
     "deletionInProgress": "该项目已有另一个删除操作正在进行",
     "deletionInProgressTitle": "删除进行中",
     "confirmForceOrphan": "部分资源无法从服务器移除。仍然删除该项目并稍后自动清理它们吗？",
-    "teardownFailedAt": "拆除在此处失败：{reasons}。请重试，或强制删除以将它们变为孤立资源。",
+    "teardownFailedAt": "无法完成清理：{reasons}。项目仍然保留。请解决此问题后重试删除。",
     "teardownFailed": "拆除失败",
     "cleanupFailedTitle": "清理失败",
     "alreadyDeleted": "项目已删除",

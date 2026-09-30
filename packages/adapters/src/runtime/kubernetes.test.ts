@@ -7,6 +7,9 @@ import {
 } from "../cluster/kubernetes-api";
 import type { DockerRuntime } from "./docker";
 import type { DeployConfig } from "../types";
+import type { ClusterVolumeMount } from "@repo/core";
+import { kubernetesIdLabel } from "../cluster/kubernetes-label";
+import { clusterDatabaseNamespace } from "../cluster/database";
 
 const image = `ghcr.io/team/api@sha256:${"a".repeat(64)}`;
 const config = (id = "deploy-1"): DeployConfig => ({
@@ -107,14 +110,14 @@ function setup() {
     dispose: vi.fn(async () => {}),
     removeImage: vi.fn(async () => {}),
   };
-  const create = (projectId = "project-1") =>
+  const create = (projectId = "project-1", mounts?: ClusterVolumeMount[]) =>
     new KubernetesRuntime({
       api,
       projectId,
       runtimeId: "runtime-1",
       edgePrivateIp: "10.20.0.1",
       servers: [{ serverId: "server-a", name: "Production A", nodeName: "openship-a" }],
-      config: { replicas: 3, imageRepository: "ghcr.io/team/api" },
+      config: { replicas: 3, imageRepository: "ghcr.io/team/api", mounts },
       builder: async () => builder as unknown as DockerRuntime,
       resolveRegistryAuth: async () => ({
         username: "user",
@@ -163,41 +166,229 @@ function discoverForCleanup(
 }
 
 describe("Kubernetes workload lifecycle", () => {
-  it.each(["_", "-", ".", "a".repeat(80)])("routes and manages IDs ending in %s through valid, consistent labels", async (suffix) => {
-    const projectId = `proj_label${suffix}`;
-    const deploymentId = `dep_label${suffix}`;
-    const { create, resources, request } = setup();
-    const runtime = create(projectId);
-    const result = await runtime.deploy({ ...config(deploymentId), projectId });
-    expect(result.deploymentId).toBe(deploymentId);
-    const values = [...resources.values()];
-    const workload = values.find((value) => value.kind === "Deployment")!;
-    const projectLabel = workload.metadata.labels!["openship.io/project"];
-    const deploymentLabel = workload.metadata.labels!["openship.io/deployment"];
-    for (const value of values) {
-      for (const label of Object.values(value.metadata.labels ?? {})) {
-        expect(label).toMatch(/^[a-z0-9](?:[-a-z0-9_.]*[a-z0-9])?$/i);
-        expect(label.length).toBeLessThanOrEqual(63);
-      }
-      expect(value.metadata.labels!["openship.io/project"]).toBe(projectLabel);
-      if (value.kind === "Service")
-        expect(value.spec.selector).toEqual({ "openship.io/deployment": deploymentLabel });
+  async function withDatabaseConnections() {
+    const fixture = setup();
+    const databases = [];
+    for (const [id, group, collection, host] of [
+      ["orders", "postgresql.cnpg.io/v1", "clusters", "database-rw"],
+      ["cache", "redis.redis.opstreelabs.in/v1beta2", "redisclusters", "database-leader"],
+      ["sessions", "redis.redis.opstreelabs.in/v1beta2", "redis", "database"],
+    ]) {
+      const namespace = clusterDatabaseNamespace(id);
+      const labels = {
+        "openship.io/project": kubernetesIdLabel("project-1"),
+        "openship.io/runtime": "runtime-1",
+        "openship.io/database": id,
+      };
+      await fixture.request("POST", "/api/v1/namespaces", {
+        kind: "Namespace",
+        metadata: { name: namespace, labels },
+      });
+      await fixture.request("POST", `/api/v1/namespaces/${namespace}/secrets`, {
+        kind: "Secret",
+        metadata: { name: "credentials", labels },
+        data: { password: Buffer.from("database-password").toString("base64") },
+      });
+      const path = `/apis/${group}/namespaces/${namespace}/${collection}/database`;
+      await fixture.request("POST", path.slice(0, -"/database".length), {
+        kind: "Database",
+        metadata: { name: "database", labels },
+        spec: {},
+      });
+      databases.push({ namespace, path, host: `${host}.${namespace}.svc.cluster.local` });
     }
-    expect(workload.spec.template.metadata.labels).toEqual(workload.metadata.labels);
-    expect(workload.spec.selector.matchLabels).toEqual({ "openship.io/deployment": deploymentLabel });
-    expect(workload.spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels)
-      .toEqual({ "openship.io/project": projectLabel });
-    expect(await runtime.listProjectContainerIds(projectId)).toEqual([result.containerId]);
-    expect(request.mock.calls.at(-1)?.[1]).toContain(
-      `labelSelector=${encodeURIComponent(`openship.io/project=${projectLabel}`)}`,
+    const deployment = {
+      ...config(),
+      envVars: Object.fromEntries(databases.map((db, i) => [`DATABASE_${i}`, db.host])),
+    };
+    return { ...fixture, databases, deployment };
+  }
+  it("restarts a release with the same databases even when saved connection keys arrive in a different order", async () => {
+    const { runtime, resources, deployment } = await withDatabaseConnections();
+    const result = await runtime.deploy(deployment);
+    await runtime.stop(result.containerId!);
+    const release = [...resources.values()].find((value) => value.kind === "Deployment")!;
+    const secret = resources.get(
+      `/api/v1/namespaces/${runtime.namespace}/secrets/${release.metadata.name}-env`,
+    )!;
+    secret.data = Object.fromEntries(Object.entries(secret.data).reverse());
+    const identities = JSON.parse(release.metadata.annotations!["openship.io/database-identities"]);
+    release.metadata.annotations!["openship.io/database-identities"] = JSON.stringify(
+      Object.fromEntries(
+        Object.entries(identities)
+          .reverse()
+          .map(([name, value]) => [
+            name,
+            Object.fromEntries(Object.entries(value as object).reverse()),
+          ]),
+      ),
     );
+    expect(release.metadata.annotations!["openship.io/database-identities"]).not.toContain(
+      "database-password",
+    );
+    await runtime.start(result.containerId!);
+    expect(release.spec.replicas).toBe(3);
+  });
+  it.each(["namespace", "credentials", "password", "database", "stopped", "foreign", "legacy"])(
+    "refuses an old release after its database identity changes (%s)",
+    async (change) => {
+      const { runtime, resources, request, databases, deployment } =
+        await withDatabaseConnections();
+      const result = await runtime.deploy(deployment);
+      await runtime.stop(result.containerId!);
+      const database = databases[0];
+      const secret = resources.get(`/api/v1/namespaces/${database.namespace}/secrets/credentials`)!;
+      if (change === "namespace")
+        resources.get(`/api/v1/namespaces/${database.namespace}`)!.metadata.uid = "replacement";
+      if (change === "credentials") secret.metadata.uid = "replacement";
+      if (change === "password")
+        secret.data.password = Buffer.from("rotated-password").toString("base64");
+      if (change === "database") resources.get(database.path)!.metadata.uid = "replacement";
+      if (change === "stopped") resources.delete(database.path);
+      if (change === "foreign")
+        resources.get(database.path)!.metadata.labels!["openship.io/database"] = "another-database";
+      if (change === "legacy")
+        delete [...resources.values()].find((value) => value.kind === "Deployment")!.metadata
+          .annotations!["openship.io/database-identities"];
+      request.mockClear();
+      await expect(runtime.start(result.containerId!)).rejects.toMatchObject({
+        code: "CLUSTER_DATABASE_UNAVAILABLE",
+      });
+      expect(request.mock.calls.some(([method]) => method === "PATCH")).toBe(false);
+    },
+  );
+  it("explains a missing database before it creates an application release", async () => {
+    const { runtime, resources, databases, deployment } = await withDatabaseConnections();
+    resources.delete(`/api/v1/namespaces/${databases[0].namespace}`);
+    await expect(runtime.deploy(deployment)).rejects.toMatchObject({
+      code: "CLUSTER_DATABASE_UNAVAILABLE",
+    });
+    expect([...resources.values()].some((value) => value.kind === "Deployment")).toBe(false);
+  });
+  async function withSharedFiles() {
+    const fixture = setup();
+    const runtime = fixture.create("project-1", [
+      { name: "uploads", mountPath: "/app/uploads", readOnly: true },
+    ]);
+    const labels = {
+      "openship.io/project": kubernetesIdLabel("project-1"),
+      "openship.io/runtime": "runtime-1",
+      "app.kubernetes.io/managed-by": "openship",
+      "openship.io/volume": "uploads",
+    };
+    const claim = await fixture.request(
+      "POST",
+      `/api/v1/namespaces/${runtime.namespace}/persistentvolumeclaims`,
+      {
+        apiVersion: "v1",
+        kind: "PersistentVolumeClaim",
+        metadata: { name: "shared-uploads", labels },
+        spec: {
+          accessModes: ["ReadWriteMany"],
+          storageClassName: "openship-replicated",
+          volumeName: "files-disk",
+        },
+        status: { phase: "Bound" },
+      },
+    );
+    await fixture.request("POST", "/api/v1/persistentvolumes", {
+      apiVersion: "v1",
+      kind: "PersistentVolume",
+      metadata: { name: "files-disk" },
+      spec: {
+        claimRef: { uid: claim.metadata.uid, namespace: runtime.namespace },
+        csi: { driver: "driver.longhorn.io" },
+      },
+    });
+    return {
+      ...fixture,
+      runtime,
+      claimPath: `/api/v1/namespaces/${runtime.namespace}/persistentvolumeclaims/shared-uploads`,
+    };
+  }
+  it("keeps shared files and their read-only mount when restarting a retained release", async () => {
+    const { runtime, resources } = await withSharedFiles();
+    const result = await runtime.deploy(config());
+    const release = [...resources.values()].find((value) => value.kind === "Deployment")!;
+    expect(release.spec.template.spec.containers[0].volumeMounts).toEqual([
+      { name: expect.any(String), mountPath: "/app/uploads", readOnly: true },
+    ]);
+    expect(release.spec.template.spec.volumes[0].persistentVolumeClaim).toEqual({
+      claimName: "shared-uploads",
+      readOnly: true,
+    });
+    const volumes = structuredClone(release.spec.template.spec.volumes);
     await runtime.stop(result.containerId!);
     await runtime.start(result.containerId!);
-    expect(await runtime.getContainerInfo(result.containerId!)).toMatchObject({ status: "running" });
-    await runtime.destroy(result.containerId!);
-    expect(await runtime.listProjectContainerIds(projectId)).toEqual([]);
-    await runtime.dispose();
+    expect(release.spec.template.spec.volumes).toEqual(volumes);
+    expect(
+      [...resources.values()].filter((value) => value.kind === "PersistentVolumeClaim"),
+    ).toHaveLength(1);
   });
+  it("refuses a replaced volume when an older release is started or rolled back", async () => {
+    const { runtime, resources, claimPath, request } = await withSharedFiles();
+    const result = await runtime.deploy(config());
+    await runtime.stop(result.containerId!);
+    resources.get(claimPath)!.metadata.uid = "different-data";
+    request.mockClear();
+    await expect(runtime.start(result.containerId!)).rejects.toMatchObject({
+      code: "CLUSTER_VOLUME_UNAVAILABLE",
+    });
+    expect(request.mock.calls.some(([method]) => method === "PATCH")).toBe(false);
+  });
+  it("refuses foreign or unbound shared data before creating a release", async () => {
+    for (const change of ["foreign", "pending"]) {
+      const { runtime, resources, claimPath } = await withSharedFiles();
+      const claim = resources.get(claimPath)!;
+      if (change === "foreign") claim.metadata.labels!["openship.io/project"] = "other";
+      else claim.status.phase = "Pending";
+      await expect(runtime.deploy(config())).rejects.toThrow();
+      expect([...resources.values()].some((value) => value.kind === "Deployment")).toBe(false);
+    }
+  });
+  it.each(["_", "-", ".", "a".repeat(80)])(
+    "routes and manages IDs ending in %s through valid, consistent labels",
+    async (suffix) => {
+      const projectId = `proj_label${suffix}`;
+      const deploymentId = `dep_label${suffix}`;
+      const { create, resources, request } = setup();
+      const runtime = create(projectId);
+      const result = await runtime.deploy({ ...config(deploymentId), projectId });
+      expect(result.deploymentId).toBe(deploymentId);
+      const values = [...resources.values()];
+      const workload = values.find((value) => value.kind === "Deployment")!;
+      const projectLabel = workload.metadata.labels!["openship.io/project"];
+      const deploymentLabel = workload.metadata.labels!["openship.io/deployment"];
+      for (const value of values) {
+        for (const label of Object.values(value.metadata.labels ?? {})) {
+          expect(label).toMatch(/^[a-z0-9](?:[-a-z0-9_.]*[a-z0-9])?$/i);
+          expect(label.length).toBeLessThanOrEqual(63);
+        }
+        expect(value.metadata.labels!["openship.io/project"]).toBe(projectLabel);
+        if (value.kind === "Service")
+          expect(value.spec.selector).toEqual({ "openship.io/deployment": deploymentLabel });
+      }
+      expect(workload.spec.template.metadata.labels).toEqual(workload.metadata.labels);
+      expect(workload.spec.selector.matchLabels).toEqual({
+        "openship.io/deployment": deploymentLabel,
+      });
+      expect(
+        workload.spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels,
+      ).toEqual({ "openship.io/project": projectLabel });
+      expect(await runtime.listProjectContainerIds(projectId)).toEqual([result.containerId]);
+      expect(request.mock.calls.at(-1)?.[1]).toContain(
+        `labelSelector=${encodeURIComponent(`openship.io/project=${projectLabel}`)}`,
+      );
+      await runtime.stop(result.containerId!);
+      await runtime.start(result.containerId!);
+      expect(await runtime.getContainerInfo(result.containerId!)).toMatchObject({
+        status: "running",
+      });
+      await runtime.destroy(result.containerId!);
+      expect(await runtime.listProjectContainerIds(projectId)).toEqual([]);
+      await runtime.dispose();
+    },
+  );
 
   it("creates isolated replicas, pins the architecture and waits before exposing a stable service", async () => {
     const { runtime, resources, watch } = setup();

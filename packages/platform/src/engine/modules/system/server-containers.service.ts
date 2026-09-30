@@ -1,3 +1,4 @@
+import { refreshMailCertificate } from "../mail/mail-certificate.service";
 /**
  * Server managed-CONTAINER status + apply service.
  *
@@ -282,7 +283,7 @@ function upsertView(server: Server, view: ServerContainerView, lastError?: strin
  *     scan-wiped-my-components bug). Only a probe that actually confirmed absence
  *     removes the row.
  */
-export async function detectServerContainers(server: Server): Promise<ServerContainerView[]> {
+export async function detectServerContainers(server: Server, options: { refreshCertificate?: boolean } = {}): Promise<ServerContainerView[]> {
   const views: ServerContainerView[] = [];
   await sshManager.withExecutor(server.id, async (executor) => {
     const cacheProbe = async (
@@ -313,6 +314,9 @@ export async function detectServerContainers(server: Server): Promise<ServerCont
       "mail",
       await detectMail(executor, server).catch((): ContainerProbe => ({ kind: "unknown" })),
     );
+    await refreshMailCertificate(server.id, { executor, force: options.refreshCertificate }).catch((error) => {
+      console.warn(`[mail-certificate] ${server.id}: ${safeErrorMessage(error)}`);
+    });
   });
   return views;
 }
@@ -723,7 +727,7 @@ export async function scanInstanceContainers(): Promise<{
   const detected = servers.map((server) => ({ server, views: [] as ServerContainerView[] }));
   await mapWithLimit(detected, SCAN_CONCURRENCY, async (entry) => {
     // Unreachable server / probe failure → skip, don't fail the sweep.
-    entry.views = await detectServerContainers(entry.server).catch(() => []);
+    entry.views = await detectServerContainers(entry.server, { refreshCertificate: true }).catch(() => []);
   });
 
   let behind = 0;

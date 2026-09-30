@@ -1,13 +1,13 @@
 /**
  * HTTP surface for whole-instance data export / import (self-hosted only).
  *
- *   POST /api/system/data-transfer/export  — { passphrase? } → DataTransferFile
+ *   POST /api/system/data-transfer/export  — { selection? } → DataTransferFile
  *   POST /api/system/data-transfer/import   — { file, passphrase?, mode } → ImportResult
  *
  * AUTHORIZATION: instance administrator, enforced both by
  * `requireInstanceAdmin()` on the routes and by `assertInstanceAdmin(ctx)` here.
- * Export returns EVERY org's data with all secrets decrypted, sealed under a
- * passphrase the caller supplies — so it is a whole-instance read and an
+ * Instance export returns EVERY org's data with all secrets decrypted in the
+ * downloaded JSON — so it is a whole-instance read and an
  * org-scoped role check cannot gate it. It previously used
  * requireRole("owner"), which any authenticated user satisfied as owner of
  * their own personal org (GHSA-rwq6-r63g-3c8h).

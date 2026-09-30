@@ -41,7 +41,7 @@ import {
   edgeProxyFor,
 } from "@repo/adapters";
 import { platform } from "../../lib/platform-config";
-import { cloudDockerResources, ensureCloudDockerWorkspace, usesCloudDockerWorkspace } from "../../lib/cloud-docker-workspace";
+import { cloudDockerNeedsBuild, reconcileCloudDockerWorkspace, cloudDockerResources, ensureCloudDockerWorkspace, usesCloudDockerWorkspace } from "../../lib/cloud-docker-workspace";
 import { assertCloudDeploymentLimits } from "../../lib/plan-guard";
 import {
   resolveUpstreamUrl,
@@ -49,7 +49,7 @@ import {
   usesHostLoopbackUpstream,
 } from "../../lib/upstream-url";
 import { compileProjectRoutingFields } from "../../lib/project-routing-fields";
-import { webhookProxyTarget } from "../../config/index";
+import { env, webhookProxyTarget } from "../../config/index";
 import {
   disposeRuntime,
   resolveDeploymentRuntime,
@@ -129,6 +129,7 @@ import {
   outputFindingIsBroken,
   staticOutputTargets,
 } from "./output-audit.service";
+import { RELEASE_COMMAND_TIMEOUT_MS, releasePhaseSkipReason, resolveReleaseCommands, runReleasePhase } from "./release-phase";
 import { createBuildConfig } from "./build-config";
 import {
   pinnedAppImage,
@@ -212,6 +213,18 @@ export async function resolveServicePipelineMode(
     return { useSingleAppPipeline: true, useServicePipeline: false, servicePreflightServices: [] };
   }
 
+  // A failed catalog install can reach this path directly from Retry. Seed only
+  // missing draft profiles before reading/finalizing the next snapshot; an
+  // explicit or restored service snapshot must keep its original allocation.
+  if (
+    project.appTemplateId &&
+    !project.activeDeploymentId &&
+    !snapshot.composeServices?.length &&
+    (env.CLOUD_MODE || snapshot.deployTarget === "cloud")
+  ) {
+    const { ensureDraftAppResourceDefaults } = await import("../apps/app-resource-defaults");
+    await ensureDraftAppResourceDefaults(project);
+  }
   const [servicePreflightServices, useServicePipeline] = await Promise.all([
     resolveProjectServicePreflightServices(project.id, snapshot.composeServices),
     shouldUseProjectServicePipeline(project, snapshot.composeServices),
@@ -279,11 +292,13 @@ export async function kickoffBuild(project: Project, dep: Deployment): Promise<s
   }
   dep.status = "building";
 
-  sessionManager.createSession(dep.id, project.id);
   const cancellationSignal = registerDeploymentExecution(dep.id);
 
   void (async () => {
     try {
+      // Session admission can fail at capacity. It belongs inside the worker's
+      // failure/lease cleanup so the claimed deployment cannot remain stuck.
+      sessionManager.createSession(dep.id, project.id);
       await executeBuildAndDeploy(project, dep, buildSession.id, cancellationSignal);
     } catch (err) {
       console.error(`[DEPLOY] Fatal error for ${dep.id}:`, err);
@@ -648,6 +663,7 @@ async function executeBuildAndDeploy(
     provisioned,
   };
 
+  let settledDockerResources: ResourceConfig | undefined;
   try {
     // Decide the runtime modes as DATA (no mutate-then-undo). Two historical
     // flips, encoded in resolveBuildRuntimeModes: services → Docker (containers
@@ -657,19 +673,31 @@ async function executeBuildAndDeploy(
     // leak it). Cloud static + Docker-less desktop-local static keep their own mode.
     const serviceMode = await resolveServicePipelineMode(project, snapshot);
     const willRunServices = serviceMode.useServicePipeline;
+    const dockerWorkspace =
+      willRunServices &&
+      resolveEffectiveTarget(plat.target, snapshot) === "cloud" &&
+      (await usesCloudDockerWorkspace(project, snapshot.serviceDeploymentMode));
     await assertCloudDeploymentLimits(dep.organizationId, {
       projectId: project.id,
       resources: snapshot.resources, buildResources: snapshot.buildResources,
       runsApplication: snapshotToClass(snapshot).workload !== "static",
       services: willRunServices ? serviceMode.servicePreflightServices : undefined,
+      dockerWorkspace,
     });
-    if (willRunServices && resolveEffectiveTarget(plat.target, snapshot) === "cloud" &&
-        await usesCloudDockerWorkspace(project, snapshot.serviceDeploymentMode)) {
+    if (dockerWorkspace) {
+      settledDockerResources = cloudDockerResources({
+        resources: snapshot.resources,
+        services: serviceMode.servicePreflightServices.map((service) => ({
+          enabled: service.enabled,
+          resources: service.advanced?.resources,
+        })),
+      });
       logger.log("→ Preparing the project's shared Docker workspace on Openship Cloud.\n");
       snapshot.cloudDockerWorkspace = await ensureCloudDockerWorkspace({
         projectId: project.id, organizationId: dep.organizationId,
         resources: cloudDockerResources({
           resources: snapshot.resources, buildResources: snapshot.buildResources,
+          reserveBuild: cloudDockerNeedsBuild(serviceMode.servicePreflightServices),
           services: serviceMode.servicePreflightServices.map(service => ({
             enabled: service.enabled,
             resources: service.advanced?.resources,
@@ -1075,6 +1103,17 @@ async function executeBuildAndDeploy(
     }
 
     if (useServicePipeline && isMultiServiceRuntime(runtime)) {
+      // A compose project's release phase would have to name a SERVICE to run in
+      // (there is no single app image), which v1 doesn't model — so say so
+      // instead of dropping the declaration on the floor.
+      await runReleasePhase({
+        commands: resolveReleaseCommands(snapshot.releaseCommands),
+        deliberateSkipReason: releasePhaseSkipReason(dep.trigger, snapshot.targetServiceIds),
+        signal: cancellationSignal,
+        unsupportedReason: "Project release commands are not supported on multi-service deployments",
+        log: (message, level) => logger.log(`${message}\n`, level),
+      });
+
       // snapshot.composeServices is a DeployableService[] - mixed compose +
       // monorepo. syncFromCompose strictly owns compose rows; passing a
       // monorepo entry in causes a ghost compose-kind row to be inserted
@@ -1285,6 +1324,7 @@ async function executeBuildAndDeploy(
     // target lock; inferring that again inside the phase risks a nested lock when
     // a restored release changes the effective serve mode.
     const hostPortTargetLockHeld =
+      usesManagedRouting &&
       deployRouting.deployMode === "server" &&
       resolved.effectiveTarget !== "cloud" &&
       usesHostLoopbackUpstream(resolveRouteStrategy(project.routeStrategy), runtime);
@@ -1323,13 +1363,18 @@ async function executeBuildAndDeploy(
       if (hostPortTargetLockHeld && !phase.hostPortTarget) {
         throw new Error("Cannot allocate a routed host port without a physical target identity");
       }
+      const deployConfig = createServerDeployConfig(phase);
+      // Release work can take minutes; it must not hold the server-wide port lock.
+      // The project execution lease still excludes another deployment or teardown.
+      await executeReleasePhase(phase, deployConfig);
+      throwIfDeploymentCancelled(cancellationSignal);
       await (hostPortTargetLockHeld
         ? withHostPortTargetLock(
             phase.hostPortTarget!,
-            () => executeServerDeploy(phase),
+            () => executeServerDeploy(phase, deployConfig),
             cancellationSignal,
           )
-        : executeServerDeploy(phase));
+        : executeServerDeploy(phase, deployConfig));
     }
   } catch (err) {
     // Cancellation is a normal terminal outcome, not a pipeline failure. This
@@ -1357,6 +1402,12 @@ async function executeBuildAndDeploy(
     // the pipeline's healthCheck hook, so nothing still needs a transport once
     // this function settles.
     for (const rt of transports) disposeRuntime(rt);
+    if (snapshot.cloudDockerWorkspace && settledDockerResources) {
+      await reconcileCloudDockerWorkspace({ projectId: project.id, organizationId: dep.organizationId,
+        workspaceId: snapshot.cloudDockerWorkspace.workspaceId, deploymentId: dep.id,
+        resources: settledDockerResources, onProgress: message => logger.log(message) })
+        .catch(error => logger.log(`Cloud capacity reconciliation is pending: ${error instanceof Error ? error.message : "provider unavailable"}\n`));
+    }
   }
 }
 
@@ -1425,6 +1476,16 @@ async function executeStaticEdgeDeploy(
     logger,
   } = phase;
 
+  // Pages is a file upload, not a workload — there is nothing to run a command
+  // in. Declared commands are named in the log rather than silently dropped.
+  await runReleasePhase({
+    commands: resolveReleaseCommands(snapshot.releaseCommands),
+    deliberateSkipReason: releasePhaseSkipReason(dep.trigger, snapshot.targetServiceIds),
+    signal: phase.cancellationSignal,
+    unsupportedReason: "Static edge deployments cannot run release commands",
+    log: (message, level) => logger.log(`${message}\n`, level),
+  });
+
   logger.step("deploy", "running", "Deploying to edge (static)...");
 
   const staticResult = await runtime.deployStatic({
@@ -1477,7 +1538,6 @@ async function executeStaticEdgeDeploy(
  * URL) — so no closure re-branches `isStaticFileServe`/`runtime.name`.
  */
 interface ServeStrategy {
-  readonly restartPolicy: "no" | "always";
   readonly canOverlap: boolean;
   /** Preflight: ensure the runtime/toolchain is ready. Noop for static file-serve
    *  (nothing runs). */
@@ -1764,8 +1824,84 @@ function buildDeployEnvironment(
   };
 }
 
+/** One candidate configuration for release commands and activation. Host-port
+ * reservations and the previous release are assigned during activation preflight. */
+function createServerDeployConfig(phase: DeployPhaseInputs): DeployConfig {
+  const { dep, project, snapshot, buildSessionId, buildResult, envMap, prodResources, routeState } = phase;
+  return {
+    deploymentId: dep.id,
+    projectId: project.id,
+    buildSessionId,
+    imageRef: buildResult.imageRef!,
+    prebuiltImage: Boolean(snapshot.releaseImageRef),
+    environment: dep.environment,
+    port: snapshot.port,
+    // A worker publishes and dials nothing: the runtime skips ExposedPorts /
+    // PortBindings / PORT (issue #538-B). `port` is left set but inert.
+    portless: phase.deployRouting.deployMode === "worker",
+    // The build may override the start command once it knows the output shape
+    // (e.g. Next.js standalone → `node server.js` instead of `next start`).
+    startCommand: buildResult.startCommand ?? snapshot.startCommand,
+    stack: snapshot.framework,
+    // Lets the runtime put the project's `node_modules/.bin` on PATH before the
+    // start command runs — `next start` is a dependency binary, not a system one.
+    packageManager: snapshot.packageManager,
+    envVars: envMap,
+    resources: prodResources,
+    restartPolicy: phase.deployRouting.deployMode === "static-file-serve" ? "no" : "always",
+    runtimeName: project.slug ?? project.id,
+    slug: project.slug ?? project.id,
+    // Stable per-project DNS alias so a single-app native container is
+    // reachable east-west (another linked project resolves `<alias>:<port>`),
+    // mirroring what compose services already get. Read only by
+    // DockerRuntime.deploy(); other runtimes ignore it. Publishing stays
+    // loopback-only — an alias is not exposure until an explicit link
+    // (attachLinkedNetworks) puts a consumer on this project's network.
+    networkAlias: normalizeServiceLabel(project.slug || project.name),
+    // A user-chosen custom hostname (Stage D) resolves ALONGSIDE the default.
+    extraAliases: project.internalAlias
+      ? [normalizeServiceLabel(project.internalAlias)]
+      : undefined,
+    publicEndpoints: routeState.publicEndpoints,
+    outputDirectory: snapshot.outputDirectory,
+    // Optional chaining for the same reason as `volumes` below: a snapshot
+    // persisted before this field existed (or one that simply never set it) has
+    // none, and a redeploy/restore of that release must not crash on it. It did —
+    // `.length` on undefined — which made every such release un-restorable.
+    productionPaths: snapshot.productionPaths?.length ? snapshot.productionPaths : undefined,
+    // `?? []` because a snapshot persisted before this field existed has none —
+    // redeploying an old deployment must not crash on it.
+    volumes: snapshot.volumes ?? [],
+  };
+}
+
+async function executeReleasePhase(phase: DeployPhaseInputs, config: DeployConfig): Promise<void> {
+  const { dep, snapshot, runtime, project, logger, cancellationSignal } = phase;
+  const processWorkload = phase.deployRouting.deployMode === "server" ||
+    phase.deployRouting.deployMode === "worker";
+  await runReleasePhase({
+    commands: resolveReleaseCommands(snapshot.releaseCommands),
+    deliberateSkipReason: releasePhaseSkipReason(dep.trigger, snapshot.targetServiceIds),
+    signal: cancellationSignal,
+    run: processWorkload && runtime.supports("releaseCommand") && runtime.runReleaseCommand
+      ? (command) => runtime.runReleaseCommand!(config, command, logger.callback, {
+          timeoutMs: RELEASE_COMMAND_TIMEOUT_MS,
+          signal: cancellationSignal,
+          beforeStart: (containerId) => attachLinkedNetworks(
+            project.id, runtime, (message, level) => logger.log(`${message}\n`, level),
+            dep.id, [containerId],
+          ),
+        })
+      : undefined,
+    unsupportedReason: processWorkload
+      ? `The "${runtime.name}" runtime cannot run release commands`
+      : "Static sites cannot run release commands",
+    log: (message, level) => logger.log(`${message}\n`, level),
+  });
+}
+
 /** Server deploy via runDeployPipeline (VM / Docker / Bare). Handles static-self-hosted too. */
-async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
+async function executeServerDeploy(phase: DeployPhaseInputs, deployConfig: DeployConfig): Promise<void> {
   const {
     ctx,
     project,
@@ -1835,7 +1971,6 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
   // edge/routing orchestration stays there (not duplicated per strategy).
   const baseServe: ServeStrategy = isStaticFileServe
     ? {
-        restartPolicy: "no",
         canOverlap: false,
         ensureRuntimeReady: async () => {},
         ensurePorts: async () => {},
@@ -1876,7 +2011,6 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
         readinessWorksRemotely: true,
       }
     : {
-        restartPolicy: "always",
         // Overlap (run-new-then-swap, zero-downtime) needs a unique container +
         // its own host port; a pinned loopback port can't be double-bound and bare
         // binds a fixed port → stop-first.
@@ -1991,7 +2125,7 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
     Pick<AllocatedPinnedHostPort, "claim" | "previousClaim" | "claimWasCreated">
   > = [];
   const needsHostLoopbackClaim =
-    usesHostLoopback && !isStaticFileServe && !isWorker && phase.effectiveTarget !== "cloud";
+    usesManagedRouting && usesHostLoopback && !isStaticFileServe && !isWorker && phase.effectiveTarget !== "cloud";
   if (needsHostLoopbackClaim && (!phase.hostPortTarget || !phase.targetExecutor)) {
     throw new Error("Cannot inspect routed host ports without a physical target executor");
   }
@@ -2089,55 +2223,7 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
     : undefined;
 
   const prevDep = await findActiveDeployment(project);
-  const deployConfig: DeployConfig = {
-    deploymentId: dep.id,
-    projectId: project.id,
-    buildSessionId,
-    imageRef: buildResult.imageRef!,
-    prebuiltImage: Boolean(snapshot.releaseImageRef),
-    environment: dep.environment,
-    port: snapshot.port,
-    // A worker publishes and dials nothing: the runtime skips ExposedPorts /
-    // PortBindings / PORT (issue #538-B). `port` is left set but inert.
-    portless: isWorker,
-    ...(pinnedHostPort !== undefined ? { hostPort: pinnedHostPort } : {}),
-    // The build may override the start command once it knows the output shape
-    // (e.g. Next.js standalone → `node server.js` instead of `next start`).
-    startCommand: buildResult.startCommand ?? snapshot.startCommand,
-    stack: snapshot.framework,
-    // Lets the runtime put the project's `node_modules/.bin` on PATH before the
-    // start command runs — `next start` is a dependency binary, not a system one.
-    packageManager: snapshot.packageManager,
-    envVars: envMap,
-    resources: prodResources,
-    restartPolicy: serve.restartPolicy,
-    runtimeName: project.slug ?? project.id,
-    slug: project.slug ?? project.id,
-    // Stable per-project DNS alias so a single-app native container is
-    // reachable east-west (another linked project resolves `<alias>:<port>`),
-    // mirroring what compose services already get. Read only by
-    // DockerRuntime.deploy(); other runtimes ignore it. Publishing stays
-    // loopback-only — an alias is not exposure until an explicit link
-    // (attachLinkedNetworks) puts a consumer on this project's network.
-    networkAlias: normalizeServiceLabel(project.slug || project.name),
-    // A user-chosen custom hostname (Stage D) resolves ALONGSIDE the default.
-    extraAliases: project.internalAlias
-      ? [normalizeServiceLabel(project.internalAlias)]
-      : undefined,
-    publicEndpoints: routeState.publicEndpoints,
-    outputDirectory: snapshot.outputDirectory,
-    // Optional chaining for the same reason as `volumes` below: a snapshot
-    // persisted before this field existed (or one that simply never set it) has
-    // none, and a redeploy/restore of that release must not crash on it. It did —
-    // `.length` on undefined — which made every such release un-restorable.
-    productionPaths: snapshot.productionPaths?.length ? snapshot.productionPaths : undefined,
-    // `?? []` because a snapshot persisted before this field existed has none —
-    // redeploying an old deployment must not crash on it.
-    volumes: snapshot.volumes ?? [],
-    // Bare uses this to hard-link identical files across releases.
-    // Other runtimes ignore it.
-    previousDeploymentId: prevDep?.id,
-  };
+  deployConfig.previousDeploymentId = prevDep?.id;
 
   // Resolve the previous deployment + its runtime so we can deactivate it cleanly.
   // A DISTINCT platform from this deploy's, so on a remote server it binds its own

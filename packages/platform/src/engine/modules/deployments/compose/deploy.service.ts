@@ -12,7 +12,7 @@
 import { findActiveDeployment } from "@repo/platform/engine/lib/active-deployment";
 import { repos, type Deployment, type Domain, type Project, type Service } from "@repo/db";
 import { assertCloudDeploymentLimits } from "../../../lib/plan-guard";
-import { resolveCloudServiceResources } from "../../../lib/resources";
+import { resolveCloudServiceResources, resolveRuntimeResources } from "../../../lib/resources";
 import { posix as pathPosix } from "node:path";
 import {
   SYSTEM,
@@ -30,6 +30,7 @@ import {
   UNLIMITED_RESOURCES,
   DeployError,
   safeErrorMessage,
+  isWildcardHostname,
   withTimeout,
   type ComposeAdvanced,
   type ProxySettings,
@@ -392,7 +393,7 @@ function resolveServiceCustomDomain(service: Service): string | undefined {
 
 function resolveServicePublicUrl(project: Project, service: Service): string | undefined {
   const customDomain = resolveServiceCustomDomain(service);
-  if (customDomain) return `https://${customDomain}`;
+  if (customDomain) return isWildcardHostname(customDomain) ? undefined : `https://${customDomain}`;
 
   const publicSlug = resolveServicePublicSlug(project, service);
   return publicSlug ? `https://${publicSlug}.${SYSTEM.DOMAINS.CLOUD_DOMAIN}` : undefined;
@@ -1436,6 +1437,10 @@ async function deployComposeServicesUnlocked(
     ? await findActiveDeployment(project).catch(() => null)
     : null;
   const carryAnchor = carryAnchorDep?.createdAt ?? null;
+  const carryProjectResources = resolveRuntimeResources(
+    (carryAnchorDep?.meta as { resources?: ResourceConfig | null } | null)?.resources,
+    { isCloud: runtime.name === "cloud" },
+  );
   const carryEnvMeta = carryAnchor
     ? await repos.project.listEnvVarChangeMeta(project.id, dep.environment).catch(() => [])
     : [];
@@ -1459,6 +1464,18 @@ async function deployComposeServicesUnlocked(
     if (!carryAnchor) return false; // never deployed → deploy it
     if (svc.build || !svc.image) return false; // must be image-only (external); buildables always rebuild
     if (svc.updatedAt > carryAnchor) return false; // image/command/ports/volumes/… changed
+    // Project limits are not service edits. Compare effective caps through the
+    // same resolver used for activation so inherited changes apply, while a
+    // service's explicit overrides do not cause an unnecessary restart.
+    const previousResources =
+      resolveServiceResources(svc, carryProjectResources, runtime.name === "cloud") ?? UNLIMITED_RESOURCES;
+    const nextResources =
+      resolveServiceResources(svc, opts?.resources, runtime.name === "cloud") ?? UNLIMITED_RESOURCES;
+    if (
+      previousResources.cpuCores !== nextResources.cpuCores ||
+      previousResources.memoryMb !== nextResources.memoryMb ||
+      previousResources.diskMb !== nextResources.diskMb
+    ) return false;
     if (carryProjectEnvChanged || carryEnvChangedServiceIds.has(svc.id)) return false; // env changed
     const prev = previousByServiceId.get(svc.id);
     if (!prev?.containerId) return false; // nothing running to carry
@@ -3374,8 +3391,9 @@ async function deployComposeServicesUnlocked(
           }
         }
 
-        firstPublicUrl ??= proxyRoutes[0]
-          ? `https://${proxyRoutes[0].hostname}`
+        const openableRoute = proxyRoutes.find((route) => !isWildcardHostname(route.hostname));
+        firstPublicUrl ??= openableRoute
+          ? `https://${openableRoute.hostname}`
           : runtime.name === "cloud"
             ? resolveServicePublicUrl(project, svc)
             : undefined;

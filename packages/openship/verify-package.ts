@@ -1,19 +1,27 @@
 /** Installs the actual tarball outside the workspace, under the caller's Node runtime. */
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readPackedArchive } from "./npm-pack";
 
-const packageDir = dirname(fileURLToPath(import.meta.url));
+// A publishing-tools repair can verify the immutable release checkout without
+// rebuilding the product from the newer tools commit.
+const packageDir = resolve(process.env.OPENSHIP_VERIFY_PACKAGE_DIR ?? dirname(fileURLToPath(import.meta.url)));
 const scratch = mkdtempSync(join(tmpdir(), "openship-package-"));
 const node = process.env.OPENSHIP_TEST_NODE ?? process.argv[2] ?? "node";
 const run = (bin: string, args: string[], cwd = scratch, env = process.env) => execFileSync(bin, args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 180_000 });
 
 try {
   run("bun", ["run", "check"], packageDir);
-  const packed = JSON.parse(run("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", scratch], packageDir)) as Array<{ filename: string; size: number; unpackedSize: number }>;
-  const archive = packed[0]!;
+  const expected = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+  const archive = readPackedArchive(
+    run("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", scratch], packageDir),
+    expected,
+  );
+  if (statSync(join(scratch, archive.filename)).size !== archive.size)
+    throw new Error("The packed archive size does not match npm's report.");
   writeFileSync(join(scratch, "package.json"), JSON.stringify({
     name: "openship-external-check", private: true, type: "module",
     dependencies: { openship: `file:${join(scratch, archive.filename)}` },

@@ -1,8 +1,10 @@
 import { randomBytes, createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   AppError,
   clusterDatabasePodCount,
   validateClusterDatabase,
+  clusterPostgresVersion,
   type ClusterDatabaseStep,
   type ClusterDatabaseRestoreSource,
   type ClusterDatabaseObservation,
@@ -12,6 +14,8 @@ import {
   ClusterDatabaseAdapter,
   clusterDatabaseHosts,
   clusterDatabaseUrl,
+  clusterDatabaseNamespace,
+  databaseArchiveName,
   type ClusterDatabaseBackupStorage,
 } from "@repo/adapters";
 import { ProjectDatabaseSchemas, type ClusterDatabase } from "@repo/contracts";
@@ -27,7 +31,7 @@ import {
 } from "../../lib/cluster-deployment-target";
 import { withLiveProjectRuntimeMutation } from "../../lib/project-runtime-lock";
 import { decrypt, encrypt } from "../../lib/encryption";
-import { decryptSecretField } from "../../lib/credential-encryption";
+import { resolveClusterBackupStorage as backupStorage } from "../../lib/cluster-backup-storage";
 import { fleetAdmin } from "../system/managed-network.operations";
 import {
   assertClusterManagementAvailable,
@@ -47,6 +51,8 @@ import {
   clusterDatabaseTopic,
   notifyClusterDatabase,
 } from "./cluster-database.events";
+import { databaseImportSource, listDatabaseImports } from "./cluster-database-import";
+import { withBackupRunLock } from "../backups/backup-lock";
 
 export function presentClusterDatabase(row: ClusterDatabaseRecord): ClusterDatabase {
   return {
@@ -63,6 +69,10 @@ export function presentClusterDatabase(row: ClusterDatabaseRecord): ClusterDatab
     observation: row.observation,
     error: row.error,
     envKey: row.envKey,
+    sourceDatabaseId:
+      row.restoreSource && row.restoreSource.format !== "backup-artifact"
+        ? row.restoreSource.databaseId
+        : null,
     ...clusterDatabaseHosts(row.id, row.config),
     updatedAt: row.updatedAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
@@ -92,66 +102,6 @@ function retainedObservation(observation: ClusterDatabaseObservation): ClusterDa
           },
         }
       : {}),
-  };
-}
-
-async function backupStorage(
-  ctx: ExecutionContext,
-  destinationId: string,
-  restore?: ClusterDatabaseRestoreSource,
-): Promise<ClusterDatabaseBackupStorage> {
-  const destination = await repos.backupDestination.findById(destinationId);
-  assertResourceInOrg(destination, "Backup destination", ctx.organizationId, destinationId);
-  const accessKeyId = decryptSecretField(destination.accessKeyIdEnc),
-    secretAccessKey = decryptSecretField(destination.secretAccessKeyEnc);
-  if (
-    destination.kind !== "s3_compatible" ||
-    !destination.bucket ||
-    !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(destination.bucket) ||
-    !accessKeyId ||
-    !secretAccessKey
-  )
-    throw new AppError(
-      "Choose an S3 backup destination with a bucket and access credentials.",
-      422,
-      "CLUSTER_DATABASE_BACKUP_DESTINATION",
-    );
-  if (destination.endpoint) {
-    const url = new URL(destination.endpoint);
-    if (
-      !["http:", "https:"].includes(url.protocol) ||
-      url.username ||
-      url.password ||
-      url.search ||
-      url.hash
-    )
-      throw new AppError(
-        "The S3 endpoint must be an HTTP or HTTPS address without embedded credentials or query parameters.",
-        422,
-        "CLUSTER_DATABASE_BACKUP_DESTINATION",
-      );
-  }
-  const prefix = (destination.pathPrefix ?? "").replace(/^\/+|\/+$/g, "");
-  if (/[\x00-\x1f\x7f]/.test(prefix) || prefix.split("/").includes(".."))
-    throw new AppError(
-      "The backup destination prefix contains an unsupported path.",
-      422,
-      "CLUSTER_DATABASE_BACKUP_DESTINATION",
-    );
-  const path = `s3://${destination.bucket}/${prefix ? `${prefix}/` : ""}openship/databases`;
-  if (restore && (restore.destinationPath !== path || restore.endpoint !== destination.endpoint))
-    throw new AppError(
-      "The original backup destination address changed. Restore its saved address before recovering this database.",
-      409,
-      "CLUSTER_DATABASE_BACKUP_DESTINATION",
-    );
-  return {
-    destinationId,
-    accessKeyId,
-    secretAccessKey,
-    endpoint: destination.endpoint,
-    region: destination.region || "us-east-1",
-    destinationPath: restore?.destinationPath ?? path,
   };
 }
 
@@ -218,7 +168,7 @@ export async function runClusterDatabase(
       "Checking the saved cluster identity and private API connection.",
       async () => {
         const p = await project(ctx, row.projectId);
-        if (p.clusterId !== row.clusterId)
+        if ((p.clusterId && p.clusterId !== row.clusterId) || p.cloudWorkspaceId)
           throw new Error("The project no longer targets this database's cluster.");
         connection = await openClusterApi(ctx.organizationId, row.clusterId, row.runtimeId);
         for (const host of connection.runtime.plan.hosts) await authorizeMember(ctx, host.serverId);
@@ -254,6 +204,7 @@ export async function runClusterDatabase(
         () => adapter.remove(row.deleteData, log),
       );
       const observation = row.deleteData ? null : retainedObservation(await adapter.observe());
+      if (row.deleteData) await adapter.releaseRestorePin();
       await repos.clusterDatabase.finish(
         row.id,
         row.generation,
@@ -263,21 +214,25 @@ export async function runClusterDatabase(
       );
     } else if (row.intent === "backup") {
       if (!row.backupRequestId) throw new Error("The saved database backup request is missing.");
-      await step("backup", "Saving a PostgreSQL archive through the database operator.", () =>
+      await step("backup", "Saving the database at the backup destination.", () =>
         adapter.archive.run(row.backupRequestId!, row.generation, log),
       );
       const observation = await adapter.observe();
       await repos.clusterDatabase.finish(row.id, row.generation, "ready", observation, null);
     } else {
       await adapter.preflight();
-      await step(
-        "operators",
-        "Preparing the pinned database operator and verifying its readiness.",
-        () => adapter.operators(log),
+      await step("operators", "Preparing database management and checking that it is ready.", () =>
+        adapter.operators(log),
       );
       await step("storage", "Preparing persistent storage for each database instance.", () =>
         adapter.storage(log),
       );
+      if (await adapter.needsRedisResize())
+        await step(
+          "backup",
+          "Verifying a recovery point before moving Redis data between servers.",
+          () => adapter.backupBeforeRedisResize(log),
+        );
       await step("database", "Applying the database configuration and private access rules.", () =>
         adapter.apply(decrypt(row.secretEncrypted)),
       );
@@ -286,10 +241,63 @@ export async function runClusterDatabase(
         "Checking database instances, volumes and an authenticated private connection.",
         () => adapter.verify(log),
       );
+      if (
+        row.restoreSource &&
+        ["redis-rdb-set", "postgres-logical", "backup-artifact"].includes(
+          row.restoreSource.format ?? "",
+        )
+      ) {
+        const loaded = row.progress.steps.some(
+          (item) => item.id === "restore" && item.status === "completed",
+        );
+        await step("restore", "Recovering the saved data into this new database.", async () => {
+          if (!loaded && row.restoreSource?.format === "postgres-logical") {
+            const source = await repos.clusterDatabase.get(
+              ctx.organizationId,
+              row.projectId,
+              row.restoreSource.databaseId,
+            );
+            if (
+              source.status !== "ready" ||
+              !isDeepStrictEqual(source.config, row.restoreSource.sourceConfig)
+            )
+              throw new Error(
+                "The original database changed while its copy was being prepared. Keep its saved settings until recovery finishes.",
+              );
+            const sourceAdapter = new ClusterDatabaseAdapter(
+              connection!.api,
+              {
+                ...source,
+                hosts: connection!.runtime.plan.hosts,
+                backupStorage: await backupStorage(
+                  ctx,
+                  row.restoreSource.destinationId,
+                  row.restoreSource,
+                ),
+              },
+              signal,
+              active,
+            );
+            await sourceAdapter.dataTasks.secret(
+              "backup-destination",
+              await backupStorage(ctx, row.restoreSource.destinationId, row.restoreSource),
+            );
+            await sourceAdapter.dataTasks.run(row.requestId, source.generation, log, row.requestId);
+          }
+          await adapter.restore(log);
+        });
+        observation = await step(
+          "verify",
+          "Verifying the recovered database and its private connection.",
+          () => adapter.verify(log, "restored"),
+        );
+        await adapter.releaseRestorePin();
+      }
       if (row.config.backup) {
+        await adapter.archive.schedule(row.config.backup);
         await step(
           "backup",
-          "Verifying the first PostgreSQL archive at the backup destination.",
+          "Verifying the first database backup at the selected destination.",
           () => adapter.archive.run("initial", row.generation, log),
         );
         observation = await adapter.observe();
@@ -342,6 +350,7 @@ export function createClusterDatabaseOperations(
       databaseId: string;
       expectedSequence: number;
       config?: import("@repo/core").ClusterDatabaseConfig;
+      confirmRedisRebalance?: boolean;
       deleteData?: boolean;
       name?: string;
     },
@@ -379,6 +388,10 @@ export function createClusterDatabaseOperations(
       await project(ctx, id);
       return (await repos.clusterDatabase.list(ctx.organizationId, id)).map(presentClusterDatabase);
     },
+    async listClusterDatabaseImports(ctx, id) {
+      await project(ctx, id);
+      return listDatabaseImports(ctx, id);
+    },
     async getClusterDatabase(ctx, id, input) {
       await project(ctx, id);
       let row = await repos.clusterDatabase.get(ctx.organizationId, id, input.databaseId);
@@ -413,6 +426,12 @@ export function createClusterDatabaseOperations(
       await fleetAdmin(ctx);
       assertNetworkSetupAcceptingWork();
       validateClusterDatabase(input.config);
+      if ([input.restoreFrom, input.importFrom, input.copyFrom].filter(Boolean).length > 1)
+        throw new AppError(
+          "Choose one source for the new database.",
+          422,
+          "CLUSTER_DATABASE_RESTORE_TARGET",
+        );
       if (
         input.config.engine === "redis" &&
         input.config.mode === "cluster" &&
@@ -424,83 +443,200 @@ export function createClusterDatabaseOperations(
           "CLUSTER_DATABASE_CLIENT_REQUIRED",
         );
       const result = await withLiveProjectRuntimeMutation(id, async () => {
-        const p = await project(ctx, id);
-        if (!p.clusterId || p.cloudWorkspaceId || p.appTemplateId === "openship")
-          throw new AppError(
-            "Choose a ready server cluster for this application before adding a database.",
-            409,
-            "CLUSTER_TARGET_REQUIRED",
-          );
-        const { runtime } = await requireClusterDeploymentTarget(ctx.organizationId, p.clusterId);
-        for (const host of runtime.plan.hosts) await authorizeMember(ctx, host.serverId);
-        const count = clusterDatabasePodCount(input.config);
-        if (runtime.plan.hosts.length < count)
-          throw new AppError(
-            `This database needs ${count} servers so each data instance has a separate failure domain.`,
-            422,
-            "CLUSTER_DATABASE_CAPACITY",
-          );
-        if (input.config.backup) await backupStorage(ctx, input.config.backup.destinationId);
-        let restoreSource: ClusterDatabaseRestoreSource | undefined;
-        if (input.restoreFrom) {
-          const source = await repos.clusterDatabase.get(
-            ctx.organizationId,
-            id,
-            input.restoreFrom.databaseId,
-          );
+        const admit = async () => {
+          const p = await project(ctx, id);
+          const clusterId = input.clusterId ?? p.clusterId;
           if (
-            source.config.engine !== "postgres" ||
-            input.config.engine !== "postgres" ||
-            !source.config.backup ||
-            source.config.databaseName !== input.config.databaseName ||
-            input.config.storageGiB < source.config.storageGiB ||
-            source.clusterId !== p.clusterId
+            !clusterId ||
+            (p.clusterId && p.clusterId !== clusterId) ||
+            p.cloudWorkspaceId ||
+            p.appTemplateId === "openship"
           )
             throw new AppError(
-              "Restore a PostgreSQL backup into a new database on this cluster, using the original database name and enough storage.",
-              422,
-              "CLUSTER_DATABASE_RESTORE_TARGET",
+              "Choose a ready server cluster for this database.",
+              409,
+              "CLUSTER_TARGET_REQUIRED",
             );
-          const connection = await openClusterApi(
+          const existing = await repos.clusterDatabase.findByRequest(
             ctx.organizationId,
-            source.clusterId,
-            source.runtimeId,
+            id,
+            input.requestId,
           );
-          try {
-            const adapter = new ClusterDatabaseAdapter(
-              connection.api,
-              { ...source, hosts: connection.runtime.plan.hosts },
-              AbortSignal.timeout(30_000),
-              async () => {
-                throw new Error("Restore inspection cannot change the source database.");
-              },
+          if (existing) {
+            const source = existing.restoreSource;
+            const sameSource = input.importFrom
+              ? source?.backupRunId === input.importFrom.runId &&
+                source.artifact?.name === input.importFrom.artifactName
+              : input.copyFrom
+                ? source?.format === "postgres-logical" &&
+                  source.databaseId === input.copyFrom.databaseId &&
+                  source.sourceSequence === input.copyFrom.expectedSequence
+                : input.restoreFrom
+                  ? source?.databaseId === input.restoreFrom.databaseId &&
+                    source.backupName === input.restoreFrom.backupName
+                  : !source;
+            if (
+              existing.name !== input.name ||
+              existing.clusterId !== clusterId ||
+              !isDeepStrictEqual(existing.config, input.config) ||
+              !sameSource
+            )
+              throw new AppError(
+                "This request already belongs to another database configuration.",
+                409,
+                "CLUSTER_DATABASE_CONFLICT",
+              );
+            return presentClusterDatabase(
+              await repos.clusterDatabase.get(ctx.organizationId, id, existing.id),
             );
-            restoreSource = await adapter.archive.restoreSource(
-              source.id,
-              source.config.backup.destinationId,
-              input.restoreFrom.backupName,
-            );
-            await backupStorage(ctx, restoreSource.destinationId, restoreSource);
-          } finally {
-            await connection.api.dispose();
           }
-        }
-        const { row, started } = await repos.clusterDatabase.start({
-          organizationId: ctx.organizationId,
-          projectId: id,
-          clusterId: p.clusterId,
-          runtimeId: runtime.id,
-          requestId: input.requestId,
-          name: input.name,
-          config: input.config,
-          restoreSource,
-          secretEncrypted: encrypt(randomBytes(32).toString("hex")),
-        });
-        if (started) {
-          await queue(ctx, row);
-          audit(ctx, id, row.id, "created");
-        }
-        return presentClusterDatabase(row);
+          const { runtime } = await requireClusterDeploymentTarget(ctx.organizationId, clusterId);
+          for (const host of runtime.plan.hosts) await authorizeMember(ctx, host.serverId);
+          const count = clusterDatabasePodCount(input.config);
+          if (runtime.plan.hosts.length < count)
+            throw new AppError(
+              `This database needs ${count} servers so each data instance can run on a separate server.`,
+              422,
+              "CLUSTER_DATABASE_CAPACITY",
+            );
+          if (input.config.backup) await backupStorage(ctx, input.config.backup.destinationId);
+          let restoreSource: ClusterDatabaseRestoreSource | undefined;
+          let sourceConnection: Awaited<ReturnType<typeof openClusterApi>> | undefined;
+          let undoPin: (() => Promise<void>) | undefined;
+          let saved = false;
+          try {
+            if (input.importFrom)
+              restoreSource = await databaseImportSource(
+                ctx,
+                id,
+                input.importFrom,
+                input.config.engine,
+              );
+            if (input.restoreFrom || input.copyFrom) {
+              const source = await repos.clusterDatabase.get(
+                ctx.organizationId,
+                id,
+                (input.restoreFrom ?? input.copyFrom)!.databaseId,
+              );
+              if (
+                source.config.engine !== input.config.engine ||
+                !source.config.backup ||
+                source.config.databaseName !== input.config.databaseName ||
+                input.config.storageGiB < source.config.storageGiB ||
+                source.clusterId !== clusterId ||
+                source.runtimeId !== runtime.id
+              )
+                throw new AppError(
+                  "Create the new database on this cluster, using the original database type and name, with enough storage.",
+                  422,
+                  "CLUSTER_DATABASE_RESTORE_TARGET",
+                );
+              if (input.copyFrom) {
+                if (
+                  source.config.engine !== "postgres" ||
+                  source.status !== "ready" ||
+                  source.sequence !== input.copyFrom.expectedSequence ||
+                  Number(clusterPostgresVersion(input.config)) <
+                    Number(clusterPostgresVersion(source.config))
+                )
+                  throw new AppError(
+                    "Refresh the source database and choose the same or a newer PostgreSQL version.",
+                    409,
+                    "CLUSTER_DATABASE_RESTORE_TARGET",
+                  );
+                const storage = await backupStorage(ctx, source.config.backup.destinationId);
+                const serverName = clusterDatabaseNamespace(source.id),
+                  backupName = databaseArchiveName(input.requestId);
+                restoreSource = {
+                  format: "postgres-logical",
+                  databaseId: source.id,
+                  runtimeId: source.runtimeId,
+                  sourceConfig: source.config,
+                  sourceSequence: input.copyFrom.expectedSequence,
+                  pinId: input.requestId,
+                  backupName,
+                  backupId: `${new URL(storage.destinationPath).pathname.slice(1)}/${serverName}/postgres/${backupName}/manifest.json`,
+                  destinationId: storage.destinationId,
+                  destinationPath: storage.destinationPath,
+                  serverName,
+                  endpoint: storage.endpoint,
+                };
+              } else {
+                if (
+                  source.config.engine === "postgres" &&
+                  clusterPostgresVersion(source.config) !== clusterPostgresVersion(input.config)
+                )
+                  throw new AppError(
+                    "Physical backups restore to the same PostgreSQL version. Use Create upgraded copy to move to a newer version.",
+                    422,
+                    "CLUSTER_DATABASE_RESTORE_TARGET",
+                  );
+                sourceConnection = await openClusterApi(
+                  ctx.organizationId,
+                  source.clusterId,
+                  source.runtimeId,
+                );
+                const adapter = new ClusterDatabaseAdapter(
+                  sourceConnection.api,
+                  { ...source, hosts: sourceConnection.runtime.plan.hosts },
+                  AbortSignal.timeout(30_000),
+                  async () => {
+                    await fleetAdmin(ctx);
+                  },
+                );
+                restoreSource = await adapter.archive.restoreSource(
+                  source.id,
+                  source.config.backup.destinationId,
+                  input.restoreFrom!.backupName,
+                );
+                restoreSource.runtimeId = source.runtimeId;
+                await backupStorage(ctx, restoreSource.destinationId, restoreSource);
+                if (restoreSource.format === "redis-rdb-set" && "pin" in adapter.archive) {
+                  const archive = adapter.archive;
+                  await archive.pin(input.restoreFrom!.backupName, input.requestId);
+                  restoreSource.pinId = input.requestId;
+                  undoPin = () => archive.pin(input.restoreFrom!.backupName, input.requestId, true);
+                }
+              }
+            }
+            const { row, started } = await repos.clusterDatabase.start({
+              organizationId: ctx.organizationId,
+              projectId: id,
+              clusterId,
+              runtimeId: runtime.id,
+              requestId: input.requestId,
+              name: input.name,
+              config: input.config,
+              restoreSource,
+              secretEncrypted: encrypt(randomBytes(32).toString("hex")),
+            });
+            saved = true;
+            if (started) {
+              await queue(ctx, row);
+              audit(ctx, id, row.id, "created");
+            }
+            return presentClusterDatabase(row);
+          } catch (error) {
+            // Do not undo a pin after an ambiguous database commit. Confirm that
+            // no durable request exists before releasing its recovery point.
+            if (!saved && undoPin) {
+              try {
+                if (
+                  !(await repos.clusterDatabase.findByRequest(
+                    ctx.organizationId,
+                    id,
+                    input.requestId,
+                  ))
+                )
+                  await undoPin();
+              } catch {}
+            }
+            throw error;
+          } finally {
+            await sourceConnection?.api.dispose();
+          }
+        };
+        return input.importFrom ? withBackupRunLock(input.importFrom.runId, admit) : admit();
       });
       if (!result) throw new AppError("The project is being removed.", 409, "PROJECT_UNAVAILABLE");
       return result;
@@ -523,6 +659,7 @@ export function createClusterDatabaseOperations(
           input.expectedSequence,
           input.envKey,
           value,
+          input.replace,
         );
         notifyClusterDatabase(ctx.organizationId, id);
         audit(ctx, id, row.id, input.envKey ? "connected" : "disconnected");

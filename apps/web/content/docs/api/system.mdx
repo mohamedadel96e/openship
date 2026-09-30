@@ -128,14 +128,14 @@ paths return **400**, missing paths **404**.
 
 | Operation | SDK | REST API |
 | --- | --- | --- |
-| Browse an authorized host filesystem location. | `system.browse(input?)` | `GET /api/system/browse`<br />`settings:read` |
-| Read database and installation health. | `system.health()` | `GET /api/system/diagnostics`<br />`settings:read` |
-| Read instance settings. | `system.getSettings()` | `GET /api/system/settings`<br />`settings:read` |
-| Change instance settings. | `system.updateSettings(input)` | `PATCH /api/system/settings`<br />`settings:write` |
-| Read SMTP settings with secrets masked. | `system.getEmailSettings()` | `GET /api/system/settings/email`<br />`settings:read` |
-| Configure SMTP delivery for the installation. | `system.updateEmailSettings(input)` | `PUT /api/system/settings/email`<br />`settings:write` |
-| Send a test message using the configured SMTP settings. | `system.sendTestEmail(input)` | `POST /api/system/settings/email/test`<br />`settings:write` |
-| Reset supported instance settings. | `system.resetSettings()` | `DELETE /api/system/settings`<br />`settings:admin` |
+| Browse an authorized host filesystem location. | `system.browse(input?)` | `GET /api/system/browse`<br />`settings:read` · Self-hosted |
+| Read database and installation health. | `system.health()` | `GET /api/system/diagnostics`<br />`settings:read` · Self-hosted |
+| Read instance settings. | `system.getSettings()` | `GET /api/system/settings`<br />`settings:read` · Self-hosted |
+| Change instance settings. | `system.updateSettings(input)` | `PATCH /api/system/settings`<br />`settings:write` · Self-hosted |
+| Read SMTP settings with secrets masked. | `system.getEmailSettings()` | `GET /api/system/settings/email`<br />`settings:read` · Self-hosted |
+| Configure SMTP delivery for the installation. | `system.updateEmailSettings(input)` | `PUT /api/system/settings/email`<br />`settings:write` · Self-hosted |
+| Send a test message using the configured SMTP settings. | `system.sendTestEmail(input)` | `POST /api/system/settings/email/test`<br />`settings:write` · Self-hosted |
+| Reset supported instance settings. | `system.resetSettings()` | `DELETE /api/system/settings`<br />`settings:admin` · Self-hosted |
 
 ### HTTP endpoints
 

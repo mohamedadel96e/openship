@@ -17,6 +17,7 @@
  *   "local"  → clone + build on the API host, then transfer output to target
  */
 
+import { randomUUID } from "node:crypto";
 import type {
   BuildConfig,
   CommandExecutor,
@@ -33,11 +34,12 @@ import type {
 import { LocalExecutor, wrapLocalBuildCommand } from "../system/executor";
 import { ensureOwnedDir } from "../system/elevated-executor";
 import { execReliable } from "../system/remote-journal";
-import { STACKS, appVolumeTargets, buildOutputTransferExcludes, safeErrorMessage, missingOutputDirectoryMessage, packageManagerEnsureCommand, nodeBinPathExport, type StackId, type StackDefinition } from "@repo/core";
+import { STACKS, appVolumeTargets, buildOutputTransferExcludes, safeErrorMessage, missingOutputDirectoryMessage, packageManagerEnsureCommand, nodeBinPathExport, withTimeout, type StackId, type StackDefinition } from "@repo/core";
 import { checkToolchainForStack, installTools } from "../toolchain";
 import type {
   RuntimeAdapter,
   RuntimeCapability,
+  ReleaseCommandOptions,
   DeploymentRef,
   RollbackInput,
   MakeActiveResult,
@@ -60,6 +62,7 @@ import type { ProcessSupervisor } from "./supervisor/types";
 import { detectSupervisor } from "./supervisor/detect";
 import { probeListeningPort } from "./port-conflict";
 import { splitRuntimeEnv, droppedRuntimeEnvMessage } from "./runtime-env";
+import { releaseCommandDeadline } from "./release-command-deadline";
 
 /** Parent of a POSIX path on the TARGET machine — node:path would resolve
  *  against the local platform's separator, which is wrong over SSH from Windows. */
@@ -109,6 +112,26 @@ export const STATIC_RELEASE_BASE = "/opt/openship/static";
 
 // ─── Bare runtime ────────────────────────────────────────────────────────────
 
+/**
+ * The env a bare deployment's processes get: the supervised app (`deploy`) and its
+ * release commands (`runReleaseCommand`) both take it from here, so a migration
+ * can never resolve a different DSN, PATH or PORT than the app it prepares.
+ * `dropped` is what `splitRuntimeEnv` refused, returned so each caller can say so.
+ */
+function bareProcessEnv(config: DeployConfig): { env: Record<string, string>; dropped: string[] } {
+  const projectEnv = splitRuntimeEnv(
+    Object.fromEntries(Object.entries(config.envVars ?? {}).map(([k, v]) => [k, String(v)])),
+  );
+  return {
+    env: {
+      ...Object.fromEntries(projectEnv.entries),
+      PORT: String(config.port),
+      NODE_ENV: config.environment === "production" ? "production" : "development",
+    },
+    dropped: projectEnv.dropped,
+  };
+}
+
 export class BareRuntime implements RuntimeAdapter {
   readonly name = "bare";
   readonly capabilities: ReadonlySet<RuntimeCapability> = new Set<RuntimeCapability>([
@@ -132,6 +155,7 @@ export class BareRuntime implements RuntimeAdapter {
     // host's supervisor and the particular release still support it.
     "unitRestore",
     "inContainerExec",
+    "releaseCommand",
   ]);
 
   private readonly workDir: string;
@@ -221,6 +245,10 @@ export class BareRuntime implements RuntimeAdapter {
     return `${this.workDir}/releases/${deploymentId}`;
   }
 
+  private isRetainedArtifact(path: string): boolean {
+    return path.startsWith(`${this.workDir}/releases/`);
+  }
+
   /** Per-project directory holding the paths that must survive a release swap.
    *  The `shared/` half of the Capistrano layout `releases/` already implements. */
   private sharedDir(projectId: string): string {
@@ -246,12 +274,15 @@ export class BareRuntime implements RuntimeAdapter {
     projectId: string,
     volumes: string[] | undefined,
     log?: LogCallback,
+    strict = false,
+    signal?: AbortSignal,
   ): Promise<void> {
     const targets = appVolumeTargets(volumes ?? []);
     if (targets.length === 0) return;
 
     const shared = this.sharedDir(projectId);
     for (const relative of targets) {
+      signal?.throwIfAborted();
       const sharedPath = `${shared}/${relative}`;
       const releasePath = `${releaseDir}/${relative}`;
       try {
@@ -263,6 +294,7 @@ export class BareRuntime implements RuntimeAdapter {
             await this.executor.mkdir(sharedPath);
           }
         }
+        signal?.throwIfAborted();
         await this.executor.rm(releasePath);
         await this.executor.mkdir(parentPath(releasePath));
         // -n so a pre-existing symlink is replaced rather than followed into
@@ -274,6 +306,8 @@ export class BareRuntime implements RuntimeAdapter {
           level: "info",
         });
       } catch (err) {
+        signal?.throwIfAborted();
+        if (strict) throw new Error(`Could not persist ${relative}: ${safeErrorMessage(err)}`);
         log?.({
           timestamp: new Date().toISOString(),
           message: `Could not persist ${relative}: ${safeErrorMessage(err)}\n`,
@@ -310,7 +344,7 @@ export class BareRuntime implements RuntimeAdapter {
      * The same path fires on a scoped compose deploy that carries an untargeted
      * static sub-app forward.
      */
-    const consumeSource = !artifactPath.startsWith(`${this.workDir}/releases/`);
+    const consumeSource = !this.isRetainedArtifact(artifactPath);
 
     await ensureOwnedDir(this.executor, `${this.workDir}/releases`);
     await this.executor.rm(releaseDir);
@@ -702,22 +736,14 @@ export class BareRuntime implements RuntimeAdapter {
     // below prepends to. The dependency binary would still resolve, but the
     // interpreter behind its shebang (`#!/usr/bin/env node`) would not once
     // /usr/bin is gone.
-    const projectEnv = splitRuntimeEnv(
-      Object.fromEntries(Object.entries(config.envVars ?? {}).map(([k, v]) => [k, String(v)])),
-    );
-    if (projectEnv.dropped.length > 0) {
+    const { env, dropped } = bareProcessEnv(config);
+    if (dropped.length > 0) {
       _onLog?.({
         timestamp: new Date().toISOString(),
         level: "warn",
-        message: droppedRuntimeEnvMessage(projectEnv.dropped),
+        message: droppedRuntimeEnvMessage(dropped),
       });
     }
-
-    const env: Record<string, string> = {
-      ...Object.fromEntries(projectEnv.entries),
-      PORT: String(config.port),
-      NODE_ENV: config.environment === "production" ? "production" : "development",
-    };
 
     // `next start` / `gatsby serve` / `remix-serve` name a DEPENDENCY binary, and
     // the supervisor hands the command to a bare `sh -lc` — nothing prepends
@@ -757,6 +783,112 @@ export class BareRuntime implements RuntimeAdapter {
       containerId: config.deploymentId,
       status: "running",
     };
+  }
+
+  /**
+   * Run one release command in the STAGED artifact directory, before it is
+   * promoted to a release and before the supervisor starts anything.
+   *
+   * That directory is the exact tree `deploy` promotes seconds later, so the
+   * command sees the code it is migrating for. It runs through a login shell
+   * (`sh -lc`, via the same wrap the build steps use) with the deploy's env
+   * exported — the closest match available to what `ExecStart=/bin/sh -lc` gives
+   * the start command.
+   *
+   * Persistent paths are attached before execution, using the same helper as
+   * deploy. A storage failure must stop the command before it migrates a copy
+   * that would be discarded when the real shared path is attached later.
+   */
+  async runReleaseCommand(
+    config: DeployConfig,
+    command: string,
+    onLog: LogCallback,
+    opts?: ReleaseCommandOptions,
+  ): Promise<void> {
+    const artifactPath = config.imageRef;
+    if (!artifactPath) throw new Error("Release commands require a staged build artifact");
+    // A forward deploy may reuse the active release for an environment refresh.
+    // Never run against its live files (or hard-link them into the scratch copy).
+    const temporaryCopy = this.isRetainedArtifact(artifactPath);
+    const workDir = temporaryCopy
+      ? this.buildDir(`${config.buildSessionId}-release-${randomUUID()}`)
+      : artifactPath;
+
+    // The start command's env, from the same function deploy uses. Logged here
+    // too: this phase runs, and can fail, before deploy ever gets to say it.
+    // Non-identifier keys are dropped rather than breaking the `export` prefix,
+    // matching the build pipeline's env handling.
+    const { env, dropped } = bareProcessEnv(config);
+    if (dropped.length > 0) {
+      onLog({
+        timestamp: new Date().toISOString(),
+        level: "warn",
+        message: droppedRuntimeEnvMessage(dropped),
+      });
+    }
+    const envPrefix = Object.entries(env)
+      .filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
+      .map(([k, v]) => `export ${k}=${sq(v)}`)
+      .join(" && ");
+    // The same dependency-binary resolution the start command gets (see deploy):
+    // `prisma migrate deploy` names a node_modules/.bin binary exactly the way
+    // `next start` does, and nothing else puts that directory on PATH here.
+    const binPath = nodeBinPathExport(config.packageManager, [workDir]);
+    const full =
+      `${envPrefix ? `${envPrefix} && ` : ""}cd ${sq(workDir)} && ` +
+      `${binPath ? `${binPath} && ` : ""}${command}`;
+    // Login-shell wrap for a LOCAL target only — same rule buildOnTarget applies,
+    // and the reason a version-managed toolchain (nvm, rbenv) is on PATH at all.
+    const effective = this.executor instanceof LocalExecutor ? wrapLocalBuildCommand(full) : full;
+    const deadline = releaseCommandDeadline(opts);
+    let execution: Promise<{ code: number; output: string }> | undefined;
+    const execute = (shellCommand: string) => deadline.wait(() => {
+      execution = this.executor instanceof LocalExecutor
+        ? this.executor.streamExec(shellCommand, onLog, { signal: deadline.signal, killProcessTree: true })
+        : this.executor.streamExec(shellCommand, onLog, { signal: deadline.signal });
+      return execution;
+    });
+
+    try {
+      deadline.signal.throwIfAborted();
+      // Scope remote filesystem work to the same deadline as execution, and
+      // await preparation to settle before acknowledging cancellation.
+      const prepare = async () => {
+        if (temporaryCopy) {
+          await this.executor.mkdir(workDir);
+          const copy = await execute(`cd ${sq(workDir)} && cp -a ${sq(artifactPath)}/. .`);
+          if (copy.code !== 0) throw new Error(`Could not stage retained release: ${copy.output.trim().slice(-1000)}`);
+        }
+        await this.linkPersistentPaths(
+          workDir, config.projectId, config.volumes, onLog, true, deadline.signal,
+        );
+      };
+      if (this.executor.runWithAbortSignal) await this.executor.runWithAbortSignal(deadline.signal, prepare);
+      else await prepare();
+      const result = await execute(effective);
+      deadline.signal.throwIfAborted();
+      if (result.code !== 0) {
+        const tail = result.output.trim().slice(-1000);
+        throw new Error(`Release command failed with exit code ${result.code}${tail ? `\n${tail}` : ""}`);
+      }
+    } finally {
+      deadline.dispose();
+      if (deadline.signal.aborted && execution) {
+        const cleanup: Promise<unknown> = this.executor instanceof LocalExecutor
+          ? execution
+          : Promise.all([killProcessesUnderDir(this.executor, workDir), execution]);
+        await withTimeout(cleanup, 5_000,
+          "Release command cleanup could not be confirmed").catch(error => onLog({
+          timestamp: new Date().toISOString(), level: "warn", message: `${safeErrorMessage(error)}\n`,
+        }));
+      }
+      if (temporaryCopy) {
+        await withTimeout(removeManagedArtifact(this.executor, workDir, this.workDir), 5_000,
+          "Release scratch directory cleanup could not be confirmed").catch(error => onLog({
+          timestamp: new Date().toISOString(), level: "warn", message: `${safeErrorMessage(error)}\n`,
+        }));
+      }
+    }
   }
 
   async deployStatic(config: DeployConfig & { outputDirectory: string }): Promise<DeploymentResult> {

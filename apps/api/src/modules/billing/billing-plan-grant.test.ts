@@ -75,7 +75,7 @@ beforeEach(async () => {
 describe("complimentary plan operator and reconciliation", () => {
   it("previews the actual owned workspace without creating a grant or credit writes", async () => {
     expect(await run({ dryRun: true, email: "CUSTOMER@example.com" })).toMatchObject({
-      organizationId, namespace, action: "grant", charge: 0, monthlyCredits: 3000, expiresAt: null,
+      organizationId, namespace, action: "grant", charge: 0, monthlyCredits: 3500, expiresAt: null,
     });
     expect(await grants.current(organizationId)).toBeNull();
     expect(provider.setPolicy).not.toHaveBeenCalled();
@@ -83,7 +83,7 @@ describe("complimentary plan operator and reconciliation", () => {
   });
 
   it("issues Pro with its saved allowance and caps, while the provider subscription stays null", async () => {
-    expect(await run()).toMatchObject({ plan: "pro", charge: 0, monthlyCredits: 3000, spendingBlocked: false, nextRenewal: "2026-10-25T14:00:00.000Z", expiresAt: null });
+    expect(await run()).toMatchObject({ plan: "pro", charge: 0, monthlyCredits: 3500, spendingBlocked: false, nextRenewal: "2026-10-25T14:00:00.000Z", expiresAt: null });
     const row = (await grants.current(organizationId))!;
     expect(row).toMatchObject({ grantedBy: "test-operator", reason: "Partner account", limits: planLimits("pro") });
     expect(row.appliedPeriodEnd?.toISOString()).toBe("2026-10-25T14:00:00.000Z");
@@ -123,13 +123,13 @@ describe("complimentary plan operator and reconciliation", () => {
     catalog.billing.creditsPerCycle = 5000;
     try {
       const future = new Date("2026-10-25T14:01:00Z");
-      expect((await reconcile(future)).grant?.offer.credits).toBe(3000);
+      expect((await reconcile(future)).grant?.offer.credits).toBe(3500);
       expect(used).toBe(0);
       used = 17;
       await reconcile(future);
       expect(used).toBe(17);
       expect(provider.resetQuota).toHaveBeenCalledTimes(2);
-      expect(policy.quotaLimit).toBe(3000);
+      expect(policy.quotaLimit).toBe(3500);
     } finally { catalog.billing.creditsPerCycle = original; }
   });
 

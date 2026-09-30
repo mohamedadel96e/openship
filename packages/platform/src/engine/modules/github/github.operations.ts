@@ -23,6 +23,12 @@ const repoReads = new Set(["getRepo", "listBranches", "getCloneToken", "detectSt
 
 async function authorize(ctx: ExecutionContext, name: keyof typeof GitHubCollectionSchemas, input: unknown) {
   const spec = GitHubCollectionSchemas[name];
+  if (name === "pollConnect" && (input as { state?: string } | undefined)?.state) {
+    return authorization.authorize(ctx, { resourceType: "github", resourceId: "*", action: "read" });
+  }
+  if (name === "claimInstallation" && env.CLOUD_MODE) {
+    return authorization.authorize(ctx, { resourceType: "github", resourceId: "*", action: "write" });
+  }
   if (sourceMethods.has(name)) return ownerOnly(ctx);
   if (instanceMethods.has(name)) {
     localOnly();

@@ -1,7 +1,7 @@
 /**
  * GitHubSource — the adapter interface for GitHub source selection.
  *
- * ONE interface, three concrete shapes, ONE resolver (see ./index.ts):
+ * Source adapters share one interface and one resolver (see ./index.ts):
  *   - GitHubAppSource   (./app-source.ts)   — pure GitHub App, ZERO gh-CLI.
  *                        Token/data via an injected AppBackend:
  *                        LocalAppBackend (SaaS, local key-mint) or
@@ -13,8 +13,8 @@
  *                        + a user-token fallback. Listing is gh-first; the
  *                        clone token is App/cloud-first.
  *
- * The SaaS uses GitHubAppSource directly (no gh, no merge); the gh-CLI module
- * is never imported in CLOUD_MODE.
+ * PersonalTokenGitHubSource supplements either the App or local source with
+ * an enabled user PAT. The SaaS has no host/gh credential source.
  *
  * The adapter binds RequestContext at construction (like the runtime adapters
  * bind their client) — capability methods don't re-take ctx. This is the

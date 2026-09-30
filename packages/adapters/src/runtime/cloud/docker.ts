@@ -43,6 +43,25 @@ function notFound(error: unknown): boolean {
   return e?.status === 404 || e?.statusCode === 404;
 }
 
+/** Health is a short protocol marker. Never retain a provider error body,
+ * signed URL or an unbounded response in a deployment error. */
+async function bridgeVersionMatches(response: Response): Promise<boolean> {
+  const reader = response.body?.getReader();
+  if (!reader) return false;
+  let body = "";
+  const decoder = new TextDecoder();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return body + decoder.decode() === CLOUD_DOCKER_BRIDGE_VERSION;
+      if (value.length > 256 || body.length + value.length > 256) return false;
+      body += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
 /** Docker semantics on a single permanent Oblien workspace. Resource identity
  * stays explicit: container IDs identify containers; workspaceId identifies the
  * shared host. Inherited retention/rollback never stop or delete that host. */
@@ -67,11 +86,7 @@ export class CloudDockerRuntime extends DockerRuntime {
     this.executor = executor;
     this.cloud = new CloudRuntime(client, { namespace: options.namespace, adminProxy: options.adminProxy, beforeProvision: options.beforeProvision });
     getRuntime = () => this.workspaceRuntime();
-    connect = async () => {
-      await this.ensureBridge();
-      try { return await dockerWebSocketStream((await this.workspaceRuntime()).proxy(CLOUD_DOCKER_BRIDGE_PORT).ws("/docker")); }
-      catch (error) { this.bridgePromise = undefined; throw error; }
-    };
+    connect = () => this.connectBridge();
   }
 
   static async forWorkspace(client: Oblien, options: CloudDockerOptions): Promise<CloudDockerRuntime> {
@@ -86,17 +101,71 @@ export class CloudDockerRuntime extends DockerRuntime {
     return this.client.workspace(this.workspaceId).runtime();
   }
 
+  private async connectBridge() {
+    for (let attempt = 0; ; attempt++) {
+      await this.ensureBridge();
+      try { return await dockerWebSocketStream((await this.workspaceRuntime()).proxy(CLOUD_DOCKER_BRIDGE_PORT).ws("/docker")); }
+      catch (error) {
+        this.bridgePromise = undefined;
+        // A cold restart can invalidate both a cached readiness result and the
+        // SDK token. Retry the handshake once after probing again. The transport
+        // has not forwarded any Docker request bytes until this promise resolves.
+        if (attempt !== 0) throw error;
+      }
+    }
+  }
+
   private ensureBridge(): Promise<void> {
     const initialize = async () => {
       const info = await this.client.workspaces.get(this.workspaceId);
       assertDockerWorkspaceOwner(info, this.options.namespace);
       if (!isDockerWorkspaceRunning(info)) throw new Error("The project's Docker workspace is stopped. Start a service or deploy to resume it.");
-      const runtime = await this.workspaceRuntime();
-      const ready = async () => {
+      let runtime = await this.workspaceRuntime();
+      let refreshed = false;
+      let lastProbe = "No health response";
+      const ready = async (): Promise<boolean> => {
+        let response: Response;
         try {
-          const response = await runtime.proxy(CLOUD_DOCKER_BRIDGE_PORT).fetch("/health", { signal: AbortSignal.timeout(5000), redirect: "error" });
-          return response.ok && await response.text() === CLOUD_DOCKER_BRIDGE_VERSION;
-        } catch { return false; }
+          response = await runtime.proxy(CLOUD_DOCKER_BRIDGE_PORT).fetch("/health", { signal: AbortSignal.timeout(5000), redirect: "error" });
+        } catch (error) {
+          lastProbe = error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)
+            ? "Bridge health request timed out" : "Bridge health network request failed";
+          return false;
+        }
+        const requestId = response.headers.get("x-request-id");
+        const reference = requestId && /^[a-zA-Z0-9_.:-]{1,128}$/.test(requestId) ? `; request ${requestId}` : "";
+        lastProbe = `Bridge health HTTP ${response.status}${reference}`;
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => {});
+          if (response.status === 401 && !refreshed) {
+            refreshed = true;
+            try {
+              // Refresh only through this namespace's existing client. A revoked
+              // namespace credential must still fail the control-plane check.
+              runtime = await this.client.workspace(this.workspaceId).runtime({ force: true });
+            } catch {
+              throw new AppError(`The workspace Docker connection is unavailable: ${lastProbe}; workspace ${this.workspaceId}. Runtime credential refresh failed. Check namespace access.`,
+                503, "CLOUD_DOCKER_PROXY_UNAVAILABLE");
+            }
+            return ready();
+          }
+          // Installing or restarting Python cannot repair a missing platform
+          // route or an authentication failure. Preserve the actual rejection.
+          if ([401, 403, 404, 405, 501].includes(response.status)) {
+            const accessRejected = [401, 403].includes(response.status);
+            const hint = accessRejected
+              ? "Oblien rejected access to the workspace proxy. Check runtime credentials and namespace access."
+              : "Check that this workspace has a current Oblien runtime with the /proxy route and Docker bridge support.";
+            throw new AppError(`The workspace Docker connection is unavailable: ${lastProbe}; workspace ${this.workspaceId}. ${hint}`,
+              accessRejected ? 503 : 502, accessRejected ? "CLOUD_DOCKER_PROXY_UNAVAILABLE" : "CLOUD_RUNTIME_PROXY_UNAVAILABLE");
+          }
+          return false;
+        }
+        try {
+          if (await bridgeVersionMatches(response)) return true;
+          lastProbe += "; unexpected bridge version";
+        } catch { lastProbe += "; health response interrupted"; }
+        return false;
       };
       if (await ready()) return;
       await this.executor.exec("docker info --format '{{.ServerVersion}}'", { timeout: 60_000 });
@@ -130,9 +199,12 @@ export class CloudDockerRuntime extends DockerRuntime {
         if (await ready()) return;
         await new Promise(resolve => setTimeout(resolve, 500));
       }
-      const failed = (await workspace.workloads.list({ name: BRIDGE_WORKLOAD })).find(item => item.name === BRIDGE_WORKLOAD);
-      const diagnosis = failed ? await workspace.workloads.logs(failed.id).catch(() => null) : null;
-      throw new Error(`The workspace Docker connection did not become ready${diagnosis ? `: ${JSON.stringify(diagnosis).slice(-1500)}` : ""}`);
+      const failed = await workspace.workloads.list({ name: BRIDGE_WORKLOAD })
+        .then(items => items.find(item => item.name === BRIDGE_WORKLOAD), () => undefined);
+      const state = String(failed?.state ?? failed?.status ?? "unknown");
+      const safeState = /^[a-z_]{1,32}$/.test(state) ? state : "unknown";
+      throw new AppError(`The workspace Docker connection did not become ready: ${lastProbe}; Bridge state: ${safeState}; workspace ${this.workspaceId}. Check the workspace runtime proxy and the ${BRIDGE_WORKLOAD} workload.`,
+        503, "CLOUD_DOCKER_BRIDGE_NOT_READY");
     };
     return this.bridgePromise ??= (this.options.bridgeLock ? this.options.bridgeLock.run(initialize) : initialize())
       .catch(error => { this.bridgePromise = undefined; throw error; });

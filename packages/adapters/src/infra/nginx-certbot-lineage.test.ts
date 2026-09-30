@@ -187,7 +187,7 @@ describe("Certbot renewal after adopting a certificate", () => {
     expect(result.expiresAt).toBe(new X509Certificate(s.renewed.certPem).validToDate.toISOString());
     expect(await s.served()).toBe(s.renewed.certPem);
     expect(s.commands.filter((command) => command.startsWith("certbot "))).toEqual([
-      `certbot 'renew' '--cert-name' '${healthy}' '--non-interactive'`,
+      `certbot 'renew' '--cert-name' '${healthy}' '--standalone' '--http-01-port' '49180' '--non-interactive' '--no-random-sleep-on-renew'`,
     ]);
   });
 
@@ -223,7 +223,7 @@ describe("Certbot renewal after adopting a certificate", () => {
     const result = await s.nginx.renewCert(DOMAIN);
 
     expect(s.commands.filter((c) => c.startsWith("certbot "))).toEqual([
-      `certbot 'renew' '--cert-name' '${DOMAIN}-0001' '--non-interactive'`,
+      `certbot 'renew' '--cert-name' '${DOMAIN}-0001' '--standalone' '--http-01-port' '49180' '--non-interactive' '--no-random-sleep-on-renew'`,
     ]);
     expect(await s.served()).toBe(s.renewed.certPem);
     expect(result.expiresAt).toBe(new X509Certificate(s.renewed.certPem).validToDate.toISOString());

@@ -9,6 +9,8 @@ import { encodeRepoSlug } from "@/utils/repoSlug";
 import type { VisibilityFilter, SortBy } from "../types";
 import { LANG_COLORS } from "@/constants/lang-colors";
 import { useI18n, interpolate } from "@/components/i18n-provider";
+import { Input } from "@/components/ui/input";
+import { RepositoryAccounts } from "./RepositoryAccounts";
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
@@ -30,6 +32,10 @@ function timeAgo(dateStr: string, tr: TimeStrings): string {
   const days = Math.floor(hrs / 24);
   if (days < 30) return interpolate(tr.daysAgo, { n: String(days) });
   return interpolate(tr.monthsAgo, { n: String(Math.floor(days / 30)) });
+}
+
+function getOwnerLogin(owner: GitHubRepo["owner"]): string {
+  return typeof owner === "string" ? owner : owner.login;
 }
 
 /* ── Component ────────────────────────────────────────────────────── */
@@ -75,6 +81,8 @@ interface RepositoryListProps {
   /** Start a fresh, observed installation instead of using a page-load nonce. */
   onInstall: () => void;
   installing: boolean;
+  /** Library shortcut; other repository pickers keep their selection flow. */
+  onImportUrl?: () => void;
   /** Opt into server-side pagination (Library). Omit for client-side lists. */
   server?: RepoServerPagination;
 }
@@ -90,6 +98,7 @@ export function RepositoryList({
   installUrl,
   onInstall,
   installing,
+  onImportUrl,
   server,
 }: RepositoryListProps) {
   const { t } = useI18n();
@@ -111,7 +120,12 @@ export function RepositoryList({
     if (!Array.isArray(repos)) return [];
     // Server mode: `repos` is already the searched/sorted/sliced page.
     if (server) return repos;
-    let list = repos;
+    // Home can merge repositories from several App, CLI and personal-token owners.
+    let list = selectedOwner
+      ? repos.filter((repo) =>
+          getOwnerLogin(repo.owner).toLowerCase() === selectedOwner.toLowerCase(),
+        )
+      : repos;
 
     if (search) {
       const q = search.toLowerCase();
@@ -132,7 +146,7 @@ export function RepositoryList({
     });
 
     return list;
-  }, [repos, search, visibility, sortBy, server]);
+  }, [repos, selectedOwner, search, visibility, sortBy, server]);
 
   // Footer count: authoritative server count (search/visibility-scoped) in
   // server mode, else the locally-filtered length.
@@ -143,65 +157,34 @@ export function RepositoryList({
     router.push(`/deploy/${slug}`);
   };
 
-  const getOwnerLogin = (owner: { login: string } | string): string =>
-    typeof owner === "string" ? owner : owner.login;
-
   return (
     <div className="bg-card rounded-2xl border border-border/50">
       {/* ── Card header: account selector + search ──── */}
       <div className="px-5 py-4 border-b border-border/50">
         {/* ── Accounts row ──────────────────────────────── */}
-        {accounts.length > 0 && (
-          <div className="flex items-center gap-1.5 mb-4 overflow-x-auto no-scrollbar">
-            {accounts.map((acc) => (
-              <button
-                key={acc.login}
-                onClick={() => setSelectedOwner(acc.login)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap ${
-                  selectedOwner === acc.login
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                }`}
-              >
-                {acc.avatar_url ? (
-                  <img
-                    src={acc.avatar_url}
-                    alt=""
-                    className="w-5 h-5 rounded-full"
-                  />
-                ) : (
-                  <span className="flex w-5 h-5 items-center justify-center rounded-full bg-muted">
-                    <UiIcon name="github" className="size-3" />
-                  </span>
-                )}
-                {acc.login}
-              </button>
-            ))}
-            {installUrl ? (
-              <a
-                href={installUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/50 text-muted-foreground transition-all hover:border-border hover:bg-muted/50 hover:text-foreground"
-                aria-label={t.library.repositoryList.addAccount}
-                title={t.library.repositoryList.addAccount}
-              >
-                <UiIcon name="plus" className="size-4" />
-              </a>
-            ) : null}
-          </div>
-        )}
+        <div className="mb-4">
+          <RepositoryAccounts
+            accounts={accounts}
+            selectedOwner={selectedOwner}
+            onSelectOwner={setSelectedOwner}
+            onAddAccount={onInstall}
+            addingAccount={installing}
+            onImportUrl={onImportUrl}
+          />
+        </div>
 
         {/* ── Search + filter row ───────────────────────── */}
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
-            <UiIcon name="search" className="absolute start-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-            <input
+            <UiIcon name="search" aria-hidden className="pointer-events-none absolute start-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+            <Input
               type="text"
+              variant="filled"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={t.library.repositoryList.searchPlaceholder}
-              className="w-full ps-10 pe-4 py-2.5 bg-muted/40 border border-border/50 rounded-xl text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:bg-background transition-all"
+              aria-label={t.library.repositoryList.searchPlaceholder}
+              className="ps-10 pe-4"
             />
           </div>
 
@@ -338,19 +321,6 @@ export function RepositoryList({
                       {repo.private && (
                         <span className="px-1.5 py-0.5 rounded-md bg-muted text-[10px] font-medium text-muted-foreground">
                           {t.library.repositoryList.privateBadge}
-                        </span>
-                      )}
-                      {/* "Local only" chip — surfaces when the repo is
-                          visible via gh CLI but the GitHub App isn't
-                          installed on its owner. Remote deploys will be
-                          refused at preflight; local builds work. */}
-                      {repo.source === "cli" && (
-                        <span
-                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-warning-bg text-[10px] font-medium text-warning"
-                          title={interpolate(t.library.repositoryList.localOnlyTooltip, { owner: typeof repo.owner === "string" ? repo.owner : repo.owner.login })}
-                        >
-                          <UiIcon name="warning" className="size-2.5" />
-                          {t.library.repositoryList.localOnly}
                         </span>
                       )}
                     </div>

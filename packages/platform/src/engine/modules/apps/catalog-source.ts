@@ -10,9 +10,10 @@ import { trackBackgroundWork } from "../../lib/background-work";
 import { readApiVersion } from "../../lib/release-dist";
 
 /**
- * Runtime app catalog = the BUNDLED catalog (`@repo/core` APP_TEMPLATES) overlaid
- * by a repo-fetched copy, so a new/updated app in the repo appears AND installs
- * on existing instances without a redeploy. Stale-while-revalidate + fail-safe:
+ * Development (NODE_ENV=development) uses the BUNDLED catalog (`@repo/core`
+ * APP_TEMPLATES), so unpublished edits are used by both the UI and installer.
+ * Other environments overlay it with a repo-fetched copy, so new/updated apps
+ * appear AND install without a redeploy. Stale-while-revalidate + fail-safe:
  * `getRuntimeCatalog()` is synchronous (every consumer stays sync) — it returns
  * the current cache and kicks a background refresh when stale. Any fetch/parse
  * failure or an offline box simply keeps serving the last-good/bundled catalog,
@@ -188,7 +189,7 @@ async function fetchRemote(): Promise<{ entries: AppTemplate[]; tooNew: Resolved
 }
 
 function refresh(): void {
-  if (refreshing) return;
+  if (process.env.NODE_ENV === "development" || refreshing) return;
   refreshing = true;
   void trackBackgroundWork(fetchRemote()
     .then((remote) => {
@@ -203,8 +204,8 @@ function refresh(): void {
     }));
 }
 
-/** The current app catalog (bundled ∪ repo overlay, engine-resolved). Sync;
- *  refreshes in the background when the cache is older than the TTL. */
+/** The current engine-resolved catalog. Outside development, refreshes the repo
+ *  overlay in the background when the cache is older than the TTL. */
 export function getRuntimeCatalog(): readonly ResolvedAppTemplate[] {
   if (Date.now() - cachedAt > TTL_MS) refresh();
   return cache;

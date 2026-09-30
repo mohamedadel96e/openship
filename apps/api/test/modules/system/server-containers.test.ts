@@ -69,6 +69,11 @@ vi.mock("@repo/platform/engine/lib/mail-reconcile", () => ({
   repairServerMail: vi.fn().mockResolvedValue({ started: true, mailDown: false }),
 }));
 
+const certificateCheck = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock("@repo/platform/engine/modules/mail/mail-certificate.service", () => ({
+  refreshMailCertificate: certificateCheck,
+}));
+
 const executor = { exec: vi.fn() };
 
 vi.mock("@repo/platform/engine/lib/ssh-manager", () => ({
@@ -655,6 +660,11 @@ describe("refreshServerContainer", () => {
 });
 
 describe("scanInstanceContainers", () => {
+  it("refreshes mail certificate observations on the existing scan connection", async () => {
+    mocked.server.list.mockResolvedValue([server] as never);
+    await scanInstanceContainers();
+    expect(certificateCheck).toHaveBeenCalledWith("srv_1", { executor, force: true });
+  });
   beforeEach(() => {
     mocked.server.list.mockResolvedValue([server] as never);
     mocked.edge.mockResolvedValue(edgeContainer("ghcr.io/oblien/openship-edge:0.4.0") as never); // behind

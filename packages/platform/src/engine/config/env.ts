@@ -164,6 +164,13 @@ const envSchema = z.object({
 
   /* ---------- Mode ---------- */
   CLOUD_MODE: envBool("false"),
+  /** Optional product analytics. Production SaaS only; never enabled locally. */
+  POSTHOG_ENABLED: envBool("false"),
+  POSTHOG_PROJECT_KEY: z.string().optional(),
+  POSTHOG_HOST: z.string().default("https://us.i.posthog.com"),
+  /** Internal/demo workspaces and users, excluded on both ingestion paths. */
+  POSTHOG_EXCLUDED_ORGANIZATION_IDS: z.string().optional(),
+  POSTHOG_EXCLUDED_USER_IDS: z.string().optional(),
   /**
    * MASTER switch for the whole Openship Cloud billing feature (subscriptions,
    * top-ups). OFF by default → the billing state reports

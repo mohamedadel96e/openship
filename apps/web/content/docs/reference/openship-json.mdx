@@ -60,6 +60,11 @@ It's **JSON, not JSONC** — no comments, no trailing commas.
     installCommand: { type: "string", description: "Command that installs dependencies." },
     buildCommand: { type: "string", description: "Command that builds the app." },
     startCommand: { type: "string", description: "Command that starts the server in production." },
+    releaseCommands: {
+      type: "string[]",
+      description:
+        "Commands run once per deploy, after the build and before the new version goes live. A failure fails the deploy. See Release commands.",
+    },
     outputDirectory: {
       type: "string",
       description: "Directory the build writes to (dist, .next, build, out).",
@@ -96,6 +101,74 @@ It's **JSON, not JSONC** — no comments, no trailing commas.
     },
   }}
 />
+
+## Release commands
+
+`releaseCommands` runs once per deploy, **after the build and before the new version goes
+live**: the place migrations belong. Each command runs in order, its output streams into
+the deploy log, and a non-zero exit **fails the deploy**: nothing cuts over, and the
+version that was already serving keeps serving.
+
+```json
+{
+  "releaseCommands": ["php artisan migrate --force"]
+}
+```
+
+Nothing is injected for you. A framework's release set is a choice, so an app with no
+`releaseCommands` runs no release phase at all. The equivalents elsewhere:
+
+| Stack   | Typical release commands             |
+| ------- | ------------------------------------ |
+| Laravel | `php artisan migrate --force`        |
+| Rails   | `bundle exec rails db:prepare`       |
+| Django  | `python manage.py migrate --noinput` |
+
+Rails uses `db:prepare` rather than `db:migrate` because it also creates the database and
+loads the schema when it is empty, which is exactly the state of a first deploy.
+
+Set these commands in **Build settings → Before activation**, `openship.json`, or the
+project API/SDK. A repository scan seeds a new project; existing projects keep their saved
+commands, including an explicit empty list. The list is frozen on each deployment.
+
+Each command gets the same environment variables as your start command and a 10-minute
+budget. It runs once per forward deployment attempt, in list order. Failure, timeout, or
+cancellation stops activation and leaves the previous application running.
+
+On Docker, each command runs in a temporary container using the candidate image, the
+project's persistent mounts, and its connected-service networks. It publishes no ports
+and does not restart. Openship removes the container and its anonymous scratch volumes
+afterwards. On Bare, commands run in the staged release directory **after persistent
+paths are linked**, before the supervisor changes the running app. When a forward deploy
+reuses a retained Bare release, the command gets a temporary copy so it cannot edit the
+live application's files.
+
+<Callout title="Use persistent storage for data" type="warn">
+Only database and mounted-volume changes survive a Docker release container. Put
+image-local cache generation, symlinks, and collected assets in the build or start
+command. Store SQLite files under a declared persistent path, such as `storage/`, so the
+release command and app use the same database on both Docker and Bare.
+</Callout>
+
+<Callout title="Runtime support" type="warn">
+Release commands currently require a **single-app Docker or Bare deployment**, including
+portless workers. The app may use attached or connected database services without changing
+its single-app deployment mode.
+
+Full Compose/monorepo deployments, static sites, and runtimes without one-off command
+support **fail before activation** when commands are configured. Per-service release
+commands are not implemented. An action explicitly targeting only selected services skips
+the main app's release commands.
+</Callout>
+
+<Callout title="Rollbacks and database changes" type="warn">
+Rollbacks skip release commands, including rollbacks that rebuild from Git. Other redeploys
+run the commands saved on that deployment, even when they reuse an existing image.
+
+Use idempotent commands and schema changes compatible with the previous application.
+**Rolling code back does not undo database changes**, and a command may have made partial
+changes before failing. Openship does not promise a transaction across multiple commands.
+</Callout>
 
 ## Persistent storage
 
@@ -362,6 +435,7 @@ the required roots and start commands.
 | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
 | `framework`, `packageManager`, `*Command`, `outputDirectory`, `buildImage`, `productionPaths`, `rootDirectory` | Build settings                                    |
 | `port`, `productionMode`, `runtime`                                                                            | Runtime settings (`hasServer`, runtime isolation) |
+| `releaseCommands`                                                                                              | Build settings → Before activation                  |
 | `volumes`                                                                                                      | Configuration → Persistent storage                |
 | `env`                                                                                                          | Environment variables (seeded as editable rows)   |
 | `domains`                                                                                                      | Public endpoints / custom domains                 |

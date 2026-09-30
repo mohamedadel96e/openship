@@ -1,3 +1,4 @@
+import { SYSTEM, currentMailCertificateHealth, mailHostname } from "@repo/core";
 /**
  * @module issues
  *
@@ -52,6 +53,8 @@ import {
   type ContainerIssue,
 } from "@repo/platform/engine/modules/system/server-containers.service";
 import { listOrganizationUpdates } from "@repo/platform/engine/modules/updates/updates.service";
+import { desktopNetworkDisconnected } from "../../lib/desktop-network";
+import { nativeJobsEnabled } from "../../native/execution-policy";
 
 // ─── Shape ──────────────────────────────────────────────────────────────────
 
@@ -83,9 +86,11 @@ export type IssueKind =
   | "workload_crash_loop"
   | "workload_down"
   | "server_unreachable"
+  | "monitoring_offline"
   | "edge_down"
   | "edge_absent"
   | "mail_down"
+  | "mail_certificate"
   | "update_available"
   | "component_behind";
 
@@ -167,7 +172,8 @@ const INCIDENT_KIND: Record<IncidentKind, { kind: IssueKind; severity: IssueSeve
   unhealthy: { kind: "workload_unhealthy", severity: "action_required" },
   crash_loop: { kind: "workload_crash_loop", severity: "outage" },
   down: { kind: "workload_down", severity: "outage" },
-  server_unreachable: { kind: "server_unreachable", severity: "outage" },
+  // An SSH failure establishes a gap in observation, not a workload outage.
+  server_unreachable: { kind: "server_unreachable", severity: "action_required" },
 };
 
 function incidentIssue(
@@ -428,7 +434,7 @@ export async function listOrganizationIssues(
   const status = opts.status ?? "open";
   const infra = await canSeeInfra(ctx);
   const restricted = !!ctx.tokenScope || ctx.role === "restricted";
-  const visible = (resourceType: "project" | "server", resourceId: string) => !restricted || checkPermissionOnResource({ ...ctx, scopeMode: "fixed" }, { resourceType, resourceId, action: "read" });
+  const visible = (resourceType: "project" | "server" | "mail_server", resourceId: string) => !restricted || checkPermissionOnResource({ ...ctx, scopeMode: "fixed" }, { resourceType, resourceId, action: "read" });
   const visibleIncident = (row: ServiceIncident) => row.projectId ? visible("project", row.projectId) : row.serverId ? visible("server", row.serverId) : !restricted;
 
   if (status === "resolved") {
@@ -442,7 +448,10 @@ export async function listOrganizationIssues(
     return { issues, counts: countIssues(issues) };
   }
 
-  const [incidents, components, behind, pending, updates, names] = await Promise.all([
+  const mailVisible = !env.CLOUD_MODE && await checkPermissionOnResource(ctx, {
+    resourceType: "mail_server", resourceId: "*", action: "read", scope: "list",
+  });
+  const [incidents, components, behind, pending, updates, names, mailServers, renewalJob] = await Promise.all([
     infra
       ? repos.serviceIncident.listByOrg(organizationId, { status: "open" }).catch(() => [])
       : Promise.resolve([]),
@@ -453,9 +462,25 @@ export async function listOrganizationIssues(
     getOrgPendingActions(organizationId).catch(() => new Map<string, PendingAction[]>()),
     listOrganizationUpdates(ctx, { behindOnly: true }).catch(() => []),
     loadNames(organizationId),
+    mailVisible ? repos.mailServer.listByOrganization(organizationId).catch(() => []) : Promise.resolve([]),
+    mailVisible ? repos.job.findByKey("ssl:renew").catch(() => null) : Promise.resolve(null),
   ]);
 
   const issues: SystemIssue[] = [];
+
+  if (infra && desktopNetworkDisconnected()) {
+    issues.push({
+      id: "platform:monitoring-offline",
+      kind: "monitoring_offline",
+      severity: "action_required",
+      scope: "platform",
+      source: "component",
+      title: "This desktop is offline",
+      message: "The machine running Openship has no active network connection. Remote server health cannot be checked. Reconnect, then recheck monitoring.",
+      target: { scope: "platform", id: "desktop", name: "Openship", href: "/monitoring" },
+      resolveWith: [],
+    });
+  }
 
   // Worst-first at the source level too, so the merge order matches the tiers and
   // ties inside a tier stay stable across polls.
@@ -474,6 +499,28 @@ export async function listOrganizationIssues(
     if (unreachable.has(issue.server.id)) continue;
     broken.add(`${issue.server.id}:${issue.component}`);
     issues.push(componentIssue(issue));
+  }
+
+  for (const mail of mailServers) {
+    if (!mail.installedAt || !(await visible("mail_server", mail.serverId))) continue;
+    if (unreachable.has(mail.serverId) || broken.has(`${mail.serverId}:mail`)) continue;
+    const health = currentMailCertificateHealth(mail.certificateHealth, SYSTEM.DOMAINS.SSL_RENEW_BEFORE_DAYS);
+    const schedulerOff = mail.certificateAutoRenew && (!nativeJobsEnabled() || !renewalJob?.enabled || !renewalJob.cronExpression || renewalJob.scheduleType !== "recurring");
+    const message = health && health.status !== "ok"
+      ? health.detail
+      : mail.certificateRenewalError || (schedulerOff ? "Automatic mail certificate renewal is paused because the SSL renewal job is disabled." : !health ? "The mail certificate has not been checked yet." : null);
+    if (!message) continue;
+    const hostname = mailHostname(mail.domain);
+    issues.push({
+      id: `mail:certificate:${mail.serverId}`,
+      kind: "mail_certificate", scope: "server", source: "component",
+      severity: health?.status === "fail" || !!mail.certificateRenewalError || schedulerOff ? "action_required" : "advisory",
+      title: hostname,
+      message,
+      details: { serverId: mail.serverId, certificateStatus: health?.status ?? "unknown", autoRenew: mail.certificateAutoRenew, checkedAt: health?.checkedAt },
+      target: { scope: "server", id: mail.serverId, name: names.server.get(mail.serverId) ?? hostname, href: `/emails?serverId=${encodeURIComponent(mail.serverId)}&tab=advanced` },
+      resolveWith: [],
+    });
   }
 
   // Drift on a component that is already down is not a second thing to tell the

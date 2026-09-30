@@ -14,6 +14,8 @@ export function GET() {
     { loc: `${SITE_URL}/resources`, lastmod: now, changefreq: "daily",  priority: 0.85 },
     { loc: `${SITE_URL}/privacy`,  lastmod: now, changefreq: "yearly",  priority: 0.30 },
     { loc: `${SITE_URL}/terms`,    lastmod: now, changefreq: "yearly",  priority: 0.30 },
+    { loc: `${SITE_URL}/support`,  lastmod: now, changefreq: "monthly", priority: 0.60 },
+    { loc: `${SITE_URL}/contact`,  lastmod: now, changefreq: "monthly", priority: 0.40 },
   ];
   return xmlResponse(buildUrlset(entries));
 }

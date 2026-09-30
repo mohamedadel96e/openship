@@ -227,9 +227,20 @@ async function teardownProjectLocked(
   // The Openship control plane is the host service, not a torn-down workload —
   // refuse BEFORE claiming the lock so we never mangle its row. (The controller
   // guards this too; this is defense-in-depth for any other caller.)
-  const preload = await repos.project.findById(projectId).catch(() => undefined);
-  if (preload?.organizationId === ctx.organizationId && preload.clusterId && (await repos.clusterDatabase.list(ctx.organizationId, projectId)).length)
-    throw new AppError("Remove this project's databases and their retained data before deleting the project. Application deletion never deletes database data implicitly.", 409, "CLUSTER_DATABASES_ATTACHED");
+  const preload = await repos.project.findById(projectId);
+  if (
+    preload?.organizationId === ctx.organizationId &&
+    (await repos.clusterDatabase.list(ctx.organizationId, projectId)).length
+  )
+    throw new AppError(
+      "Remove this project's databases and their retained data before deleting the project. Application deletion never deletes database data implicitly.",
+      409,
+      "CLUSTER_DATABASES_ATTACHED",
+    );
+  if (preload?.organizationId === ctx.organizationId && preload.clusterId)
+    await (
+      await import("../../lib/project-storage-guard")
+    ).assertProjectStorageEmpty(ctx.organizationId, projectId, preload.clusterId);
   if (preload?.appTemplateId === "openship") {
     push({
       step: "guard_control_plane",
@@ -321,12 +332,21 @@ async function teardownProjectLocked(
     let consumerLinks: ConsumerLink[] = [];
     try {
       consumerLinks = (await repos.projectConnection.listBySource(projectId)) as ConsumerLink[];
-      if (consumerLinks.some(link => link.sourceServiceId)) {
-        push({ step: "load_project", status: "failed", error: "Disconnect this project's shared services from their consuming projects before deleting it." });
+      if (consumerLinks.some((link) => link.sourceServiceId)) {
+        push({
+          step: "load_project",
+          status: "failed",
+          error:
+            "Disconnect this project's shared services from their consuming projects before deleting it.",
+        });
         return finalize(steps, false);
       }
     } catch {
-      push({ step: "load_project", status: "failed", error: "Could not check shared service connections. Try deleting the project again." });
+      push({
+        step: "load_project",
+        status: "failed",
+        error: "Could not check shared service connections. Try deleting the project again.",
+      });
       return finalize(steps, false);
     }
 
@@ -830,8 +850,7 @@ async function stepRuntimeCleanup(
   }
 
   const needsProjectCleanup =
-    manifest.projectCleanup &&
-    manifest.runtimes?.some((runtime) => !!runtime.cleanupProject);
+    manifest.projectCleanup && manifest.runtimes?.some((runtime) => !!runtime.cleanupProject);
   if (
     manifest.resources.length === 0 &&
     (manifest.routeContexts?.length ?? 0) === 0 &&
@@ -848,9 +867,14 @@ async function stepRuntimeCleanup(
   // else goes through the normal destroy path.
   const unreachable = manifest.resources.filter((r) => r.type === "unreachable");
   const destroyable = manifest.resources.filter((r) => r.type !== "unreachable");
-  if (forceOrphan && manifest.runtimes?.some(runtime => runtime.name === "kubernetes")) {
+  if (forceOrphan && manifest.runtimes?.some((runtime) => runtime.name === "kubernetes")) {
     disposeManifestRuntimes(manifest);
-    push({ step: "runtime_cleanup", status: "failed", error: "Cluster workloads require confirmed cleanup. Retry deletion with the cluster reachable instead of orphaning its resources." });
+    push({
+      step: "runtime_cleanup",
+      status: "failed",
+      error:
+        "Cluster workloads require confirmed cleanup. Retry deletion with the cluster reachable instead of orphaning its resources.",
+    });
     return { orphans, forceOrphanEligible: false };
   }
 
@@ -1048,7 +1072,10 @@ async function stepRuntimeCleanup(
     details,
     error: realFailures.map((f) => `${f.label}: ${f.error}`).join("; "),
   });
-  return { orphans, forceOrphanEligible: !manifest.runtimes?.some(runtime => runtime.name === "kubernetes") };
+  return {
+    orphans,
+    forceOrphanEligible: !manifest.runtimes?.some((runtime) => runtime.name === "kubernetes"),
+  };
 }
 
 async function checkpointVolumeCleanup(

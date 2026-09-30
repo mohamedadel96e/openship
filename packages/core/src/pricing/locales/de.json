@@ -19,6 +19,10 @@
     "enterprise": {
       "name": "Enterprise",
       "tagline": "Individuelle Limits, dedizierte Infrastruktur und ein SLA."
+    },
+    "hobby": {
+      "name": "Hobby",
+      "tagline": "Für kleine Entwicklungsprojekte und gelegentliche Apps mit begrenztem Nutzungsguthaben."
     }
   },
   "features": {
@@ -49,7 +53,11 @@
     "selfHostedUnlimited": "Unbegrenzt viele Deploys, Projekte, Server und Domains",
     "selfHostedServices": "Alle Managed Services – Postgres, Redis, Mail",
     "selfHostedClients": "CLI, Web und Desktop – ein Backend",
-    "selfHostedFreeSubdomains": "{freeSubdomains} kostenlose Subdomains unter {freeDomainSuffix} bei Verbindung mit Openship Cloud"
+    "selfHostedFreeSubdomains": "{freeSubdomains} kostenlose Subdomains unter {freeDomainSuffix} bei Verbindung mit Openship Cloud",
+    "usageCredits": "{credits} Nutzungsguthaben pro Monat",
+    "namespaceCapacity": "Insgesamt: {namespaceCpu} vCPU, {namespaceRamGb} GB RAM, {namespaceDiskGb} GB Speicher",
+    "finiteUsage": "Dauerbetrieb kann zusätzliches Guthaben erfordern.",
+    "oneRunningService": "1 laufende App, Datenbank oder Worker"
   },
   "selfHosted": {
     "name": "Selbst gehostet",
@@ -61,7 +69,12 @@
   "creditPacks": {
     "pack_5k": "{credits} Credits",
     "pack_25k": "{credits} Credits",
-    "pack_100k": "{credits} Credits"
+    "pack_100k": "{credits} Credits",
+    "pack_500": "{credits} Credits",
+    "pack_2k": "{credits} Credits",
+    "pack_400": "{credits} Credits",
+    "pack_1700": "{credits} Credits",
+    "pack_4500": "{credits} Credits"
   },
   "ui": {
     "perMonth": "/Mon.",

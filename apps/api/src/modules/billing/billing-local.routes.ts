@@ -13,7 +13,7 @@
  */
 
 import { Hono } from "hono";
-import { CreateSubscriptionBody, CreateTopupBody } from "@repo/contracts";
+import { BillingOperationSchemas, CreateSubscriptionBody, CreateTopupBody } from "@repo/contracts";
 import { authMiddleware } from "../../middleware";
 import { secureRouter } from "../../lib/secure-router";
 import * as billingLocal from "./billing.controller";
@@ -49,32 +49,32 @@ r.use("/topup-packs", authMiddleware);
 r.use("/portal", authMiddleware);
 
 /* ---------- Dashboard state snapshot ---------- */
-r.get("/state", { tag: "billing:read", authorizationHandledByOperation: true }, billingLocal.getState);
+r.get("/state", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "Read the workspace’s Cloud billing state, current plan, balance and limits. Self-hosted instances need a connected Cloud account for this data." } }, billingLocal.getState);
 r.get(
   "/checkout",
-  { tag: "billing:read", authorizationHandledByOperation: true },
+  { tag: "billing:read", authorizationHandledByOperation: true, mcpExcluded: "Browser checkout configuration; use the billing reads to inspect a plan and complete purchases in Settings → Billing." },
   billingLocal.getCheckout,
 );
 
 /* ---------- Subscriptions ---------- */
-r.get("/subscription", { tag: "billing:read", authorizationHandledByOperation: true }, billingLocal.getSubscription);
-r.post("/subscription", { body: CreateSubscriptionBody, tag: "billing:write", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal" }, billingLocal.createSubscription);
+r.get("/subscription", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "Read the workspace’s current subscription tier, state and billing period." } }, billingLocal.getSubscription);
+r.post("/subscription", { body: CreateSubscriptionBody, tag: "billing:write", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal", mcpExcluded: "Starts a paid browser checkout. Purchases and payment authorization are completed in Settings → Billing." }, billingLocal.createSubscription);
 
 /* ---------- Cancellation ---------- */
 // Renewal controls use the same grants as the SaaS operations.
-r.post("/cancel", { tag: "billing:admin", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal" }, billingLocal.cancelSubscription);
-r.post("/resume", { tag: "billing:admin", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal" }, billingLocal.resumeSubscription);
+r.post("/cancel", { tag: "billing:admin", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal", mcpExcluded: "Paid subscription renewal is managed by the account owner in Settings → Billing; MCP exposes the resulting subscription state." }, billingLocal.cancelSubscription);
+r.post("/resume", { tag: "billing:admin", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal", mcpExcluded: "Paid subscription renewal is managed by the account owner in Settings → Billing; MCP exposes the resulting subscription state." }, billingLocal.resumeSubscription);
 
 /* ---------- Usage ---------- */
-r.get("/usage", { tag: "billing:read", authorizationHandledByOperation: true }, billingLocal.getUsage);
-r.get("/resources", { tag: "billing:read", authorizationHandledByOperation: true }, billingLocal.getResources);
-r.get("/allowances", { tag: "billing:read", authorizationHandledByOperation: true }, billingLocal.listAllowanceDetail);
+r.get("/usage", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "Read metered Cloud usage over the requested date range, grouped by hour or day. This is billing data, not live workload metrics." }, query: BillingOperationSchemas.getUsage.input }, billingLocal.getUsage);
+r.get("/resources", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "List Cloud resources contributing to this workspace’s bill and usage." } }, billingLocal.getResources);
+r.get("/allowances", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "List resources consuming workspace allowances, including the projects holding managed domains." } }, billingLocal.listAllowanceDetail);
 
 /* ---------- Top-ups ---------- */
-r.get("/topup-packs", { tag: "billing:read", authorizationHandledByOperation: true }, billingLocal.listTopupPacks);
+r.get("/topup-packs", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "List available Cloud credit packs and prices. Reading this does not buy credits." } }, billingLocal.listTopupPacks);
 r.post(
   "/topup",
-  { body: CreateTopupBody, tag: "billing:write", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal" },
+  { body: CreateTopupBody, tag: "billing:write", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal", mcpExcluded: "Starts a paid browser checkout. Buy credits in Settings → Billing; MCP can list pack prices and current balance." },
   billingLocal.createTopup,
 );
 
@@ -83,6 +83,6 @@ r.post(
 // stops a runaway frontend retry loop from racking up Stripe API spend.
 r.post(
   "/portal",
-  { tag: "billing:admin", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal" },
+  { tag: "billing:admin", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal", mcpExcluded: "Creates an account billing-portal session. Open Settings → Billing to manage payment details." },
   billingLocal.createPortal,
 );

@@ -15,6 +15,7 @@ export * from "./mail-image-ref";
 // now for the registry rules it also holds: the credential a user saves and the lookup
 // that matches it at pull time must derive the registry from the SAME functions.
 export {
+  buildImageRef,
   DOCKER_HUB_REGISTRY,
   normalizeRegistryHost,
   registryConfigKeys,
@@ -45,6 +46,7 @@ export * from "./languages";
 export * from "./metadata";
 export * from "./openship-config";
 export * from "./mail-server";
+export * from "./mail-certificate";
 export * from "./app-templates";
 export {
   appTemplateSchema,
@@ -55,6 +57,7 @@ export {
   type AppTemplateRejection,
 } from "./apps/schema";
 export * from "./apps/install-phases";
+export * from "./apps/install-routing";
 export * from "./pricing";
 export {
   pricingCatalogSchema,
@@ -78,6 +81,7 @@ export * from "./host-channel";
 export * from "./network";
 export * from "./sse-terminal";
 export * from "./data-transfer";
+export * from "./analytics-domain";
 export * from "./deployment-events";
 export * from "./operation-limits";
 export type { ExecutionAuthority } from "./execution-authority";
@@ -89,5 +93,6 @@ export * from "./network-access";
 
 export * from "./compute-cluster";
 export * from "./cluster-runtime";
+export * from "./cluster-storage";
 export * from "./cluster-workload";
 export * from "./cluster-database";

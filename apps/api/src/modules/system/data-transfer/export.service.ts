@@ -1,7 +1,7 @@
 /**
  * Scoped control-plane export. Collects the selected records, lifts each secret's
- * plaintext into a passphrase-sealed bundle, and strips the ciphertext from the
- * payload so the file carries secrets ONLY inside the sealed bundle.
+ * plaintext into a portable bundle and strips source-instance ciphertext from
+ * the database snapshot. Downloads include readable values for both scopes.
  */
 
 import { readFile, stat } from "node:fs/promises";
@@ -23,7 +23,6 @@ import {
 
 import { env } from "@repo/platform/engine/config/env";
 import { CloudInstanceNotTransferableError } from "./errors";
-import { sealSecretBundle } from "./passphrase-crypto";
 import { extractPlaintext } from "./secret-codec";
 import { SECRET_COLUMNS, stripTransferSecrets } from "./secret-registry";
 import {
@@ -277,6 +276,10 @@ export async function prepareInstanceExport(
         const info = await stat(path);
         if (!info.isFile() || info.size > 1_048_576) throw new Error("Invalid SSH key file");
         const value = await readFile(path, "utf8");
+        const existing = entries.findIndex((entry) =>
+          entry.table === "servers" && entry.id === server.id && entry.column === "sshPrivateKey",
+        );
+        if (existing !== -1) entries.splice(existing, 1);
         entries.push({
           table: "servers",
           id: String(server.id),
@@ -297,7 +300,7 @@ export async function prepareInstanceExport(
   return {
     file: {
       kind: graph ? "openship-project-export" : "openship-instance-export",
-      envelopeVersion: 2,
+      envelopeVersion: 4,
       createdAt: new Date().toISOString(),
       sourceDriver: dump.sourceDriver,
       selection,
@@ -314,21 +317,14 @@ export async function prepareInstanceExport(
 }
 
 export async function exportInstance(opts: {
+  /** Accepted for older clients; new downloads always contain plaintext data. */
   passphrase?: string;
   selection?: ExportSelection;
 }): Promise<DataTransferFile> {
   if (env.CLOUD_MODE) throw new CloudInstanceNotTransferableError();
-  if (opts.selection?.includeSecrets === true && !opts.passphrase) {
-    throw new InvalidExportSelectionError(
-      "Set a transfer password to include environment values, keys, and credentials.",
-    );
-  }
   const prepared = await prepareInstanceExport(opts.selection);
   return {
     ...prepared.file,
-    secrets:
-      opts.passphrase && prepared.secrets
-        ? sealSecretBundle(prepared.secrets, opts.passphrase)
-        : null,
+    secrets: prepared.secrets ? { ...prepared.secrets, encoding: "plaintext" } : null,
   };
 }

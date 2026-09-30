@@ -1,6 +1,11 @@
 import { createRunBus } from "../../lib/run-bus";
 
-export type NetworkSetupStreamKind = "preparation" | "operation" | "overview" | "runtime";
+export type NetworkSetupStreamKind =
+  | "preparation"
+  | "operation"
+  | "overview"
+  | "runtime"
+  | "storage";
 export const networkSetupBus = createRunBus<void>(() => false);
 export const networkSetupTopic = (organizationId: string, kind: NetworkSetupStreamKind, id = "") =>
   JSON.stringify([organizationId, kind, id]);

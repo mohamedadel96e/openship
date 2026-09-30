@@ -300,8 +300,19 @@
       "notListeningHint": "没有进程监听此端口。",
       "notExposedHint": "仅监听回环地址，远程客户端无法连接。",
       "unknownHint": "无法验证公网可达性。",
-      "ports": { "smtp": "入站 SMTP", "smtps": "SMTP 提交 (TLS)", "submission": "SMTP 提交 (STARTTLS)", "imaps": "IMAP 访问 (TLS)" },
-      "status": { "reachable": "可访问", "blocked": "已阻止", "not_listening": "未监听", "not_exposed": "未公开", "unknown": "未知" }
+      "ports": {
+        "smtp": "入站 SMTP",
+        "smtps": "SMTP 提交 (TLS)",
+        "submission": "SMTP 提交 (STARTTLS)",
+        "imaps": "IMAP 访问 (TLS)"
+      },
+      "status": {
+        "reachable": "可访问",
+        "blocked": "已阻止",
+        "not_listening": "未监听",
+        "not_exposed": "未公开",
+        "unknown": "未知"
+      }
     },
     "delivery": {
       "title": "外发投递",
@@ -411,7 +422,8 @@
       "partSignatures": "{names} 未运行 - 病毒特征库不再更新，邮件将使用逐渐过期的特征库进行扫描",
       "partAdvisory": "{names} 未运行",
       "almostSubQueueOne": "{count} 封邮件等待外发 - 请查看下方的外发投递。",
-      "almostSubQueueOther": "{count} 封邮件等待外发 - 请查看下方的外发投递。"
+      "almostSubQueueOther": "{count} 封邮件等待外发 - 请查看下方的外发投递。",
+      "partCertificate": "邮件证书需要处理"
     },
     "time": {
       "secondsAgo": "{n} 秒前",
@@ -647,5 +659,28 @@
     "loadingLogs": "正在加载日志…",
     "noLogLines": "此组件暂无日志内容。",
     "rowActions": "{name} 的操作"
+  },
+  "certificate": {
+    "title": "邮件证书",
+    "manage": "管理证书",
+    "check": "检查证书",
+    "checking": "正在检查…",
+    "renew": "续期证书",
+    "renewing": "正在续期…",
+    "autoRenew": "自动续期",
+    "autoRenewHint": "在到期前续期并重新加载邮件服务。",
+    "desktopHint": "自动续期需要保持 Openship 运行。",
+    "jobDisabled": "共享 SSL 续期任务已禁用。",
+    "manageJob": "打开续期任务",
+    "failed": "无法更新邮件证书。",
+    "notChecked": "尚未检查",
+    "expires": "到期日期：{date}",
+    "checked": "检查时间：{time}",
+    "status": {
+      "ok": "有效",
+      "warn": "需要续期",
+      "fail": "需要处理",
+      "unknown": "未验证"
+    }
   }
 }

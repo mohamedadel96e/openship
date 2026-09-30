@@ -68,9 +68,7 @@ export async function runRetentionSweep(): Promise<{
       }
     } catch (err) {
       stats.errors += 1;
-      console.warn(
-        `[retention-prune] policy ${policy.id} failed: ${safeErrorMessage(err)}`,
-      );
+      console.warn(`[retention-prune] policy ${policy.id} failed: ${safeErrorMessage(err)}`);
     }
   }
   return stats;
@@ -102,8 +100,7 @@ async function pruneCurrentPolicy(policy: BackupPolicy): Promise<PruneOutcome> {
   // `retainCount: -1` puts every run outside the keep-set and deletes the lot.
   // Nothing validates the number on the way in, so it's normalized here, where
   // the deletes happen. Zero already behaved as unset; negatives now do too.
-  const retainCount =
-    policy.retainCount && policy.retainCount > 0 ? policy.retainCount : null;
+  const retainCount = policy.retainCount && policy.retainCount > 0 ? policy.retainCount : null;
   const retainDays = policy.retainDays && policy.retainDays > 0 ? policy.retainDays : null;
   // Both null now means "keep everything", asked for deliberately: omitting
   // retention yields `DEFAULT_RETAIN_COUNT` from the column default, and
@@ -170,9 +167,7 @@ async function pruneCurrentPolicy(policy: BackupPolicy): Promise<PruneOutcome> {
     if (page.length < PRUNE_PAGE_SIZE) break;
   }
 
-  const cutoffDate = retainDays
-    ? new Date(Date.now() - retainDays * 24 * 60 * 60 * 1000)
-    : null;
+  const cutoffDate = retainDays ? new Date(Date.now() - retainDays * 24 * 60 * 60 * 1000) : null;
 
   // Apply retention PER SERVICE. A project-default policy fans out to N services
   // (N runs per tick), so retainCount must keep N runs per service — not N runs
@@ -230,10 +225,16 @@ async function pruneCurrentPolicy(policy: BackupPolicy): Promise<PruneOutcome> {
     try {
       await withBackupRunLock(run.id, async () => {
         const current = await repos.backupRun.findById(run.id);
-        if (!current || current.deletedAt || current.status !== "succeeded" ||
+        if (
+          !current ||
+          current.deletedAt ||
+          current.status !== "succeeded" ||
           (current.executionStartedAt && !current.executionFinishedAt) ||
           (current.retentionLockedUntil && current.retentionLockedUntil > new Date()) ||
-          await repos.backupRestore.findActiveByRunId(run.id)) return;
+          (await repos.backupRestore.findActiveByRunId(run.id)) ||
+          (await repos.clusterDatabase.hasActiveImport(run.id))
+        )
+          return;
         // A policy can move to new storage; its older backups still live at the
         // destination recorded on each run and must age out there.
         const destinationId = run.destinationId;
@@ -245,12 +246,13 @@ async function pruneCurrentPolicy(policy: BackupPolicy): Promise<PruneOutcome> {
             deferred += 1;
             return;
           }
-          if (row.organizationId !== organizationId) throw new Error("Backup destination belongs to another organization");
+          if (row.organizationId !== organizationId)
+            throw new Error("Backup destination belongs to another organization");
           destination = resolveDestination(await toAdapterRow(row));
           destinations.set(row.id, destination);
         }
         const allKeys = objects.get(run.id) ?? new Set<string>();
-        const artifactKeys = [...allKeys].filter(key => references.get(identity(run, key)) === 1);
+        const artifactKeys = [...allKeys].filter((key) => references.get(identity(run, key)) === 1);
         if (artifactKeys.length > 0) {
           // `deleteMany` RESOLVES on a partial failure — it reports per-key outcomes
           // instead of throwing, and all three destinations count "already gone" as
@@ -283,9 +285,7 @@ async function pruneCurrentPolicy(policy: BackupPolicy): Promise<PruneOutcome> {
       });
     } catch (err) {
       deferred += 1;
-      console.warn(
-        `[retention-prune] failed to drop run ${run.id}: ${safeErrorMessage(err)}`,
-      );
+      console.warn(`[retention-prune] failed to drop run ${run.id}: ${safeErrorMessage(err)}`);
     }
   }
   return { dropped, deferred, skipped: dropped === 0 ? unavailable : null };

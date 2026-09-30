@@ -1,5 +1,6 @@
 import {
   db,
+  createTransferReader,
   inArray,
   linkedProjectIds,
   schema,
@@ -17,6 +18,7 @@ import { isLoopbackHost } from "@repo/core";
 import { getCloudConnectionStatusForOrg } from "@repo/platform/engine/lib/cloud/session";
 import { needsExplicitServerMapping, transferServer } from "./export.service";
 import { resolveExportSelection, summarizeExportCounts } from "./selection";
+import { transferSecretsRequirePassphrase } from "./passphrase-crypto";
 import type {
   DataTransferFile,
   ImportPreview,
@@ -267,6 +269,7 @@ export interface ProjectImportPlan {
   selectedSourceIds: Map<string, Set<string>>;
   retargetedProjects: Set<string>;
   retargetedDeployments: Set<string>;
+  replacementRows: Map<string, string[]>;
 }
 
 /** Read-only preflight, run again inside the restore transaction at apply time. */
@@ -777,6 +780,32 @@ export async function planProjectImport(
     warnings.push(
       "Projects mapped to a different host are imported disabled, with live container bindings cleared. Migrate or restore their volumes, then deploy and verify domains before enabling them.",
     );
+
+  // Overwrite is an authoritative snapshot of the selected projects. Preserve
+  // unrelated projects and unselected categories, but remove destination-only
+  // children rather than leaving stale environment keys and services behind.
+  const replacementRows = new Map<string, string[]>();
+  const overwritten = previewProjects
+    .filter((project) => project.action === "overwrite" && project.existingProjectId)
+    .map((project) => project.existingProjectId!);
+  if (overwritten.length && !blockers.length) {
+    const read = createTransferReader(reader);
+    const destination = await selectProjectTransfer(read, {
+      ...exportSelection,
+      projectIds: overwritten,
+      includeServers: false,
+      includeIntegrations: false,
+    }, excludedTables);
+    destination.tables.project_connection = await read("project_connection", "targetProjectId", overwritten);
+    for (const [name, rows] of Object.entries(destination.tables)) {
+      if (!projectOwned.has(name) || name === "project" || file.dump.tables[name] === undefined) continue;
+      if (name === "env_var" && (!file.secrets || selection.includeSecrets === false)) continue;
+      const incoming = new Set((restored[name] ?? []).map((row) => row.id));
+      const removed = rows.filter((row) => !incoming.has(row.id)).map((row) => String(row.id));
+      if (removed.length) replacementRows.set(name, removed);
+    }
+    blockers.push(...await replacementReferenceBlockers(reader, replacementRows, restored));
+  }
   const preview: ImportPreview = {
     scope: "projects",
     projects: previewProjects,
@@ -786,7 +815,9 @@ export async function planProjectImport(
       Object.fromEntries(Object.entries(graph.tables).map(([name, rows]) => [name, rows.length])),
     ).history,
     rows: Object.values(restored).reduce((sum, rows) => sum + rows.length, 0),
+    rowsRemoved: [...replacementRows.values()].reduce((sum, ids) => sum + ids.length, 0),
     hasSecrets: !!file.secrets,
+    requiresPassphrase: transferSecretsRequirePassphrase(file.secrets),
     warnings: [...new Set(warnings)],
     blockers: [...new Set(blockers)],
   };
@@ -798,7 +829,49 @@ export async function planProjectImport(
     selectedSourceIds,
     retargetedProjects,
     retargetedDeployments,
+    replacementRows,
   };
+}
+
+/** Never let FK cascades erase an unselected project's records during overwrite. */
+async function replacementReferenceBlockers(
+  reader: Reader,
+  removed: Map<string, string[]>,
+  incoming: DatabaseDump["tables"],
+): Promise<string[]> {
+  const blockers = new Set<string>();
+  const read = createTransferReader(reader);
+  for (const ref of transferReferences) {
+    const ids = removed.get(ref.parent);
+    if (!ids?.length || ref.parentColumn !== "id") continue;
+    const deleting = new Set(removed.get(ref.table) ?? []);
+    const replaced = new Map((incoming[ref.table] ?? []).map((row) => [row.id, row]));
+    for (const row of await read(ref.table, ref.column, ids)) {
+      if (deleting.has(String(row.id))) continue;
+      const next = replaced.get(row.id);
+      if (next && ref.column in next && !ids.includes(String(next[ref.column]))) continue;
+      blockers.add(`Cannot overwrite this selection: ${ref.table} still references a ${ref.parent} record that the export removes. Include the dependent project or use an entire-instance replacement.`);
+    }
+  }
+  return [...blockers];
+}
+
+/** Called after upserts, inside the same transaction as credential restoration. */
+export async function removeReplacedProjectRows(
+  tx: DatabaseTransaction,
+  rows: Map<string, string[]>,
+): Promise<void> {
+  if (!rows.size) return;
+  const blockers = await replacementReferenceBlockers(tx, rows, {});
+  if (blockers.length) throw new ProjectImportError(blockers.join("\n"));
+  for (const spec of [...topoOrderedTables()].reverse()) {
+    const ids = rows.get(spec.sqlName);
+    if (!ids?.length) continue;
+    const id = (spec.table as unknown as { id: Parameters<typeof inArray>[0] }).id;
+    for (let i = 0; i < ids.length; i += 5_000) {
+      await tx.delete(spec.table).where(inArray(id, ids.slice(i, i + 5_000)));
+    }
+  }
 }
 
 export function remapProjectSecrets(

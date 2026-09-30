@@ -21,9 +21,10 @@ const {
 
 const { ghFetch } = vi.hoisted(() => ({ ghFetch: vi.fn() }));
 
-const { getLocalGhToken, listLocalGhRepos } = vi.hoisted(() => ({
+const { getLocalGhToken, listLocalGhRepos, getLocalGhStatus } = vi.hoisted(() => ({
   getLocalGhToken: vi.fn(),
   listLocalGhRepos: vi.fn(),
+  getLocalGhStatus: vi.fn(),
 }));
 
 vi.mock("@repo/platform/engine/modules/github/github.auth", () => ({
@@ -46,7 +47,7 @@ vi.mock("@repo/platform/engine/modules/github/github.local-auth", () => ({
   getLocalGhToken,
   listLocalGhRepos,
   listLocalGhOrgs: vi.fn(),
-  getLocalGhStatus: vi.fn(),
+  getLocalGhStatus,
 }));
 
 // env: {} → CLOUD_MODE is falsy, so createGitHubSource takes the LOCAL branch
@@ -83,21 +84,22 @@ beforeEach(() => {
   githubFetch.mockReset();
   getLocalGhToken.mockReset();
   listLocalGhRepos.mockReset();
+  getLocalGhStatus.mockResolvedValue({ available: true, login: "operator", method: "token" });
 });
 
 describe("listReposForOwner — source dispatch", () => {
   describe("user-token (oauth/cli/token mode)", () => {
-    it("lists org repos via /orgs/{owner}/repos when owner is not the user", async () => {
+    it("filters accessible user repositories for an organization or collaborator owner", async () => {
       resolveGitHubAuthMode.mockResolvedValue("oauth");
       getUserStatus.mockResolvedValue({ connected: true, login: "me" });
-      githubFetch.mockResolvedValue([raw("acme/site")]);
+      githubFetch.mockResolvedValue([raw("acme/site"), raw("another/repo")]);
 
       const repos = await call("acme");
 
       expect(repos).toHaveLength(1);
       expect(repos?.[0].full_name).toBe("acme/site");
       expect(githubFetch).toHaveBeenCalledWith(
-        expect.objectContaining({ url: expect.stringContaining("/orgs/acme/repos") }),
+        expect.objectContaining({ url: "https://api.github.com/user/repos", credential: ["user-oauth"] }),
       );
     });
 

@@ -194,6 +194,24 @@ function contextKeepPaths(dockerfileName: string): Set<string> {
 }
 
 /**
+ * `.dockerignore` exclusion test for one context entry. The `ignore` package
+ * only applies dir-only patterns — including dir-only negations like the
+ * `!src/` re-include in an allowlist `.dockerignore` — to paths with a
+ * trailing slash, so testing a directory with its bare path claims it is
+ * ignored even when Docker itself would keep it. That is how folder deploys
+ * lost re-included directories (#974): `matcher.ignores("src")` is true while
+ * `matcher.ignores("src/")` is false. Files are tested with the plain path,
+ * directories with the trailing-slash form.
+ */
+function dockerignoreIgnores(
+  matcher: IgnoreMatcher,
+  relativePosixPath: string,
+  isDirectory: boolean,
+): boolean {
+  return matcher.ignores(isDirectory ? `${relativePosixPath}/` : relativePosixPath);
+}
+
+/**
  * A `.dockerignore` predicate for a build context whose tree was NOT pruned
  * destructively — the shared-tree case, where one service's `.dockerignore` must
  * not delete files another service's context needs.
@@ -210,7 +228,13 @@ async function loadContextIgnore(
   if (!matcher) return undefined;
 
   return (relativePosixPath: string) =>
-    !keep.has(relativePosixPath) && matcher.ignores(relativePosixPath);
+    !keep.has(relativePosixPath) &&
+    // The predicate sees no entry type, so an entry is only filtered when both
+    // forms agree it is ignored. A directory re-included by a dir-only
+    // negation (bare path ignored, slash form kept) survives — the #974 case —
+    // while every genuinely ignored file or directory is still filtered.
+    dockerignoreIgnores(matcher, relativePosixPath, false) &&
+    dockerignoreIgnores(matcher, relativePosixPath, true);
 }
 
 /**
@@ -259,7 +283,11 @@ async function applyDockerignore(contextDir: string, config: BuildConfig): Promi
       entries.map(async (entry) => {
         const absolutePath = join(currentPath, entry.name);
         const relativePath = toPosixPath(relative(contextDir, absolutePath));
-        if (!buildFiles.has(relativePath) && matcher.ignores(relativePath)) {
+        // Directories are tested in directory form so dir-only patterns apply:
+        // without it, the `!src/` re-include of an allowlist `.dockerignore`
+        // would not re-match the bare path and `src/` would be rm -rf'd (#974).
+        const ignored = dockerignoreIgnores(matcher, relativePath, entry.isDirectory());
+        if (!buildFiles.has(relativePath) && ignored) {
           await rm(absolutePath, { recursive: true, force: true });
           return;
         }

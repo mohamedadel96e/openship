@@ -30,7 +30,7 @@ import { cacheStore } from "../../lib/cache-store/index";
 import { ghFetch, ghFetchPublic, ghFetchSoft } from "./github.http";
 import { mapAccounts } from "./sources/mappers";
 import type { ExecutionContext as RequestContext } from "@repo/platform";
-import type { GitHubTokenSource } from "./github.token";
+import type { GitHubTokenSource, TokenContext } from "./github.token";
 import { resolveOrgOwner } from "../../lib/org-actor";
 import type { GitHubConnectionState, GitHubInstallation, MappedAccount } from "@repo/contracts";
 import { generateGitHubAppJwt, githubAppFetch } from "./github.app-client";
@@ -554,10 +554,15 @@ async function dropStaleInstallationRows(
 // ─── User OAuth token ────────────────────────────────────────────────────────
 
 /**
- * Get the user's personal GitHub OAuth token stored by Better Auth.
+ * Get the repository grant on Cloud, or the existing Better Auth OAuth token.
  * Used for user-scoped operations (listing their orgs, etc.).
  */
 export async function getUserToken(userId: string): Promise<string | null> {
+  if (env.CLOUD_MODE) {
+    const { getRepositoryAuthorizationToken } = await import("./github-repository-authorization");
+    const token = await getRepositoryAuthorizationToken(userId);
+    if (token !== undefined) return token;
+  }
   try {
     const tokens = await auth.api.getAccessToken({
       body: {
@@ -627,29 +632,25 @@ export interface GitHubFetchOptions {
 /**
  * Make an authenticated GitHub API request on behalf of a user.
  *
- * Token source follows FLOW × MODE:
- *   - A local READ (GET) goes gh-FIRST when a local gh token exists. A GET on
- *     the API host is a local read — the response never leaves this host — so
- *     it uses the gh token DIRECTLY, ungated, exactly like the gh-CLI listing
- *     path. tokenFor's gh-cli OPERATOR gate (HIGH #7) only guards token-
- *     SHIPPING to remote build workers, NOT local reads, so we deliberately
- *     bypass it here. getLocalGhToken self-guards to null in CLOUD_MODE, so on
- *     the SaaS this falls straight through to tokenFor (the App).
- *   - Everything else (writes: check-runs/webhooks, or no local gh) resolves
- *     via `tokenFor(ctx, "local", ...)`, whose ORDER IS PLATFORM-SPECIFIC —
- *     saas: PAT → App → OAuth, but SELFHOSTED: gh-CLI → App → PAT → OAuth
- *     (CHAINS in github.token.ts). So skipping the gh-first shortcut above does
- *     NOT mean "not gh": on a self-hosted box gh-CLI is the chain's FIRST step,
- *     and tokenFor returns the first token it resolves without ever retrying.
- *     An endpoint only ONE credential can satisfy must therefore say so:
- *     check-runs pass `credential: ["app-installation"]`, because GitHub's
- *     Checks API rejects user tokens. Webhooks deliberately do not — a PAT can
- *     administer hooks, and pinning them would break self-hosts with no App.
+ * Local reads first use the host's GitHub identity when the context permits it.
+ * If GitHub rejects it, the authorized token chain tries the remaining sources
+ * once each, preserving credential pins and repository permissions. Public
+ * github.com reads can finally retry anonymously. Rate limits and outages do
+ * not trigger credential fallback. The SaaS never resolves a host identity.
+ *
+ * Mutations resolve through tokenFor once and are never replayed. Endpoints
+ * requiring an App (such as check-runs) pin `credential: ["app-installation"]`;
+ * ordinary webhook writes can still use an authorized PAT.
  *
  * Appends query params for GET requests, sends JSON body for others.
  */
 export async function githubFetch<T = unknown>(opts: GitHubFetchOptions): Promise<T> {
   const method = opts.method ?? "GET";
+  const readOnly = method === "GET" && (opts.authorizeAs ?? "read") === "read";
+  const rejectedSources: GitHubTokenSource[] = [];
+  let authError: unknown;
+  const rejectedCredential = (error: unknown) =>
+    error instanceof Error && "credentialRejected" in error && error.credentialRejected === true;
   const customApiBase = opts.owner
     ? await resolveGitHubApiBaseUrl(opts.ctx.organizationId, opts.owner, opts.installationId).catch(
         () => null,
@@ -659,21 +660,25 @@ export async function githubFetch<T = unknown>(opts: GitHubFetchOptions): Promis
   // gh-first for local reads unless this owner is explicitly backed by a
   // workspace custom App. A github.com CLI credential cannot authenticate to a
   // GitHub Enterprise source, and an explicitly configured App is narrower.
-  if (method === "GET" && !customApiBase) {
+  if (readOnly && !customApiBase && (!opts.credential?.length || opts.credential.includes("gh-cli")) &&
+      await mayUseInstanceGitIdentity(opts.ctx)) {
     const { getLocalGhToken } = await import("./github.local-auth");
     const ghToken = await getLocalGhToken();
     if (ghToken) {
-      return ghFetch<T>(ghToken, {
-        url: opts.url,
-        method,
-        params: opts.params,
-        headers: opts.headers,
-      });
+      try {
+        return await ghFetch<T>(ghToken, {
+          url: opts.url, method, params: opts.params, headers: opts.headers,
+        });
+      } catch (error) {
+        if (!rejectedCredential(error)) throw error;
+        authError = error;
+        rejectedSources.push("gh-cli");
+      }
     }
   }
 
   const { tokenFor } = await import("./github.token");
-  const result = await tokenFor(opts.ctx, "local", {
+  const tokenContext: TokenContext = {
     owner: opts.owner,
     repo: opts.repo,
     installationId: opts.installationId,
@@ -684,41 +689,42 @@ export async function githubFetch<T = unknown>(opts: GitHubFetchOptions): Promis
     // independent of whatever the route-level role check allowed.
     op: opts.authorizeAs ?? (method === "GET" ? "read" : "write"),
     only: customApiBase ? ["app-installation"] : opts.credential,
-  });
-  const token = result?.token ?? null;
-
-  if (!token) {
-    // No credential resolved. A PUBLIC github.com repo still answers the REST
-    // API unauthenticated, so try that before demanding a connection — this is
-    // what lets a public repo URL be prepared/deployed with no GitHub link.
-    // A private/missing repo 404s to anonymous callers → null → fall through to
-    // the connect-account error (which for a private repo is the right guidance).
-    if (method === "GET") {
-      const publicData = await ghFetchPublic<T>({
-        url: opts.url,
-        params: opts.params,
-        headers: opts.headers,
-      });
-      if (publicData !== null) return publicData;
-    }
-    throw new Error("No GitHub access token available. Please connect your GitHub account.");
-  }
-
-  // tokenFor owns "which token + is it authorized"; the wire mechanics
-  // (headers, querystring, 204, error shape) live in the shared ghFetch
-  // primitive so the gh-CLI listing helpers and this path can't drift.
-  const url =
-    result?.source === "app-installation" &&
-    customApiBase &&
-    opts.url.startsWith("https://api.github.com")
+  };
+  // A rejected local credential must not be selected again by the normal
+  // chain. Each retry narrows that chain; its repo/tenant gates still run.
+  while (true) {
+    const result = await tokenFor(opts.ctx, "local", {
+      ...tokenContext,
+      ...(rejectedSources.length ? { exclude: [...rejectedSources] } : {}),
+    });
+    if (!result || rejectedSources.includes(result.source)) break;
+    const url = result.source === "app-installation" && customApiBase &&
+      opts.url.startsWith("https://api.github.com/")
       ? `${customApiBase}${opts.url.slice("https://api.github.com".length)}`
       : opts.url;
-  return ghFetch<T>(token, {
-    url,
-    method,
-    params: opts.params,
-    headers: opts.headers,
-  });
+    try {
+      return await ghFetch<T>(result.token, {
+        url, method, params: opts.params, headers: opts.headers,
+      });
+    } catch (error) {
+      // Never replay mutations, rate limits, outages, or ordinary not-found
+      // responses through another identity.
+      if (!readOnly || !rejectedCredential(error)) throw error;
+      authError = error;
+      rejectedSources.push(result.source);
+    }
+  }
+
+  // Public github.com reads also work when a saved credential was revoked.
+  // Enterprise sources must never resolve a same-named public GitHub repo.
+  if (readOnly && !customApiBase && opts.url.startsWith("https://api.github.com/")) {
+    const publicData = await ghFetchPublic<T>({
+      url: opts.url, params: opts.params, headers: opts.headers,
+    });
+    if (publicData !== null) return publicData;
+  }
+  if (authError) throw authError;
+  throw new Error("No GitHub access token available. Please connect your GitHub account.");
 }
 
 // ─── User status helpers ─────────────────────────────────────────────────────
@@ -893,12 +899,8 @@ export async function getGitHubConnectionState(
   let appAvatar: string | undefined;
   let hasInstallations: boolean | undefined;
   try {
-    // App is connected ONLY when SaaS reports a real GitHub OAuth
-    // identity for this user. The Connect flow runs OAuth on SaaS first
-    // (creating a Better Auth `account` row for providerId='github'),
-    // so this signal is load-bearing. Without it the install webhook
-    // can't attribute installs to a SaaS user and the dashboard would
-    // be lying if it showed "connected".
+    // Cloud repository access uses the initiating user's GitHub grant.
+    // Installation ownership is recorded separately for the active workspace.
     const status = await getUserStatus(userId, ctx);
     appConnected = status.connected && status.tokenSource !== "cli";
     if (appConnected && status.connected) {
@@ -1427,9 +1429,9 @@ export async function consumeInstallState(
  * SaaS's /oauth-handoff endpoint, which mints a single-use bridge URL.
  * The browser opens that URL and the SaaS handles the entire OAuth
  * round-trip — local never has GitHub OAuth credentials. After OAuth
- * completes, the SaaS has a Better Auth `account` row for this user.
+ * completes, Cloud has a repository grant for this user.
  *
- * App mode (this IS the SaaS): linkSocialAccount is called directly via
+ * Direct SaaS connections start repository OAuth through
  * the controller's connectRedirect handler — the OAuth flow runs in the
  * same process. resolveOauthHandoffUrl is not used.
  *
@@ -1450,7 +1452,7 @@ export async function resolveOauthHandoffUrl(userId: string): Promise<{ url: str
  * Disconnect a user from a GitHub source.
  *
  * `source`:
- *   - "oauth" → remove the OAuth account row (Openship App / standalone OAuth)
+ *   - "oauth" → clear the Cloud repository grant; self-hosted unlinks OAuth
  *   - "cli"   → set the cli-suppression flag so the host's `gh auth token`
  *               is ignored even when present. NEVER touches the host's gh
  *               config - we only refuse to use it.
@@ -1463,23 +1465,23 @@ export async function disconnectUser(
   source: "oauth" | "cli" | "all" = "all",
 ): Promise<void> {
   if (source === "oauth" || source === "all") {
-    await repos.account.unlinkProvider(userId, "github");
+    if (env.CLOUD_MODE) {
+      const { disconnectRepositoryAuthorization } = await import("./github-repository-authorization");
+      await disconnectRepositoryAuthorization(userId);
+    } else await repos.account.unlinkProvider(userId, "github");
   }
-  if (source === "cli" || source === "all") {
-    const { setGithubCliDisabled } = await import("../settings/settings.service");
-    await setGithubCliDisabled(userId, true);
+  if (!env.CLOUD_MODE && (source === "cli" || source === "all")) {
     // Also drop the stored device-flow token. Without this, "Disconnect" only
     // flipped the per-user opt-in while the credential itself stayed on the
     // instance — so the UI said disconnected and clones kept working. Dynamic
     // import to keep the SaaS bundle free of the gh module (see its CLOUD_MODE
-    // floor); a failure here must not abort the rest of the disconnect.
-    try {
-      const { setStoredDeviceToken, cancelInstanceDeviceFlows } = await import("./github.local-auth");
-      await cancelInstanceDeviceFlows();
-      await setStoredDeviceToken(null);
-    } catch (err) {
-      console.warn(`[GitHub] clearing stored device token failed: ${(err as Error).message}`);
-    }
+    // floor). A storage failure must reach the caller: saying "cleared" while
+    // the rejected credential survives in the DB would make recovery impossible.
+    const { setStoredDeviceToken, cancelInstanceDeviceFlows } = await import("./github.local-auth");
+    await cancelInstanceDeviceFlows();
+    await setStoredDeviceToken(null);
+    const { setGithubCliDisabled } = await import("../settings/settings.service");
+    await setGithubCliDisabled(userId, true);
   }
   await invalidateUserGitHubCache(userId);
   // Cascade MEDIUM — every org this user belongs to shares cache

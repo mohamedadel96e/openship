@@ -5,6 +5,8 @@
  * can read the update list and trigger a rescan.
  */
 import { Hono } from "hono";
+import { Type } from "@sinclair/typebox";
+import { UpdateCollectionSchemas } from "@repo/contracts";
 import { secureRouter } from "../../lib/secure-router";
 import * as ctrl from "./updates.controller";
 
@@ -15,7 +17,7 @@ const r = secureRouter(new Hono(), {
 
 r.get(
   "/",
-  { tag: "updates:read", mcp: { description: "List update statuses for the org (apps, projects, self-app, webmail). ?behind=1 filters to those with an update available." } },
+  { tag: "updates:read", mcp: { description: "List update statuses for the org (apps, projects, self-app, webmail). ?behind=1 filters to those with an update available." }, query: Type.Object({ behind: UpdateCollectionSchemas.list.input.properties.behindOnly }) },
   ctrl.listUpdates,
 );
 r.post(
